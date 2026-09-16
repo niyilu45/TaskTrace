@@ -106,3 +106,8 @@
 - 首次发布为 v0.1.0-beta.1；源码与程序通过 SOURCE-COMMIT.txt 对应。
 - 发布前 ESLint 无错误、Stylelint 通过；Go lint 因本机未安装 golangci-lint 无法运行，保留构建和成品验收结果。
 - 上游 CI 的测试和发布依赖其专用基础设施，仅限上游仓库触发；本仓库首版手动构建发布。
+
+## 2026-09-17 清理旧启动入口
+- 删除已被统一入口替代的 Start-Floating.cmd，构建脚本不再复制或打包该文件。
+- 清理本地旧 EXE 备份和过期打包暂存目录，保留用户数据与配置。
+- 保留 Start-TaskTrace.cmd 和其依赖的 Launch-TaskTrace.ps1；配置入口继续保留。
