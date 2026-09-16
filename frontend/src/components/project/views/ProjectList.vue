@@ -7,6 +7,14 @@
 	>
 		<template #header>
 			<div class="filter-container">
+				<label v-if="projectId > 0">
+					<input
+						v-model="showCompleted"
+						type="checkbox"
+						aria-label="显示已完成任务"
+					>
+					显示已完成任务
+				</label>
 				<SortPopup
 					v-model="sortByParam"
 				/>
@@ -102,6 +110,7 @@
 <script setup lang="ts">
 import {ref, computed, nextTick, onMounted, onBeforeUnmount, watch, toRef} from 'vue'
 import draggable from 'zhyswan-vuedraggable'
+import {useStorage} from '@vueuse/core'
 
 import ProjectWrapper from '@/components/project/ProjectWrapper.vue'
 import ButtonLink from '@/components/misc/ButtonLink.vue'
@@ -138,6 +147,7 @@ const projectId = toRef(props, 'projectId')
 
 defineOptions({name: 'List'})
 
+const showCompleted = useStorage('tasktrace:edit-show-completed', false)
 const ctaVisible = ref(false)
 
 const drag = ref(false)
@@ -157,6 +167,7 @@ const {
 	() => projectId.value === -1
 		? ['comment_count', 'is_unread']
 		: ['subtasks', 'comment_count', 'is_unread'],
+	() => showCompleted.value,
 )
 
 const taskPositionService = ref(new TaskPositionService())
@@ -172,7 +183,7 @@ watch(
 	},
 )
 
-const isPositionSorting = computed(() => 'position' in sortByParam.value)
+const isPositionSorting = computed(() => !showCompleted.value && 'position' in sortByParam.value)
 
 const baseStore = useBaseStore()
 const taskStore = useTaskStore()

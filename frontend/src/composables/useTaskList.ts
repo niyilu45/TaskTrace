@@ -1,3 +1,6 @@
+import {projectTasksList} from '@/client/generated'
+import TaskModel from '@/models/task'
+import {useProjectStore} from '@/stores/projects'
 import {ref, shallowRef, shallowReactive, watch, computed, type ComputedGetter} from 'vue'
 import {useRouter, isNavigationFailure} from 'vue-router'
 import type {LocationQueryRaw} from 'vue-router'
@@ -108,12 +111,19 @@ export function useTaskList(
 	projectViewIdGetter: ComputedGetter<IProjectView['id']>,
 	sortByDefault: SortBy = SORT_BY_DEFAULT,
 	expandGetter: ComputedGetter<ExpandTaskFilterParam> = () => 'subtasks',
+	includeCompletedGetter?: ComputedGetter<boolean>,
 ) {
 	
 	const projectId = computed(() => projectIdGetter())
 	const projectViewId = computed(() => projectViewIdGetter())
 
 	const router = useRouter()
+	const projectStore = useProjectStore()
+	const includeCompleted = computed(() => includeCompletedGetter?.() ?? false)
+	// The upstream default list has a persisted done=false view filter. Use the
+	// project collection to include completed tasks without changing shared views.
+	const useProjectCollection = computed(() => projectId.value > 0 && includeCompleted.value &&
+        /^done\s*=\s*false$/i.test(projectStore.projects[projectId.value]?.views.find(view => view.id === projectViewId.value)?.filter?.filter?.trim() || ''))
 	const viewFiltersStore = useViewFiltersStore()
 
 	const params = ref<TaskFilterParams>({...getDefaultTaskFilterParams()})
@@ -229,9 +239,13 @@ export function useTaskList(
 		]
 	})
 
+	watch(includeCompleted, () => { page.value = 1 })
+
 	const taskCollectionService = shallowReactive(new TaskCollectionService())
-	const loading = computed(() => taskCollectionService.loading)
-	const totalPages = computed(() => taskCollectionService.totalPages)
+	const projectLoading = ref(false)
+	const projectPages = ref(0)
+	const loading = computed(() => projectLoading.value || taskCollectionService.loading)
+	const totalPages = computed(() => useProjectCollection.value ? projectPages.value : taskCollectionService.totalPages)
 
 	const tasks = ref<ITask[]>([])
 	let requestId = 0
@@ -241,17 +255,35 @@ export function useTaskList(
 			tasks.value = []
 		}
 		try {
-			const loadedTasks = await taskCollectionService.getAll(...getAllTasksParams.value)
+			let loadedTasks: ITask[]
+			if (useProjectCollection.value) {
+				projectLoading.value = true
+				const query = allParams.value
+				const sort = query.sort_by.map((field, index) => ({field, order: query.order_by[index]})).filter(item => item.field !== 'position')
+				const result = await projectTasksList({path: {project: projectId.value}, query: {
+					page: page.value, per_page: query.per_page || 50, q: query.s,
+					filter: query.filter, filter_timezone: authStore.settings.timezone,
+					filter_include_nulls: query.filter_include_nulls,
+					sort_by: sort.map(item => item.field), order_by: sort.map(item => item.order),
+					expand: ['subtasks', 'comment_count', 'is_unread'],
+				}})
+				loadedTasks = (result.data.items || []).map(task => new TaskModel(task as unknown as Partial<ITask>))
+				if (request === requestId) projectPages.value = result.data.total_pages || 0
+			} else {
+				loadedTasks = await taskCollectionService.getAll(...getAllTasksParams.value)
+			}
 			if (request === requestId) {
 				tasks.value = loadedTasks
 			}
 		} catch (e) {
 			error(e)
+		} finally {
+			if (request === requestId) projectLoading.value = false
 		}
 		return tasks.value
 	}
 
-	watch(() => pendingQueryRestore.value ? null : JSON.stringify(getAllTasksParams.value), newParams => {
+	watch(() => pendingQueryRestore.value ? null : JSON.stringify([getAllTasksParams.value, useProjectCollection.value]), newParams => {
 		if (newParams === null) {
 			requestId++
 			tasks.value = []

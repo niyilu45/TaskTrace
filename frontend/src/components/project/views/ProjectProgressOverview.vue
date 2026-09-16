@@ -3,8 +3,11 @@
 		class="project-progress"
 		aria-label="项目展示模式"
 	>
+		<h2 class="project-overview-title">
+			项目总表
+		</h2>
 		<div class="progress-toolbar">
-			<p>共 {{ tasks.length }} 项 · 已完成 {{ completed }} 项 · 未完成 {{ tasks.length - completed }} 项</p>
+			<p>{{ grouped.length }} 个任务 · {{ tasks.length - grouped.length }} 个子任务 · 合计已完成 {{ completed }} / {{ tasks.length }} 项</p>
 			<label>查找事项 <input
 				v-model="search"
 				class="input"
@@ -25,7 +28,7 @@
 			</XButton>
 		</div>
 		<p class="browse-hint">
-			按父事项分区，子任务缩进展示。点击任一行可展开说明、完整进展和图片。
+			项目总表包含多个任务，每个任务下面可细分子任务。点击任务或子任务可展开说明、进展和图片。
 		</p>
 		<p
 			v-if="loading"
@@ -52,7 +55,7 @@
 			:key="`${revision}-${group.root.id}`"
 			class="progress-group"
 		>
-			<header><h2>{{ group.root.title }}</h2><span>{{ group.rows.filter(row => row.task.done).length }} / {{ group.rows.length }} 项完成</span></header>
+			<header><span>任务及子任务</span><span>{{ group.rows.filter(row => row.task.done).length }} / {{ group.rows.length }} 项完成</span></header>
 			<ProjectProgressRow
 				v-for="row in group.visibleRows"
 				:key="row.task.id"
@@ -124,6 +127,11 @@ onBeforeUnmount(() => requestId++)
 </script>
 
 <style scoped lang="scss">
+.project-overview-title {
+	font-size: 1.125rem;
+	margin-block-end: .75rem;
+}
+
 .progress-toolbar {
 	display: flex;
 	align-items: center;
@@ -164,7 +172,7 @@ onBeforeUnmount(() => requestId++)
 	padding: .7rem .8rem;
 	background: var(--grey-100);
 	}
-.progress-group h2 {
+.progress-group header > span:first-child {
 	font-size: 1rem;
 	margin: 0;
 	flex: 1;

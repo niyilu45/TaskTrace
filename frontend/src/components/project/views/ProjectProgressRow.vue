@@ -10,7 +10,7 @@
 				class="task-state"
 				:class="{'is-done': task.done}"
 			>{{ task.done ? '已完成' : '进行中' }}</span>
-			<span class="task-name">{{ task.title }}<small v-if="depth">子任务</small></span>
+			<span class="task-name">{{ task.title }}<small>{{ depth ? '子任务' : '任务' }}</small></span>
 			<span class="latest-summary">{{ error || (latest ? plain(latest.comment) : (loading ? '加载进展…' : '暂无进展记录')) }}</span>
 			<time>{{ stamp(latest?.created || task.updated) }}</time>
 		</summary>

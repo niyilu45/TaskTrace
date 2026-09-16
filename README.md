@@ -9,7 +9,7 @@
 1. 在 Releases 页面下载 `TaskTrace-local-windows-x64.zip`，不要选择 Source code。
 2. 解压到可写目录，双击 `Start-TaskTrace.cmd`。
 3. 同时打开悬浮窗和完整界面，无需安装 Node.js、Go、Docker 或数据库，无需注册登录。
-4. 关闭浏览器后悬浮窗继续运行；退出悬浮窗会停止本地服务，暂时隐藏请最小化到托盘。
+4. 关闭浏览器后悬浮窗继续运行；点击悬浮窗关闭按钮或最小化按钮会缩小到任务栏，完整界面仍可使用；真正退出请在托盘菜单选择“退出 TaskTrace”。
 
 当前测试版面向 Windows x64、本机单人使用，仅监听本机地址。多人协作需另行部署带账号登录的共享服务，不能直接通过此免登录体验包联网使用。
 
@@ -54,3 +54,5 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File portable/Build-Local.ps1
 ## 上游与许可证
 
 TaskTrace 使用独立的 Git 提交历史，保留 Vikunja 的版权声明及原有许可证；上游项目说明见 [README.upstream.md](README.upstream.md)，许可证见 [LICENSE](LICENSE)。各目录的独立许可证同样保留。TaskTrace 的本地体验功能没有绕过上游付费功能检查。
+
+项目列表编辑模式提供“显示已完成任务”开关，选择会自动记住。

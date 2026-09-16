@@ -36,6 +36,7 @@ internal sealed class FloatingWindow : Form {
     int autoSaveSeconds = 30;
     int page = 1, total, expandedHeight = 560;
     readonly bool selfTest;
+    bool allowExit;
     sealed class Project { public long Id; public string Title { get; set; } }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, string text);
     static void Hint(TextBox input, string text) { input.HandleCreated += delegate { SendMessage(input.Handle, 0x1501, new IntPtr(1), text); }; }
@@ -114,15 +115,22 @@ internal sealed class FloatingWindow : Form {
         };
         tasks.DoubleClick += delegate { ShowProgress(); };
         tasks.Resize += delegate { tasks.Columns[0].Width = Math.Max(100, tasks.ClientSize.Width - 26); };
-        Resize += delegate { if(WindowState == FormWindowState.Minimized) Hide(); };
+        // Minimize keeps the application visible on the Windows taskbar.
         tray.DoubleClick += delegate { RestoreWindow(); };
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
-        menu.Items.Add("退出 TaskTrace", null, delegate { Close(); }); tray.ContextMenuStrip = menu;
+        menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         timer.Tick += async delegate { if(Visible && !collapsed && !busy) { projectsDirty = true; await Reload(); } };
         Shown += async delegate { await Reload(); timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
-        FormClosing += delegate { closing = true; timer.Stop(); SaveBounds(); tray.Visible = false; };
+        FormClosing += delegate(object sender, FormClosingEventArgs e) {
+            if(e.CloseReason == CloseReason.UserClosing && !allowExit) {
+                e.Cancel = true; SaveBounds(); ShowInTaskbar = true;
+                WindowState = FormWindowState.Minimized;
+                return;
+            }
+            closing = true; timer.Stop(); SaveBounds(); tray.Visible = false;
+        };
     }
     TableLayoutPanel Row(TextBox input, string title, EventHandler action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
@@ -483,12 +491,15 @@ internal sealed class FloatingWindow : Form {
             if(status.ForeColor != ForeColor) throw new Exception("Session refresh failed");
             ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
             pin.Checked = false; if(TopMost) throw new Exception("Unpin failed"); pin.Checked = true;
-            WindowState = FormWindowState.Minimized; RestoreWindow();
+            Close();
+            if(closing || IsDisposed || WindowState != FormWindowState.Minimized || !ShowInTaskbar || !Visible) throw new Exception("Close must minimize to taskbar");
+            await Api("GET", "/projects", null);
+            RestoreWindow();
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
             File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
-        finally { Close(); }
+        finally { allowExit = true; Close(); }
     }
     protected override void Dispose(bool disposing) { if(disposing) { timer.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
 }
