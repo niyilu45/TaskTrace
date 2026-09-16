@@ -1,0 +1,51 @@
+import {test, expect} from '@playwright/test'
+import {readFileSync} from 'node:fs'
+import path from 'node:path'
+
+test('project opens read-only with grouped progress and explicit editing', async ({page, request}) => {
+ const root = process.env.TASKTRACE_LOCAL_TEST_DIR
+ test.skip(!root, 'Requires isolated portable server')
+ const session = JSON.parse(readFileSync(path.join(root!, 'data/local-session.json'), 'utf8').replace(/^\uFEFF/, ''))
+ const base = readFileSync(path.join(root!, 'data/local-config.yml'), 'utf8').match(/publicurl: "(http:\/\/127\.0\.0\.1:\d+)\/"/)![1]
+ const headers = {Authorization: 'Bearer ' + session.token}
+ const project = await (await request.post(base + '/api/v2/projects', {headers, data: {title: '项目进展展示验收'}})).json()
+ const parent = await (await request.post(`${base}/api/v2/projects/${project.id}/tasks`, {headers, data: {title: '产品设计', description: '<p>完成界面方案并核对需求</p>'}})).json()
+ const child = await (await request.post(`${base}/api/v2/projects/${project.id}/tasks`, {headers, data: {title: '需求梳理', done: true}})).json()
+ expect((await request.post(`${base}/api/v2/tasks/${parent.id}/relations`, {headers, data: {other_task_id: child.id, relation_kind: 'subtask'}})).ok()).toBeTruthy()
+ const upload = await request.post(`${base}/api/v2/tasks/${parent.id}/attachments`, {headers, multipart: {files: {name: 'test.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6AAAAAElFTkSuQmCC', 'base64')}}})
+ expect(upload.ok(), await upload.text()).toBeTruthy()
+ const attachment = (await upload.json()).success[0]
+ const description = `<p>完成界面方案并核对需求</p><img src="/api/v1/tasks/${parent.id}/attachments/${attachment.id}">`
+ expect((await request.patch(`${base}/api/v2/tasks/${parent.id}`, {headers: {...headers, 'Content-Type': 'application/merge-patch+json'}, data: {description}})).ok()).toBeTruthy()
+ const note = await request.post(`${base}/api/v2/tasks/${child.id}/comments`, {headers, data: {comment: '<p>已确认全部需求</p>'}})
+ expect(note.ok(), await note.text()).toBeTruthy()
+ await page.goto(base + '/#tasktrace-local=' + encodeURIComponent(JSON.stringify(session)))
+ await page.goto(`${base}/projects/${project.id}`)
+ const overview = page.getByRole('region', {name: '项目展示模式'})
+ await expect(overview).toBeVisible()
+ await expect(overview.getByText('共 2 项 · 已完成 1 项 · 未完成 1 项')).toBeVisible()
+ await expect(overview.locator('.progress-group')).toHaveCount(1)
+ await expect(overview.locator('.progress-row')).toHaveCount(2)
+ await expect(overview.getByText('已确认全部需求', {exact: true})).toBeVisible()
+ await expect(page.locator('[contenteditable="true"]')).toHaveCount(0)
+ await overview.locator(`[data-task-id="${parent.id}"] summary`).click()
+ await expect(overview.getByText('完成界面方案并核对需求')).toBeVisible()
+ await expect.poll(() => overview.locator('.readonly-rich-text img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+ await overview.getByRole('combobox').selectOption('done')
+ await expect(overview.locator('.progress-row')).toHaveCount(1)
+ await overview.getByRole('combobox').selectOption('all')
+ await page.screenshot({path: path.join(root!, 'browse-desktop.png'), fullPage: true})
+ await page.setViewportSize({width: 390, height: 844})
+ await expect(overview).toBeVisible()
+ await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy()
+ await page.screenshot({path: path.join(root!, 'browse-mobile.png'), fullPage: true})
+ await page.setViewportSize({width: 1280, height: 900})
+ await page.getByRole('button', {name: '进入编辑模式'}).click()
+ await expect(overview).toHaveCount(0)
+ await expect(page).toHaveURL(/mode=edit/)
+ await expect(page.getByRole('button', {name: '返回展示模式'})).toBeVisible()
+ await page.getByRole('button', {name: '返回展示模式'}).click()
+ await expect(overview).toBeVisible()
+ await page.reload()
+ await expect(overview).toBeVisible()
+})
