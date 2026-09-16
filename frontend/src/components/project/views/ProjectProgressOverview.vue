@@ -28,7 +28,7 @@
 			</XButton>
 		</div>
 		<p class="browse-hint">
-			项目总表包含多个任务，每个任务下面可细分子任务。点击任务或子任务可展开说明、进展和图片。
+			每个任务下，一个子任务一行。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。
 		</p>
 		<p
 			v-if="loading"
@@ -55,13 +55,62 @@
 			:key="`${revision}-${group.root.id}`"
 			class="progress-group"
 		>
-			<header><span>任务及子任务</span><span>{{ group.rows.filter(row => row.task.done).length }} / {{ group.rows.length }} 项完成</span></header>
-			<ProjectProgressRow
-				v-for="row in group.visibleRows"
-				:key="row.task.id"
-				:task="row.task"
-				:depth="row.depth"
+			<header><h3>{{ group.root.title }}</h3><span>{{ group.root.done ? '任务已完成' : '任务未完成' }} · {{ group.rows.length - 1 }} 个子任务</span></header>
+			<ReadonlyRichText
+				v-if="group.root.description"
+				class="task-description"
+				:html="group.root.description"
 			/>
+			<div
+				v-if="group.visibleRows.length"
+				class="subtask-scroll"
+				tabindex="0"
+				:aria-label="`${group.root.title}子任务表格，可横向滚动`"
+			>
+				<table class="subtask-table">
+					<colgroup><col style="width: 18%"><col style="width: 27%"><col style="width: 20%"><col style="width: 35%"></colgroup>
+					<thead>
+						<tr>
+							<th scope="col">
+								子任务名
+							</th><th scope="col">
+								子任务描述
+							</th><th scope="col">
+								遗留事项
+							</th><th scope="col">
+								进展
+							</th>
+						</tr>
+					</thead>
+					<tbody>
+						<ProjectProgressRow
+							v-for="row in group.visibleRows"
+							:key="row.task.id"
+							:task="row.task"
+							:depth="row.depth"
+						/>
+					</tbody>
+				</table>
+			</div>
+			<p
+				v-else
+				class="task-description"
+			>
+				{{ group.rows.length === 1 ? '暂无子任务，可进入编辑模式添加。' : '没有符合筛选条件的子任务。' }}
+			</p>
+			<details class="task-own-progress">
+				<summary>任务自身进展</summary>
+				<div class="subtask-scroll">
+					<table class="subtask-table">
+						<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
+							<ProjectProgressRow
+								:task="group.root"
+								:depth="0"
+							/>
+						</tbody>
+					</table>
+				</div>
+			</details>
 		</section>
 		<nav
 			v-if="groups.length > 20"
@@ -92,6 +141,7 @@ import {ref, computed, watch, onBeforeUnmount} from 'vue'
 import {projectTasksList} from '@/client/generated'
 import {groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
 import ProjectProgressRow from './ProjectProgressRow.vue'
+import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 const props = defineProps<{projectId: number}>()
 const tasks = ref<ProgressTask[]>([])
 const loading = ref(false)
@@ -103,7 +153,7 @@ const revision = ref(0)
 let requestId = 0
 const completed = computed(() => tasks.value.filter(task => task.done).length)
 const grouped = computed(() => groupProgressTasks(tasks.value))
-const groups = computed(() => grouped.value.filter(group => !search.value.trim() || group.rows.some(row => row.task.title?.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))).map(group => ({...group, visibleRows: group.rows.filter(row => scope.value === 'all' || (scope.value === 'done' ? row.task.done : !row.task.done))})).filter(group => group.visibleRows.length))
+const groups = computed(() => grouped.value.filter(group => !search.value.trim() || group.rows.some(row => row.task.title?.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))).map(group => ({...group, visibleRows: group.rows.filter(row => row.depth > 0 && (scope.value === 'all' || (scope.value === 'done' ? row.task.done : !row.task.done)))})).filter(group => scope.value === 'all' || group.visibleRows.length || (scope.value === 'done' ? group.root.done : !group.root.done)))
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
 watch([search, scope], () => { page.value = 1 })
 async function load() {
@@ -172,7 +222,7 @@ onBeforeUnmount(() => requestId++)
 	padding: .7rem .8rem;
 	background: var(--grey-100);
 	}
-.progress-group header > span:first-child {
+.progress-group h3 {
 	font-size: 1rem;
 	margin: 0;
 	flex: 1;
@@ -200,5 +250,27 @@ onBeforeUnmount(() => requestId++)
 .progress-group header {
 	flex-wrap: wrap;
 	}
+}
+.subtask-scroll {
+ overflow-x: auto;
+}
+.subtask-table {
+ inline-size: 100%;
+ min-inline-size: 760px;
+ table-layout: fixed;
+ border-collapse: collapse;
+ thead th {
+  padding: .6rem .75rem;
+  text-align: start;
+  font-size: .8125rem;
+  border-block-start: 1px solid var(--grey-200);
+  background: var(--grey-100);
+ }
+}
+.task-description { padding: .5rem .8rem; }
+.task-own-progress {
+ padding: .5rem .8rem;
+ font-size: .8125rem;
+ summary { cursor: pointer; }
 }
 </style>
