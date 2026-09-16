@@ -21,7 +21,8 @@ internal sealed class FloatingWindow : Form {
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新增事项" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "搜索事项" };
-    readonly ListView tasks = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, HideSelection = false, HeaderStyle = ColumnHeaderStyle.None, AccessibleName = "未完成事项" };
+    readonly TreeView tasks = new TreeView { Dock = DockStyle.Fill, CheckBoxes = true, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
+    readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly Button previous = new Button { Text = "上一页", AutoSize = true };
     readonly Button next = new Button { Text = "下一页", AutoSize = true };
@@ -62,7 +63,7 @@ internal sealed class FloatingWindow : Form {
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
-        LoadBounds(); LoadAutoSaveSettings(); KeyPreview = true;
+        LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); KeyPreview = true;
         var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var reload = new Button { Text = "刷新", AutoSize = true };
@@ -85,7 +86,7 @@ internal sealed class FloatingWindow : Form {
         var addRow = Row(entry, "新增", async delegate { await AddTask(); });
         content.Controls.Add(addRow, 0, 1);
         content.Controls.Add(Row(search, "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
-        tasks.Columns.Add("事项", 320); tasks.BorderStyle = BorderStyle.FixedSingle;
+        tasks.BorderStyle = BorderStyle.FixedSingle;
         content.Controls.Add(tasks, 0, 3);
         var paging = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var progressButton = new Button { Text = "记录进展", AutoSize = true };
@@ -104,17 +105,24 @@ internal sealed class FloatingWindow : Form {
         entry.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await AddTask(); } };
         search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await Reload(); } };
         KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.F5) { e.Handled = true; await Reload(); } };
-        tasks.ItemCheck += delegate(object sender, ItemCheckEventArgs e) {
+        tasks.BeforeCheck += delegate(object sender, TreeViewCancelEventArgs e) {
             if(rendering) return;
-            e.NewValue = e.CurrentValue;
+            e.Cancel = true;
             if(!busy) {
-                long id = Convert.ToInt64(tasks.Items[e.Index].Tag);
-                bool done = e.CurrentValue != CheckState.Checked;
+                long id = Convert.ToInt64(e.Node.Tag);
+                bool done = !e.Node.Checked;
                 BeginInvoke(new Action(async delegate { await Complete(id, done); }));
             }
         };
-        tasks.DoubleClick += delegate { ShowProgress(); };
-        tasks.Resize += delegate { tasks.Columns[0].Width = Math.Max(100, tasks.ClientSize.Width - 26); };
+        tasks.NodeMouseDoubleClick += delegate(object sender, TreeNodeMouseClickEventArgs e) {
+            if(e.Node.Nodes.Count == 0) { tasks.SelectedNode = e.Node; ShowProgress(); }
+        };
+        tasks.AfterCollapse += delegate(object sender, TreeViewEventArgs e) {
+            if(!rendering && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+        };
+        tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
+            if(!rendering && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+        };
         // Minimize keeps the application visible on the Windows taskbar.
         tray.DoubleClick += delegate { RestoreWindow(); };
         var menu = new ContextMenuStrip();
@@ -184,27 +192,80 @@ internal sealed class FloatingWindow : Form {
         }
         var project = projects.SelectedItem as Project;
         if(project == null) { status.Text = "请先在完整界面建立项目。"; return; }
-        var result = await Api("GET", "/projects/" + project.Id + "/tasks?per_page=50&page=" + page + "&filter=" + Uri.EscapeDataString(showCompleted.Checked ? "" : "done = false") + "&sort_by=id&order_by=desc&q=" + Uri.EscapeDataString(search.Text.Trim()), null);
-        total = Convert.ToInt32(result["total"]);
-        if(page > 1 && (page - 1) * 50 >= total) { page--; await LoadTasks(); return; }
+        var all = new Dictionary<long, Dictionary<string, object>>();
+        var ordered = new List<long>();
+        for(int fetchPage = 1; ; fetchPage++) {
+            var result = await Api("GET", "/projects/" + project.Id + "/tasks?per_page=100&page=" + fetchPage + "&sort_by=id&order_by=desc", null);
+            int count = 0;
+            foreach(Dictionary<string, object> item in (IEnumerable)result["items"]) {
+                long id = Convert.ToInt64(item["id"]); count++;
+                if(!all.ContainsKey(id)) ordered.Add(id);
+                all[id] = item;
+            }
+            if(count == 0 || fetchPage >= Convert.ToInt32(result["total_pages"])) break;
+        }
+        var parents = new Dictionary<long, long>();
+        foreach(long id in ordered) {
+            object relationsValue, parentValue;
+            if(!all[id].TryGetValue("related_tasks", out relationsValue)) continue;
+            var relations = relationsValue as Dictionary<string, object>;
+            if(relations == null || !relations.TryGetValue("parenttask", out parentValue) || parentValue == null) continue;
+            foreach(Dictionary<string, object> parent in (IEnumerable)parentValue) {
+                long parentId = Convert.ToInt64(parent["id"]);
+                if(parentId != id && all.ContainsKey(parentId) && (!parents.ContainsKey(id) || parentId < parents[id])) parents[id] = parentId;
+            }
+        }
+        // Break malformed cycles so every task still has a reachable root.
+        foreach(long id in ordered) {
+            var seen = new HashSet<long>(); long cursor = id;
+            while(parents.ContainsKey(cursor)) {
+                if(!seen.Add(cursor)) { parents.Remove(cursor); break; }
+                cursor = parents[cursor];
+            }
+        }
+        var included = new HashSet<long>(); var matches = new HashSet<long>();
+        string query = search.Text.Trim();
+        foreach(long id in ordered) {
+            if(!showCompleted.Checked && Convert.ToBoolean(all[id]["done"])) continue;
+            if(query.Length > 0 && ((string)all[id]["title"]).IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
+            matches.Add(id); long cursor = id;
+            while(included.Add(cursor) && parents.ContainsKey(cursor)) cursor = parents[cursor];
+        }
+        long selectedId = tasks.SelectedNode == null ? 0 : Convert.ToInt64(tasks.SelectedNode.Tag);
         rendering = true; tasks.BeginUpdate();
         try {
-            tasks.Items.Clear();
-            foreach(Dictionary<string, object> task in (IEnumerable)result["items"]) {
-                bool done = Convert.ToBoolean(task["done"]);
-                tasks.Items.Add(new ListViewItem((string)task["title"]) {
-                    Tag = Convert.ToInt64(task["id"]), Checked = done,
+            tasks.Nodes.Clear(); var nodes = new Dictionary<long, TreeNode>(); var roots = new List<TreeNode>();
+            foreach(long id in ordered) {
+                if(!included.Contains(id)) continue;
+                bool done = Convert.ToBoolean(all[id]["done"]);
+                nodes[id] = new TreeNode((string)all[id]["title"]) {
+                    Name = id.ToString(), Tag = id, Checked = done,
                     ForeColor = done ? Color.FromArgb(100, 110, 125) : ForeColor,
-                    ToolTipText = (done ? "已完成 · " : "未完成 · ") + (string)task["title"]
-                });
+                    ToolTipText = (done ? "已完成 · " : "未完成 · ") + (string)all[id]["title"] + (matches.Contains(id) ? "" : "（为显示匹配子任务保留的父任务）")
+                };
             }
-            tasks.AccessibleName = showCompleted.Checked ? "全部事项" : "未完成事项";
-            tasks.ShowItemToolTips = true;
+            foreach(long id in ordered) {
+                if(!nodes.ContainsKey(id)) continue;
+                if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id])) nodes[parents[id]].Nodes.Add(nodes[id]);
+                else roots.Add(nodes[id]);
+            }
+            total = roots.Count; page = Math.Max(1, Math.Min(page, Math.Max(1, (total + 49) / 50)));
+            for(int index = (page - 1) * 50; index < Math.Min(page * 50, roots.Count); index++) tasks.Nodes.Add(roots[index]);
+            tasks.ExpandAll();
+            if(query.Length == 0) foreach(var pair in nodes) if(collapsedTasks.Contains(pair.Key)) pair.Value.Collapse();
+            if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView == tasks) tasks.SelectedNode = nodes[selectedId];
+            previous.Enabled = page > 1; next.Enabled = page * 50 < total;
+            status.ForeColor = ForeColor;
+            status.Text = matches.Count == 0 ? "没有匹配事项，可清空搜索或显示已完成。" : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
         } finally { tasks.EndUpdate(); rendering = false; }
-        previous.Enabled = page > 1; next.Enabled = page * 50 < total;
-        status.ForeColor = ForeColor;
-        status.Text = total == 0 ? (search.Text.Length > 0 ? "没有匹配事项，清空搜索后重试。" : (showCompleted.Checked ? "暂无事项，添加一项开始吧。" : "暂无待办，可勾选显示已完成。")) : total + (showCompleted.Checked ? " 项事项" : " 项未完成") + " · 第 " + page + " 页 · 勾选切换完成";
     }
+    void LoadTreePreferences() {
+        try { var values = json.Deserialize<long[]>(File.ReadAllText(Path.Combine(data, "floating-tree.json"))); foreach(long id in values) collapsedTasks.Add(id); } catch { }
+    }
+    void SaveTreePreferences() {
+        try { File.WriteAllText(Path.Combine(data, "floating-tree.json"), json.Serialize(new List<long>(collapsedTasks))); } catch { }
+    }
+
     async Task AddTask() {
         if(busy || closing || string.IsNullOrWhiteSpace(entry.Text)) return;
         var project = projects.SelectedItem as Project; if(project == null) return;
@@ -241,9 +302,9 @@ internal sealed class FloatingWindow : Form {
     }
     void ShowProgress() {
         if(busy || closing) return;
-        if(tasks.SelectedItems.Count == 0) { status.Text = "请先选中要记录进展的事项。"; return; }
-        long id = Convert.ToInt64(tasks.SelectedItems[0].Tag);
-        using(var dialog = new Form { Text = "每日进展 · " + tasks.SelectedItems[0].Text, Size = new Size(430, 450), MinimumSize = new Size(380, 420), StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
+        if(tasks.SelectedNode == null) { status.Text = "请先选中要记录进展的事项。"; return; }
+        long id = Convert.ToInt64(tasks.SelectedNode.Tag);
+        using(var dialog = new Form { Text = "每日进展 · " + tasks.SelectedNode.Text, Size = new Size(430, 450), MinimumSize = new Size(380, 420), StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
             var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 1, RowCount = 7 };
             var day = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd", Dock = DockStyle.Fill, Value = DateTime.Today };
             var progress = new TextBox { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, AccessibleName = "今日进展" };
@@ -310,8 +371,8 @@ internal sealed class FloatingWindow : Form {
     }
     async Task ShowSubtasks() {
         if(busy || closing) return;
-        if(tasks.SelectedItems.Count == 0) { status.Text = "请先选中一个父事项。"; return; }
-        long parentId = Convert.ToInt64(tasks.SelectedItems[0].Tag);
+        if(tasks.SelectedNode == null) { status.Text = "请先选中一个父事项。"; return; }
+        long parentId = Convert.ToInt64(tasks.SelectedNode.Tag);
         SetBusy(true); timer.Stop();
         try {
             var parent = await Api("GET", "/tasks/" + parentId, null);
@@ -436,8 +497,8 @@ internal sealed class FloatingWindow : Form {
         try {
             if(projects.Items.Count == 0 || !TopMost) throw new Exception("Workspace or TopMost missing");
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
-            if(tasks.Items.Count == 0 || tasks.Items[0].Text != createdTitle) throw new Exception("Task creation failed");
-            long id = Convert.ToInt64(tasks.Items[0].Tag);
+            if(tasks.Nodes.Count == 0 || tasks.Nodes[0].Text != createdTitle) throw new Exception("Task creation failed");
+            long id = Convert.ToInt64(tasks.Nodes[0].Tag);
             await Api("PATCH", "/tasks/" + id, new { description = "保留已有进展" });
             await SaveProgress(id, DateTime.Today, "已完成接口联调 <检查>", "明天补充图片");
             var testPictures = new List<PastedImage>();
@@ -453,32 +514,48 @@ internal sealed class FloatingWindow : Form {
             if(!json.Serialize(parentWithChild["related_tasks"]).Contains("子任务验收")) throw new Exception("Subtask relationship missing");
             await Api("PATCH", "/tasks/" + childId, new { done = true });
             if(Convert.ToBoolean((await Api("GET", "/tasks/" + id, null))["done"])) throw new Exception("Child completion incorrectly completed parent");
+            await Api("PATCH", "/tasks/" + childId, new { done = false });
+            long grandchildId = await CreateSubtask(childId, Convert.ToInt64(parentWithChild["project_id"]), "下级子任务验收");
+            await LoadTasks();
+            if(tasks.Nodes.Count != 1 || tasks.Nodes[0].Nodes.Count != 1 || tasks.Nodes[0].Nodes[0].Nodes.Count != 1) throw new Exception("Task hierarchy missing");
+            if(tasks.Nodes[0].Nodes[0].Level != 1 || tasks.Nodes[0].Nodes[0].Nodes[0].Level != 2) throw new Exception("Subtask indentation missing");
+            using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-tree-test.png")); }
+            tasks.Nodes[0].Collapse(); collapsedTasks.Clear(); LoadTreePreferences(); await LoadTasks();
+            if(tasks.Nodes[0].IsExpanded || !collapsedTasks.Contains(id)) throw new Exception("Collapsed state not retained");
+            search.Text = "下级子任务验收"; await LoadTasks();
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].IsExpanded || tasks.Nodes[0].Nodes[0].Nodes.Count != 1) throw new Exception("Search lost hierarchy");
+            search.Clear(); await LoadTasks(); tasks.Nodes[0].Expand();
+            if(collapsedTasks.Contains(id)) throw new Exception("Expand state not retained");
+            await Api("PATCH", "/tasks/" + id, new { done = true }); await LoadTasks();
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked || tasks.Nodes[0].Nodes.Count != 1) throw new Exception("Completed ancestor lost pending children");
+            await Api("PATCH", "/tasks/" + id, new { done = false });
+            await Api("DELETE", "/tasks/" + grandchildId, null);
             await Api("DELETE", "/tasks/" + childId, null);
             await Complete(id);
             var saved = await Api("GET", "/tasks/" + id, null);
             if(!Convert.ToBoolean(saved["done"])) throw new Exception("Completion was not persisted");
             if((string)saved["description"] != "保留已有进展") throw new Exception("Completion changed the description");
-            if(tasks.Items.Count != 0) throw new Exception("Completed task was not hidden");
+            if(tasks.Nodes.Count != 0) throw new Exception("Completed task was not hidden");
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
-            if(tasks.Items.Count != 1 || !tasks.Items[0].Checked) throw new Exception("Completed task not visible or not checked");
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked) throw new Exception("Completed task not visible or not checked");
             search.Text = createdTitle; await Reload();
-            if(tasks.Items.Count != 1) throw new Exception("Completed search failed");
+            if(tasks.Nodes.Count != 1) throw new Exception("Completed search failed");
             await Complete(id, false);
             saved = await Api("GET", "/tasks/" + id, null);
-            if(Convert.ToBoolean(saved["done"]) || tasks.Items[0].Checked) throw new Exception("Reopen failed");
+            if(Convert.ToBoolean(saved["done"]) || tasks.Nodes[0].Checked) throw new Exception("Reopen failed");
             await Complete(id);
             SaveBounds();
             var settings = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
             if(!Convert.ToBoolean(settings["showCompleted"])) throw new Exception("Filter preference not saved");
             rendering = true; showCompleted.Checked = false; rendering = false; search.Clear(); await Reload();
-            if(tasks.Items.Count != 0) throw new Exception("Hide completed failed");
+            if(tasks.Nodes.Count != 0) throw new Exception("Hide completed failed");
             var project = projects.SelectedItem as Project;
             var ids = new List<long>();
             {
                 for(int i = 0; i < 51; i++) { var task = await Api("POST", "/projects/" + project.Id + "/tasks", new { title = "分页验收事项 " + i }); ids.Add(Convert.ToInt64(task["id"])); }
-                page = 1; await Reload(); if(tasks.Items.Count != 50 || !next.Enabled) throw new Exception("Pagination first page failed");
-                page = 2; await Reload(); if(tasks.Items.Count < 1 || !previous.Enabled) throw new Exception("Pagination second page failed");
-                search.Text = "分页验收事项 50"; page = 1; await Reload(); if(tasks.Items.Count != 1) throw new Exception("Search failed");
+                page = 1; await Reload(); if(tasks.Nodes.Count != 50 || !next.Enabled) throw new Exception("Pagination first page failed");
+                page = 2; await Reload(); if(tasks.Nodes.Count < 1 || !previous.Enabled) throw new Exception("Pagination second page failed");
+                search.Text = "分页验收事项 50"; page = 1; await Reload(); if(tasks.Nodes.Count != 1) throw new Exception("Search failed");
             }
             { foreach(long testId in ids) await Api("DELETE", "/tasks/" + testId, null); search.Clear(); page = 1; }
             string browserSession = await PrepareBrowserSession();
@@ -497,7 +574,7 @@ internal sealed class FloatingWindow : Form {
             RestoreWindow();
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
