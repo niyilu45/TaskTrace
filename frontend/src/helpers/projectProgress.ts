@@ -37,3 +37,26 @@ export async function queueProgressRead<T>(read: () => Promise<T>): Promise<T> {
 		if (next) next(); else active--
 	}
 }
+
+// Keep the ancestor chain when filtering, then hide only collapsed descendants.
+export function visibleProgressRows(rows: ProgressRow[], scope: string, search: string, collapsed: Set<number>) {
+	const included = new Set<number>()
+	const ancestors: number[] = []
+	const query = search.trim().toLocaleLowerCase()
+	for (const row of rows) {
+		ancestors.length = row.depth
+		ancestors[row.depth] = row.task.id
+		if ((!query || row.task.title?.toLocaleLowerCase().includes(query)) &&
+			(scope === 'all' || (scope === 'done' ? row.task.done : !row.task.done))) {
+			ancestors.forEach(id => included.add(id))
+		}
+	}
+	let hiddenBelow = Infinity
+	return rows.filter(row => {
+		if (row.depth > hiddenBelow) return false
+		hiddenBelow = Infinity
+		if (!included.has(row.task.id)) return false
+		if (!query && collapsed.has(row.task.id)) hiddenBelow = row.depth
+		return true
+	})
+}

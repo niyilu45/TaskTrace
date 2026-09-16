@@ -6,9 +6,29 @@
 	>
 		<th
 			scope="row"
-			:style="{'padding-inline-start': `${Math.min(Math.max(depth - 1, 0), 6) * .8 + .75}rem`}"
+			:style="{'padding-inline-start': `${Math.max(depth - 1, 0) * 1.25 + .75}rem`}"
 		>
-			<span>{{ task.title }}</span>
+			<div class="task-name">
+				<button
+					v-if="hasChildren"
+					type="button"
+					class="row-toggle"
+					:aria-expanded="expanded"
+					:aria-label="`${expanded ? '收起' : '展开'}子任务 ${task.title}`"
+					@click="$emit('toggle')"
+				>
+					<svg
+						viewBox="0 0 16 16"
+						aria-hidden="true"
+						:class="{expanded}"
+					><path d="m6 3 5 5-5 5" /></svg>
+				</button><span
+					v-else
+					class="toggle-spacer"
+					aria-hidden="true"
+				/>
+				<span>{{ task.title }}</span>
+			</div>
 			<small>{{ task.done ? '已完成' : '未完成' }}<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
 		<td>
@@ -78,7 +98,8 @@ import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
 import {sortProgressNotes} from '@/helpers/progressNotes'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
-const props = defineProps<{task: ProgressTask, depth: number}>()
+const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean}>()
+defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()
 const history = ref<TaskComment[]>([])
 const notes = computed(() => sortProgressNotes(history.value))
@@ -123,8 +144,10 @@ onBeforeUnmount(() => { disposed = true })
   font-size: .875rem;
   text-align: start;
  }
- td:last-child { border-inline-end: 0; }
- th { font-weight: 600; }
+ td:last-child { border-inline-end: 0;
+ }
+ th { font-weight: 600;
+ }
  small {
   display: block;
   margin-block-start: .4rem;
@@ -132,10 +155,42 @@ onBeforeUnmount(() => { disposed = true })
   font-weight: 400;
  }
 }
-.empty { color: var(--grey-600); }
+.task-name { display: flex;
+ align-items: baseline;
+ gap: .25rem;
+ }
+.toggle-spacer { inline-size: 1.5rem;
+ flex-shrink: 0;
+ }
+.row-toggle {
+ border: 0;
+ background: transparent;
+ color: var(--grey-700);
+ cursor: pointer;
+ padding: .25rem;
+ flex-shrink: 0;
+ &:hover { background: var(--grey-200);
+ }
+ &:focus-visible { outline: 2px solid var(--primary);
+ outline-offset: 2px;
+ }
+ svg { inline-size: 1rem;
+ block-size: 1rem;
+ fill: none;
+ stroke: currentcolor;
+ stroke-width: 2;
+ display: block;
+ }
+ .expanded { transform: rotate(90deg);
+ }
+}
+.empty { color: var(--grey-600);
+ }
 .history-entry {
  margin-block-end: .6rem;
- :deep(.readonly-rich-text), :deep(.readonly-rich-text > p:first-child) { display: inline; }
- time { font-weight: 600; }
+ :deep(.readonly-rich-text), :deep(.readonly-rich-text > p:first-child) { display: inline;
+ }
+ time { font-weight: 600;
+ }
 }
 </style>

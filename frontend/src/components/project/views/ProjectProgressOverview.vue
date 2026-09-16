@@ -28,7 +28,7 @@
 			</XButton>
 		</div>
 		<p class="browse-hint">
-			每个任务下，一个子任务一行。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。
+			按任务、子任务逐级显示，点击名称旁的按钮可展开或收起。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。
 		</p>
 		<p
 			v-if="loading"
@@ -55,62 +55,81 @@
 			:key="`${revision}-${group.root.id}`"
 			class="progress-group"
 		>
-			<header><h3>{{ group.root.title }}</h3><span>{{ group.root.done ? '任务已完成' : '任务未完成' }} · {{ group.rows.length - 1 }} 个子任务</span></header>
-			<ReadonlyRichText
-				v-if="group.root.description"
-				class="task-description"
-				:html="group.root.description"
-			/>
-			<div
-				v-if="group.visibleRows.length"
-				class="subtask-scroll"
-				tabindex="0"
-				:aria-label="`${group.root.title}子任务表格，可横向滚动`"
-			>
-				<table class="subtask-table">
-					<colgroup><col style="width: 18%"><col style="width: 27%"><col style="width: 20%"><col style="width: 35%"></colgroup>
-					<thead>
-						<tr>
-							<th scope="col">
-								子任务名
-							</th><th scope="col">
-								子任务描述
-							</th><th scope="col">
-								遗留事项
-							</th><th scope="col">
-								进展
-							</th>
-						</tr>
-					</thead>
-					<tbody>
-						<ProjectProgressRow
-							v-for="row in group.visibleRows"
-							:key="row.task.id"
-							:task="row.task"
-							:depth="row.depth"
-						/>
-					</tbody>
-				</table>
-			</div>
-			<p
-				v-else
-				class="task-description"
-			>
-				{{ group.rows.length === 1 ? '暂无子任务，可进入编辑模式添加。' : '没有符合筛选条件的子任务。' }}
-			</p>
-			<details class="task-own-progress">
-				<summary>任务自身进展</summary>
-				<div class="subtask-scroll">
+			<header>
+				<button
+					type="button"
+					class="hierarchy-toggle"
+					:aria-expanded="isExpanded(group.root.id)"
+					:aria-label="`${isExpanded(group.root.id) ? '收起' : '展开'}任务 ${group.root.title}`"
+					@click="toggle(group.root.id)"
+				>
+					<svg
+						viewBox="0 0 16 16"
+						aria-hidden="true"
+						:class="{expanded: isExpanded(group.root.id)}"
+					><path d="m6 3 5 5-5 5" /></svg>
+				</button><h3>{{ group.root.title }}</h3><span>{{ group.root.done ? '任务已完成' : '任务未完成' }} · {{ group.rows.length - 1 }} 个子任务</span>
+			</header>
+			<template v-if="isExpanded(group.root.id)">
+				<ReadonlyRichText
+					v-if="group.root.description"
+					class="task-description"
+					:html="group.root.description"
+				/>
+				<div
+					v-if="group.visibleRows.length"
+					class="subtask-scroll"
+					tabindex="0"
+					:aria-label="`${group.root.title}子任务表格，可横向滚动`"
+				>
 					<table class="subtask-table">
-						<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
+						<colgroup><col style="width: 18%"><col style="width: 27%"><col style="width: 20%"><col style="width: 35%"></colgroup>
+						<thead>
+							<tr>
+								<th scope="col">
+									子任务名
+								</th><th scope="col">
+									子任务描述
+								</th><th scope="col">
+									遗留事项
+								</th><th scope="col">
+									进展
+								</th>
+							</tr>
+						</thead>
+						<tbody>
 							<ProjectProgressRow
-								:task="group.root"
-								:depth="0"
+								v-for="row in group.visibleRows"
+								:key="row.task.id"
+								:task="row.task"
+								:depth="row.depth"
+								:has-children="parents.has(row.task.id)"
+								:expanded="isExpanded(row.task.id)"
+								@toggle="toggle(row.task.id)"
 							/>
 						</tbody>
 					</table>
 				</div>
-			</details>
+				<p
+					v-else
+					class="task-description"
+				>
+					{{ group.rows.length === 1 ? '暂无子任务，可进入编辑模式添加。' : '没有符合筛选条件的子任务。' }}
+				</p>
+				<details class="task-own-progress">
+					<summary>任务自身进展</summary>
+					<div class="subtask-scroll">
+						<table class="subtask-table">
+							<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
+								<ProjectProgressRow
+									:task="group.root"
+									:depth="0"
+								/>
+							</tbody>
+						</table>
+					</div>
+				</details>
+			</template>
 		</section>
 		<nav
 			v-if="groups.length > 20"
@@ -139,7 +158,8 @@
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount} from 'vue'
 import {projectTasksList} from '@/client/generated'
-import {groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
+import {useStorage} from '@vueuse/core'
+import {visibleProgressRows, groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
 import ProjectProgressRow from './ProjectProgressRow.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 const props = defineProps<{projectId: number}>()
@@ -153,7 +173,28 @@ const revision = ref(0)
 let requestId = 0
 const completed = computed(() => tasks.value.filter(task => task.done).length)
 const grouped = computed(() => groupProgressTasks(tasks.value))
-const groups = computed(() => grouped.value.filter(group => !search.value.trim() || group.rows.some(row => row.task.title?.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))).map(group => ({...group, visibleRows: group.rows.filter(row => row.depth > 0 && (scope.value === 'all' || (scope.value === 'done' ? row.task.done : !row.task.done)))})).filter(group => scope.value === 'all' || group.visibleRows.length || (scope.value === 'done' ? group.root.done : !group.root.done)))
+const collapsed = useStorage<number[]>('tasktrace:overview-collapsed', [])
+const collapsedIds = computed(() => new Set(collapsed.value))
+const searchExpanded = ref(new Set<number>())
+const parents = computed(() => new Set(grouped.value.flatMap(group => group.rows.filter((row, i, rows) => rows[i + 1]?.depth > row.depth).map(row => row.task.id))))
+function isExpanded(id: number) {
+	return search.value.trim() ? !searchExpanded.value.has(id) : !collapsedIds.value.has(id)
+}
+function toggle(id: number) {
+	if (search.value.trim()) {
+		const next = new Set(searchExpanded.value)
+		if (next.has(id)) next.delete(id); else next.add(id)
+		searchExpanded.value = next
+		return
+	}
+	collapsed.value = collapsedIds.value.has(id) ? collapsed.value.filter(value => value !== id) : [...collapsed.value, id]
+}
+const groups = computed(() => grouped.value.map(group => {
+	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set())
+	const visible = visibleProgressRows(matching, 'all', '', search.value.trim() ? searchExpanded.value : collapsedIds.value)
+	return {...group, matching, visibleRows: visible.filter(row => row.depth > 0)}
+}).filter(group => group.matching.length))
+watch(search, () => { searchExpanded.value = new Set() })
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
 watch([search, scope], () => { page.value = 1 })
 async function load() {
@@ -177,6 +218,28 @@ onBeforeUnmount(() => requestId++)
 </script>
 
 <style scoped lang="scss">
+.hierarchy-toggle {
+ border: 0;
+ background: transparent;
+ color: var(--grey-700);
+ cursor: pointer;
+ padding: .25rem;
+ flex-shrink: 0;
+ &:hover { background: var(--grey-200);
+ }
+ &:focus-visible { outline: 2px solid var(--primary);
+ outline-offset: 2px;
+ }
+ svg { inline-size: 1rem;
+ block-size: 1rem;
+ fill: none;
+ stroke: currentcolor;
+ stroke-width: 2;
+ display: block;
+ }
+ .expanded { transform: rotate(90deg);
+ }
+}
 .project-overview-title {
 	font-size: 1.125rem;
 	margin-block-end: .75rem;
@@ -267,10 +330,12 @@ onBeforeUnmount(() => requestId++)
   background: var(--grey-100);
  }
 }
-.task-description { padding: .5rem .8rem; }
+.task-description { padding: .5rem .8rem;
+ }
 .task-own-progress {
  padding: .5rem .8rem;
  font-size: .8125rem;
- summary { cursor: pointer; }
+ summary { cursor: pointer;
+ }
 }
 </style>
