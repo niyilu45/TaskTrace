@@ -1591,6 +1591,7 @@
     "4020": "This attachment does not belong to that task.",
     "4021": "This user is already assigned to that task.",
     "4022": "Please provide what the reminder date is relative to.",
+    "4090": "Tasks support at most 5 levels (root tasks are level 1; projects do not count). Please adjust the parent-child relation.",
     "4023": "Cannot create a task relation cycle.",
     "4034": "The file does not exist.",
     "4035": "The uploaded file exceeds the maximum configured file size.",

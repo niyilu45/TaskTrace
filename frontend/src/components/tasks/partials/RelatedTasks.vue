@@ -1,5 +1,11 @@
 <template>
 	<div class="task-relations">
+		<p
+			v-if="editEnabled"
+			role="status"
+		>
+			{{ depthLoading ? '正在读取任务层级…' : taskDepth >= MAX_TASK_DEPTH ? TASK_DEPTH_MESSAGE : `当前第 ${taskDepth} 级 · 最多 5 级` }}
+		</p>
 		<form
 			v-if="editEnabled"
 			class="subtask-quick-add field has-addons"
@@ -11,14 +17,14 @@
 					class="input"
 					aria-label="子任务名称"
 					placeholder="拆分为子任务，输入名称后回车"
-					:disabled="subtaskSaving || !!pendingSubtask"
+					:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !!pendingSubtask"
 				>
 			</div>
 			<div class="control">
 				<button
 					class="button is-primary"
 					type="submit"
-					:disabled="subtaskSaving || !subtaskTitle.trim()"
+					:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !subtaskTitle.trim()"
 				>
 					{{ pendingSubtask ? '重试关联' : '添加子任务' }}
 				</button>
@@ -268,6 +274,7 @@ import {useRoute} from 'vue-router'
 
 import {patchTasksRead, tasksCreate, tasksRelationsCreate} from '@/client/generated'
 import TaskService from '@/services/task'
+import {taskHierarchySpan, assertCanAddSubtask, MAX_TASK_DEPTH, TASK_DEPTH_MESSAGE} from '@/helpers/taskHierarchyDepth'
 import TaskModel, {getTaskIdentifier} from '@/models/task'
 import type {ITask} from '@/modelTypes/ITask'
 import type {ITaskRelation} from '@/modelTypes/ITaskRelation'
@@ -327,6 +334,16 @@ watch(
 const showNewRelationForm = ref(false)
 const showCreate = computed(() => showNewRelationForm.value)
 
+const taskDepth = ref(1)
+const depthLoading = ref(false)
+let depthRequest = 0
+watch(() => [props.taskId, props.initialRelatedTasks], async () => {
+	const request = ++depthRequest
+	depthLoading.value = true
+	try { const depth = await taskHierarchySpan(props.taskId); if (request === depthRequest) taskDepth.value = depth }
+	catch { if (request === depthRequest) taskDepth.value = 1 /* The submit handler retries before creating. */ }
+	finally { if (request === depthRequest) depthLoading.value = false }
+}, {immediate: true})
 const subtaskTitle = ref('')
 const subtaskSaving = ref(false)
 const subtaskMessage = ref('')
@@ -338,6 +355,7 @@ async function addSubtask() {
 	const parentId = props.taskId
 	const projectId = props.projectId
 	try {
+		await assertCanAddSubtask(parentId)
 		let child = pendingSubtask.value
 		if (!child) {
 			const result = await tasksCreate({path: {project: projectId}, body: {title: subtaskTitle.value.trim()}})
@@ -351,7 +369,8 @@ async function addSubtask() {
 		pendingSubtask.value = null
 		subtaskTitle.value = ''
 		subtaskMessage.value = '子任务已添加，可点击名称查看和记录进展。'
-	} catch {
+	} catch (error) {
+		if (error instanceof Error && error.message === TASK_DEPTH_MESSAGE) { taskDepth.value = MAX_TASK_DEPTH; subtaskMessage.value = TASK_DEPTH_MESSAGE; return }
 		if (props.taskId === parentId) subtaskMessage.value = pendingSubtask.value ? '事项已创建，但关联失败。点击“重试关联”，不会重复创建。' : '添加失败，名称已保留，请重试。'
 	} finally { subtaskSaving.value = false }
 }
@@ -517,6 +536,8 @@ async function removeTaskRelation() {
 }
 
 async function createAndRelateTask(title: string) {
+	if (newTaskRelation.kind === 'subtask') await assertCanAddSubtask(props.taskId)
+	if (newTaskRelation.kind === 'parenttask' && await taskHierarchySpan(props.taskId, 'subtask') >= MAX_TASK_DEPTH) throw new Error(TASK_DEPTH_MESSAGE)
 	const newTask = await taskStore.createNewTask({title, projectId: props.projectId})
 	newTaskRelation.task = newTask
 	await addTaskRelation()

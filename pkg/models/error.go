@@ -2884,3 +2884,17 @@ func (err ErrUserDataExportDoesNotExist) HTTPError() web.HTTPError {
 		Message:  "No user data export found.",
 	}
 }
+
+// ErrTaskHierarchyDepth rejects a relation that would exceed the task depth limit.
+type ErrTaskHierarchyDepth struct{}
+
+func (ErrTaskHierarchyDepth) Error() string {
+	return "Task hierarchy supports at most 5 levels (root task is level 1)."
+}
+
+// ErrCodeTaskHierarchyDepth is the public error code for excessive nesting.
+const ErrCodeTaskHierarchyDepth = 4090
+
+func (err ErrTaskHierarchyDepth) HTTPError() web.HTTPError {
+	return web.HTTPError{HTTPCode: http.StatusConflict, Code: ErrCodeTaskHierarchyDepth, Message: err.Error()}
+}

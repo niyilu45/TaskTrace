@@ -17,6 +17,7 @@
 package models
 
 import (
+	"fmt"
 	"testing"
 
 	"code.vikunja.io/api/pkg/db"
@@ -461,4 +462,44 @@ func TestTaskRelation_CanCreate(t *testing.T) {
 		assert.True(t, IsErrTaskDoesNotExist(err))
 		assert.False(t, can)
 	})
+}
+
+func TestTaskRelationDepthLimit(t *testing.T) {
+	for _, inverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inverse=%v", inverse), func(t *testing.T) {
+			db.LoadAndAssertFixtures(t)
+			s := db.NewSession()
+			defer s.Close()
+			_, err := s.Where("id > 0").Delete(&TaskRelation{})
+			require.NoError(t, err)
+			link := func(parent, child int64) error {
+				rel := &TaskRelation{TaskID: parent, OtherTaskID: child, RelationKind: RelationKindSubtask}
+				if inverse {
+					rel.TaskID, rel.OtherTaskID, rel.RelationKind = child, parent, RelationKindParenttask
+				}
+				return rel.Create(s, &user.User{ID: 1})
+			}
+			for id := int64(1); id < 5; id++ {
+				require.NoError(t, link(id, id+1))
+			}
+			before, err := s.Count(&TaskRelation{})
+			require.NoError(t, err)
+			var depthErr ErrTaskHierarchyDepth
+			require.ErrorAs(t, link(5, 6), &depthErr)
+			// Adding a parent above an existing five-level subtree also fails.
+			require.ErrorAs(t, link(7, 1), &depthErr)
+			after, err := s.Count(&TaskRelation{})
+			require.NoError(t, err)
+			assert.Equal(t, before, after, "neither direction of a rejected relation is written")
+			// A second branch can have its own fifth level.
+			require.NoError(t, link(4, 8))
+			// An existing subtree must fit as a whole, not just its first node.
+			require.NoError(t, link(9, 10))
+			require.ErrorAs(t, link(4, 9), &depthErr)
+			// Non-hierarchical relations remain unrestricted.
+			require.NoError(t, (&TaskRelation{TaskID: 5, OtherTaskID: 6, RelationKind: RelationKindRelated}).Create(s, &user.User{ID: 1}))
+			// Existing over-deep data remains editable/removable.
+			require.NoError(t, (&TaskRelation{TaskID: 4, OtherTaskID: 5, RelationKind: RelationKindSubtask}).Delete(s, &user.User{ID: 1}))
+		})
+	}
 }

@@ -533,7 +533,20 @@ internal sealed class FloatingWindow : Form {
             }
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
+    const string TaskDepthMessage = "任务最多支持 5 级（顶层任务为第 1 级），无法继续添加子任务。";
+    async Task<int> TaskHierarchySpan(long id, int level = 1) {
+        if(level >= 5) return 1;
+        var task = await Api("GET", "/tasks/" + id, null);
+        var relations = task["related_tasks"] as Dictionary<string,object>;
+        int span = 1;
+        if(relations != null && relations.ContainsKey("parenttask")) foreach(Dictionary<string,object> parent in (IEnumerable)relations["parenttask"]) {
+            span = Math.Max(span, 1 + await TaskHierarchySpan(Convert.ToInt64(parent["id"]), level + 1));
+            if(span >= 6-level) break;
+        }
+        return span;
+    }
     async Task<long> CreateSubtask(long parentId, long projectId, string title, long existingId = 0) {
+        if(await TaskHierarchySpan(parentId) >= 5) throw new Exception(TaskDepthMessage);
         long childId = existingId;
         if(childId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title }); childId = Convert.ToInt64(child["id"]); }
         await Api("POST", "/tasks/" + parentId + "/relations", new { other_task_id = childId, relation_kind = "subtask" });
@@ -561,10 +574,13 @@ internal sealed class FloatingWindow : Form {
                 renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
                 renameRow.Controls.Add(renameTitle); renameRow.Controls.Add(rename);
                 dialog.Controls.Add(list); dialog.Controls.Add(renameRow); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
-                bool loading = false, writing = false; long pendingId = 0;
+                bool loading = false, writing = false; long pendingId = 0; bool depthLimit = false;
                 Func<Task> reload = async delegate {
                     loading = true;
                     try {
+                        depthLimit = await TaskHierarchySpan(parentId) >= 5;
+                        add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;
+                        if(depthLimit) feedback.Text = TaskDepthMessage;
                         var current = await Api("GET", "/tasks/" + parentId, null);
                         list.Items.Clear();
                         var relations = current["related_tasks"] as Dictionary<string, object>;
@@ -588,14 +604,15 @@ internal sealed class FloatingWindow : Form {
                 };
                 renameTitle.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; rename.PerformClick(); } };
                 add.Click += async delegate {
-                    if(writing || string.IsNullOrWhiteSpace(title.Text)) return;
+                    if(writing || depthLimit || string.IsNullOrWhiteSpace(title.Text)) return;
                     writing = true; add.Enabled = false; title.Enabled = false;
                     try {
+                        if(await TaskHierarchySpan(parentId) >= 5) { depthLimit = true; throw new Exception(TaskDepthMessage); }
                         if(pendingId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title.Text.Trim() }); pendingId = Convert.ToInt64(child["id"]); }
                         await CreateSubtask(parentId, projectId, title.Text, pendingId);
                         pendingId = 0; title.Clear(); feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
-                    } catch { feedback.Text = pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
-                    finally { writing = false; add.Enabled = true; title.Enabled = pendingId == 0; }
+                    } catch { feedback.Text = depthLimit ? TaskDepthMessage : pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
+                    finally { writing = false; add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0; }
                 };
                 title.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; add.PerformClick(); } };
                 list.ItemCheck += delegate(object sender, ItemCheckEventArgs e) {
@@ -778,6 +795,18 @@ internal sealed class FloatingWindow : Form {
             await Api("PATCH", "/tasks/" + id, new { done = true }); await LoadTasks();
             if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked || tasks.Nodes[0].Nodes.Count != 1) throw new Exception("Completed ancestor lost pending children");
             await Api("PATCH", "/tasks/" + id, new { done = false });
+            long levelFour = await CreateSubtask(grandchildId, Convert.ToInt64(parentWithChild["project_id"]), "第四级验收");
+            long levelFive = await CreateSubtask(levelFour, Convert.ToInt64(parentWithChild["project_id"]), "第五级验收");
+            if(await TaskHierarchySpan(levelFive) != 5) throw new Exception("Five-level depth calculation failed");
+            int tasksBeforeRejection = Convert.ToInt32((await Api("GET", "/tasks", null))["total"]);
+            bool sixthBlocked = false;
+            try { await CreateSubtask(levelFive, Convert.ToInt64(parentWithChild["project_id"]), "不应创建的第六级"); }
+            catch(Exception e) { if(e.Message == TaskDepthMessage) sixthBlocked = true; else throw; }
+            if(!sixthBlocked) throw new Exception("Sixth level was not blocked before creation");
+            var rejectedTasks = await Api("GET", "/tasks", null);
+            if(Convert.ToInt32(rejectedTasks["total"]) != tasksBeforeRejection) throw new Exception("Depth rejection left an orphan task");
+            await Api("DELETE", "/tasks/" + levelFive, null);
+            await Api("DELETE", "/tasks/" + levelFour, null);
             await Api("DELETE", "/tasks/" + grandchildId, null);
             await Api("DELETE", "/tasks/" + childId, null);
             await Complete(id);
@@ -831,7 +860,7 @@ internal sealed class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

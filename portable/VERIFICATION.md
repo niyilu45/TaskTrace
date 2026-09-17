@@ -208,3 +208,11 @@
 - 关闭或最小化主窗口隐藏到托盘；双击托盘或“显示悬浮窗”恢复正常状态，托盘“退出 TaskTrace”保持原退出语义。
 - 原生完整自检通过，新增验证启动无任务栏入口、关闭/最小化隐藏、普通/简洁模式托盘恢复，后台接口保持可用；原有功能回归通过。
 - 日志 .local-build/tray-only-build.log、.local-build/tray-only-verify/data/floating-test.txt；测试数据不进入发布包。
+
+## 2026-09-17 五级任务上限
+- 模型层创建父子关系时校验最长祖先链加最长后代链不超过 5；同时覆盖 subtask/parenttask，返回 409/4090。其他关系、已有内容修改和关系删除保留原行为。
+- 网页显示当前级别，第 5 级禁用快捷新增；新增关联任务前读取最新层级。悬浮窗在新增前预检查，第 5 级禁用新增入口。
+- 修复 testfixtures 在 Windows 使用反斜杠访问 embed.FS 的路径兼容问题，以运行原有 Go 测试。
+- mage test:filter TestTaskRelation 通过（包含关系创建、深度上限与权限测试）；前端 3 个预检查单元测试通过；原生完整自检通过第 5 级可用、第 6 级拒绝且无遗留独立任务；成品浏览器验证双向关联、整棵子树超限、第五级禁用和第四级正常新增通过。
+- gofmt、ESLint 通过（19 项已有警告）；mage lint:fix 因本机缺少 golangci-lint 无法运行。
+- 日志 .local-build/depth-five-go-tests-fixed.log、depth-five-unit-final.log、depth-five-checked-e2e.log、depth-five-checked/data/floating-test.txt。

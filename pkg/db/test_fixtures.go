@@ -19,6 +19,7 @@ package db
 import (
 	"embed"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"testing"
 
@@ -34,6 +35,14 @@ var (
 	//go:embed fixtures
 	fixturesFS embed.FS
 )
+
+// Embedded filesystem names use forward slashes even when testfixtures joins
+// directory entries with the Windows path separator.
+type portableFixtureFS struct{ source fs.FS }
+
+func (f portableFixtureFS) Open(name string) (fs.File, error) {
+	return f.source.Open(filepath.ToSlash(name))
+}
 
 // InitFixtures initialize test fixtures for a test database
 func InitFixtures(tablenames ...string) (err error) {
@@ -52,7 +61,7 @@ func InitFixtures(tablenames ...string) (err error) {
 	}
 
 	loaderOptions := []func(loader *testfixtures.Loader) error{
-		testfixtures.FS(fixturesFS),
+		testfixtures.FS(portableFixtureFS{source: fixturesFS}),
 		testfixtures.Database(x.DB().DB),
 		testfixtures.Dialect(GetDialect()),
 		testfixtures.DangerousSkipTestDatabaseCheck(),

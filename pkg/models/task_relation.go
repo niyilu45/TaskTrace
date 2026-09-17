@@ -186,6 +186,54 @@ func checkTaskRelationCycle(s *xorm.Session, relation *TaskRelation, otherTaskID
 	return nil
 }
 
+// MaxTaskHierarchyDepth counts the root task as level one (projects are not levels).
+const MaxTaskHierarchyDepth = 5
+
+// taskHierarchySpan counts the longest path in one direction. Stop at the limit,
+// so legacy over-deep graphs cannot cause unbounded recursion.
+func taskHierarchySpan(s *xorm.Session, id int64, kind RelationKind, level int) (int, error) {
+	if level >= MaxTaskHierarchyDepth {
+		return 1, nil
+	}
+	var relations []*TaskRelation
+	if err := s.Where("task_id = ? AND relation_kind = ?", id, kind).Find(&relations); err != nil {
+		return 0, err
+	}
+	span := 1
+	for _, relation := range relations {
+		length, err := taskHierarchySpan(s, relation.OtherTaskID, kind, level+1)
+		if err != nil {
+			return 0, err
+		}
+		if length+1 > span {
+			span = length + 1
+		}
+		if span >= MaxTaskHierarchyDepth-level+1 {
+			break
+		}
+	}
+	return span, nil
+}
+
+func checkTaskHierarchyDepth(s *xorm.Session, rel *TaskRelation) error {
+	parent, child := rel.TaskID, rel.OtherTaskID
+	if rel.RelationKind == RelationKindParenttask {
+		parent, child = child, parent
+	}
+	above, err := taskHierarchySpan(s, parent, RelationKindParenttask, 1)
+	if err != nil {
+		return err
+	}
+	below, err := taskHierarchySpan(s, child, RelationKindSubtask, 1)
+	if err != nil {
+		return err
+	}
+	if above+below > MaxTaskHierarchyDepth {
+		return ErrTaskHierarchyDepth{}
+	}
+	return nil
+}
+
 // Create creates a new task relation
 // @Summary Create a new relation between two tasks
 // @Description Creates a new relation between two tasks. The user needs to have update permissions on the base task and at least read permissions on the other task. Both tasks do not need to be on the same project. Take a look at the docs for available task relation kinds.
@@ -244,6 +292,12 @@ func (rel *TaskRelation) Create(s *xorm.Session, a web.Auth) error {
 	if rel.RelationKind == RelationKindSubtask || rel.RelationKind == RelationKindParenttask {
 		err = checkTaskRelationCycle(s, rel, rel.OtherTaskID, nil, nil)
 		if err != nil {
+			return err
+		}
+	}
+
+	if rel.RelationKind == RelationKindSubtask || rel.RelationKind == RelationKindParenttask {
+		if err = checkTaskHierarchyDepth(s, rel); err != nil {
 			return err
 		}
 	}
