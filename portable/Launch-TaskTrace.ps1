@@ -151,12 +151,26 @@ public sealed class TaskTraceProcessJob : IDisposable {
     Write-Host ('TaskTrace is ready: ' + $url)
     Write-Host ('Your database and images are saved in: ' + $dataRoot)
     if ($Floating) {
-        $floatingArgs = @(('"' + $url + '"'), ('"' + $packageRoot + '"'), ('"' + ($dataRoot.TrimEnd('\') + '\.') + '"'))
+        $floatingArgs = @(('"' + $url + '"'), ('"' + ($packageRoot.TrimEnd('\') + '\.') + '"'), ('"' + ($dataRoot.TrimEnd('\') + '\.') + '"'))
         if ($FloatingSelfTest) { $floatingArgs += '--self-test' }
         elseif ($OpenBrowser -and !$NoBrowser) { $floatingArgs += '--open-browser' }
-    $stage = 'Start floating window'
-        $window = Start-Process -FilePath (Join-Path $packageRoot 'TaskTrace-floating.exe') -ArgumentList $floatingArgs -PassThru
+        $stage = 'Start floating window'
+        $floatingBinary = Join-Path $packageRoot 'TaskTrace-floating.exe'
+        if (!(Test-Path -LiteralPath $floatingBinary -PathType Leaf)) { throw 'TaskTrace-floating.exe is missing. Extract the complete ZIP to a local folder.' }
+        # Start-Process wraps Win32Exception in InvalidOperationException and loses
+        # NativeErrorCode. Direct CreateProcess preserves the original exception,
+        # avoids shell/file-association dependencies, and sets an explicit cwd.
+        $floatingStart = New-Object Diagnostics.ProcessStartInfo
+        $floatingStart.FileName = $floatingBinary
+        $floatingStart.Arguments = $floatingArgs -join ' '
+        $floatingStart.WorkingDirectory = $packageRoot
+        $floatingStart.UseShellExecute = $false
+        $floatingStart.CreateNoWindow = $true
+        $window = [Diagnostics.Process]::Start($floatingStart)
+        if ($null -eq $window) { throw 'Windows did not return a process for the floating window.' }
+        $stage = 'Attach floating window to process job'
         $processJob.Attach($window.Handle)
+        $stage = 'Wait for floating window exit'
         $window.WaitForExit()
         if ($window.ExitCode -ne 0) { throw 'Floating window exited with an error.' }
     }
@@ -166,10 +180,24 @@ public sealed class TaskTraceProcessJob : IDisposable {
     else { [void](Read-Host 'Keep this window open while using TaskTrace. Press Enter to stop') }
 } catch {
     $failure = $_
-    $details = 'Step: ' + $stage + "`r`nWindows: " + [Environment]::OSVersion + "`r`n" + $failure.Exception.ToString()
+    $details = 'Step: ' + $stage + "`r`nPowerShell: " + $PSVersionTable.PSVersion + "`r`n64-bit OS: " + [Environment]::Is64BitOperatingSystem + "`r`nError record: " + $failure.ToString() + "`r`nError ID: " + $failure.FullyQualifiedErrorId + "`r`nWindows: " + [Environment]::OSVersion + "`r`n" + $failure.Exception.ToString()
     $inner = $failure.Exception
     while ($null -ne $inner) {
-        if ($inner -is [ComponentModel.Win32Exception]) { $details += "`r`nWindows error code: " + $inner.NativeErrorCode }
+        if ($inner -is [ComponentModel.Win32Exception]) {
+            $details += "`r`nWindows error code: " + $inner.NativeErrorCode
+            $hint = switch ($inner.NativeErrorCode) {
+                2 { '程序文件不存在，请完整解压发布包。' }
+                3 { '程序路径不存在，请将完整发布包解压到本地可访问目录。' }
+                5 { 'Windows 拒绝访问，请检查文件权限及 Windows 安全中心的保护历史。' }
+                193 { '程序格式无效，请重新下载完整的 Windows x64 发布包。' }
+                216 { '程序与系统架构不兼容，或文件损坏；请核对系统架构及发布包校验值。' }
+                577 { 'Windows 无法验证程序，请查看 Windows 安全中心的保护历史。' }
+                740 { 'Windows 要求提升权限；本程序不需要管理员权限，请检查程序的兼容性设置。' }
+                1260 { '系统策略阻止了程序运行，请联系该电脑的管理员确认。' }
+                default { '请依据上述 Windows 错误原因排查。' }
+            }
+            $details += "`r`n" + $hint
+        }
         $inner = $inner.InnerException
     }
     $details += "`r`n" + $failure.ScriptStackTrace

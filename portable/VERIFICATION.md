@@ -148,3 +148,11 @@
 - 无效配置模拟启动失败，验证退出码 1 和包含异常栈的日志；PowerShell 语法与成品构建通过。
 - 日志：.local-build/startup-native.log、.local-build/startup-error-verified.log、.local-build/startup-build.log。
 - 此版本修复错误不可见问题；用户另一台 Win11 的实际启动错误原因需要该机详情确认。
+
+## 2026-09-17 悬浮窗启动兼容性
+- 复现 Start-Process 将 Win32Exception 包装为 InvalidOperationException 丢失 NativeErrorCode；相同无效程序使用 Process.Start 保留原生错误 216。
+- 悬浮窗改为 ProcessStartInfo 显式直接启动，关闭 ShellExecute、设置工作目录；路径尾部分隔符使用反斜杠加点避免引号转义问题。
+- 日志保留 ErrorRecord、错误 ID、PowerShell 版本、系统位数及原始错误链；为常见 Windows 错误提供对应说明。
+- 中文空格目录完整原生自检通过。实际启动脚本注入无效悬浮窗程序，确认启动阶段、原生错误码及失败后后台退出。
+- 日志：.local-build/launch-probe/result.log、.local-build/launch-compat-native.log、.local-build/launch-invalid-binary.log。
+- 已确认并修复启动方式与诊断缺陷；仍不能在本机证明另一台 Win11 的特定环境问题完全消失。
