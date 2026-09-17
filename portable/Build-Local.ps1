@@ -22,6 +22,10 @@ try {
         } finally { $env:VITE_TASKTRACE_LOCAL = $oldLocalMode; Pop-Location }
     }
     if (!(Test-Path -LiteralPath 'frontend/dist/index.html')) { throw 'Build frontend/dist first.' }
+    $localFrontendMarker = 'frontend/dist/tasktrace-local-build.txt'
+    if (!(Test-Path -LiteralPath $localFrontendMarker) -or ([IO.File]::ReadAllText((Join-Path $repoRoot $localFrontendMarker)).Trim() -ne 'tasktrace-local')) {
+        throw 'frontend/dist is not a TaskTrace local build. Run Build-Local.ps1 without -SkipFrontend before packaging.'
+    }
     New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
     $oldCGO = $env:CGO_ENABLED
     $oldCC = $env:CC

@@ -47,9 +47,9 @@ function getSentryConfig(env: Record<string, string>): SentryVitePluginOptions {
 		telemetry: false,
 
 		// sourcemaps: {
-			// assets: [], // TODO
-			// deleteFilesAfterUpload: [], // TODO define glob
-			// rewriteSources // might need that instead of `urlPrefix`
+		// assets: [], // TODO
+		// deleteFilesAfterUpload: [], // TODO define glob
+		// rewriteSources // might need that instead of `urlPrefix`
 		// },
 
 		release: {
@@ -135,12 +135,22 @@ function getBuildConfig(env: Record<string, string>) {
 					postcssPresetEnv({
 						features: {
 							'logical-properties-and-values': false,
-						}
+						},
 					}),
 				],
 			},
 		},
 		plugins: [
+			env.VITE_TASKTRACE_LOCAL === 'true' && {
+				name: 'tasktrace-local-build-marker',
+				generateBundle() {
+					this.emitFile({
+						type: 'asset',
+						fileName: 'tasktrace-local-build.txt',
+						source: 'tasktrace-local\n',
+					})
+				},
+			},
 			tailwindcss(),
 			vue(),
 			svgLoader({
