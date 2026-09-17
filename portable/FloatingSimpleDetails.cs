@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -183,6 +183,7 @@ internal sealed partial class FloatingWindow {
             }
             simpleDetailsActive=false;simpleCollapsedDuringRead.Clear();
         } finally {tasks.EndUpdate();rendering=wasRendering;}
+        UpdateSimpleActionState();
     }
     async Task RefreshSimpleOutstandingWithReader(Func<long,Task<SharedList>> read) {
         if(closing || IsDisposed)return;
@@ -410,7 +411,8 @@ internal sealed partial class FloatingWindow {
             } finally {tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.SimpleImageClicked=clicked;}
             var pending=new TaskCompletionSource<SharedList>();
             Task stale=RefreshSimpleOutstandingWithReader(delegate(long id){return id==900001L?pending.Task:Task.FromResult(new SharedList());});
-            SetSimpleMode(false);await RefreshSimpleOutstandingWithReader(read);pending.SetResult(shared);await stale;
+            tasks.SelectedNode=empty;SetSimpleMode(false);await RefreshSimpleOutstandingWithReader(read);pending.SetResult(shared);await stale;
+            if(!fullToggleTask.Visible || !fullToggleTask.Enabled)throw new Exception("Restored normal outstanding branch did not update full task actions");
             if(parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf) || !parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingBranch) || tasks.DrawMode!=TreeViewDrawMode.OwnerDrawText || !tasks.SimpleImageBounds(image).IsEmpty)throw new Exception("Late simple results replaced normal outstanding branches");
             var normal=parent.Nodes.Cast<TreeNode>().First(node=>node.Tag is OutstandingBranch);
             ((OutstandingBranch)normal.Tag).Loaded=true;

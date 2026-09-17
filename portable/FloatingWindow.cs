@@ -82,12 +82,11 @@ internal sealed partial class FloatingWindow : Form {
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
         LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
-        toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
+        toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 9, 0), WrapContents = true };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var reload = new Button { Text = "刷新", AutoSize = true };
         var settingsButton = new Button { Text = "设置", AutoSize = true };
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
-        toolbar.Height = 76; toolbar.WrapContents = true;
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
         toolbar.Controls.AddRange(new Control[] { full, reload, pin, fold, settingsButton, simple });
@@ -185,6 +184,7 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
+        toolbar.SizeChanged+=delegate {FitFoldedToolbar();};
         InitializeAutoRefresh();
         Shown += async delegate { await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
@@ -629,7 +629,24 @@ internal sealed partial class FloatingWindow : Form {
         restoreSimple.Visible = false; Hide();
     }
     void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
-    void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 420); Height = expandedHeight; fold.Text = "收起"; } }
+    bool fittingFoldedToolbar;
+    void FitFoldedToolbar() {
+        if(!collapsed || simpleMode || simpleLayout || fittingFoldedToolbar || closing || toolbar==null || WindowState!=FormWindowState.Normal)return;
+        fittingFoldedToolbar=true;
+        try {
+            int height=SizeFromClientSize(new Size(ClientSize.Width,toolbar.Height)).Height;
+            MinimumSize=new Size(350,height);
+            if(Height!=height)Height=height;
+        }finally{fittingFoldedToolbar=false;}
+    }
+    void ToggleFold() {
+        if(!collapsed) {
+            expandedHeight=Height;collapsed=true;content.Visible=false;fold.Text="展开";
+            toolbar.PerformLayout();FitFoldedToolbar();
+        }else {
+            collapsed=false;content.Visible=true;MinimumSize=new Size(350,420);Height=expandedHeight;fold.Text="收起";
+        }
+    }
     void LoadAutoSaveSettings() {
         try {
             var settings = ReadObject(File.ReadAllText(Path.Combine(data, "autosave.json")));
@@ -796,7 +813,7 @@ internal sealed partial class FloatingWindow : Form {
             await TestAutoRefresh();
             token = "expired"; await Reload();
             if(status.ForeColor != ForeColor) throw new Exception("Session refresh failed");
-            ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
+            ToggleFold(); if(ClientSize.Height != toolbar.Height || content.Visible) throw new Exception("Collapse failed"); ToggleFold();
             pin.Checked = false; if(TopMost) throw new Exception("Unpin failed"); pin.Checked = true;
             Close();
             if(closing || IsDisposed || ShowInTaskbar || Visible || !tray.Visible) throw new Exception("Close must hide to tray without a taskbar entry");

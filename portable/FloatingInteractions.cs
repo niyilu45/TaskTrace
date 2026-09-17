@@ -63,7 +63,7 @@ internal sealed partial class FloatingWindow {
         };
         tasks.SetSimpleImageLinks(false);
         pictures.Click += async delegate {await ShowSelectedImages();};
-        toolbar.Controls.AddRange(new Control[]{pictures,priorityFilterButton}); toolbar.Height=108;
+        toolbar.Controls.AddRange(new Control[]{pictures,priorityFilterButton});
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
         prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
         InitializePriorityFilter();
