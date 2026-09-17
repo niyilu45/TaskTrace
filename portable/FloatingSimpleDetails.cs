@@ -124,7 +124,7 @@ internal sealed partial class FloatingWindow {
     void InvalidateSimpleOutstanding() {simpleOutstandingVersion++;}
     async void RefreshSimpleOutstandingInBackground() {
         if(simpleDetailsTesting)return;
-        if(rendering){InvalidateSimpleOutstanding();tasks.SetSimpleImageLinks(simpleMode);return;}
+        if(rendering){InvalidateSimpleOutstanding();PrepareSimpleOutstandingTree();tasks.SetSimpleImageLinks(simpleMode);return;}
         try {await RefreshSimpleOutstanding();}catch(Exception error){if(!closing && !IsDisposed)Error(error);}
     }
     Task RefreshSimpleOutstanding() {
@@ -136,6 +136,36 @@ internal sealed partial class FloatingWindow {
             yield return node;
             foreach(var child in SimpleTaskNodes(node.Nodes))yield return child;
         }
+    }
+    bool PrepareSimpleOutstandingTree() {
+        if(!simpleMode || closing || IsDisposed)return false;
+        var nodes=SimpleTaskNodes(tasks.Nodes).Where(node=>node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is OutstandingBranch)).ToList();
+        if(nodes.Count==0)return false;
+        InvalidateSimpleOutstanding();simpleDetailsActive=true;
+        var selection=CaptureOutstandingPosition(tasks.SelectedNode);var top=CaptureOutstandingPosition(tasks.TopNode);
+        bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
+        try {
+            tasks.SetSimpleImageLinks(true);
+            foreach(var node in nodes) {
+                bool expanded=node.IsExpanded;
+                var branches=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingBranch).ToArray();
+                bool hasRealChildren=node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long || child.Tag is OutstandingLeaf) || branches.Any(branch=>OutstandingDescendants(branch.Nodes).Any(child=>child.Tag is OutstandingLeaf));
+                if(!hasRealChildren)node.Collapse();
+                foreach(var branch in branches) {
+                    // Move real cached items before removing the grouping node; a failed read must not lose them.
+                    var leaves=OutstandingDescendants(branch.Nodes).Where(child=>child.Tag is OutstandingLeaf).ToArray();
+                    foreach(var leaf in leaves){leaf.Remove();node.Nodes.Add(leaf);}
+                    branch.Remove();
+                }
+                int index=0;
+                foreach(var leaf in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf)) {
+                    leaf.Text=(++index)+". "+OutstandingText(((OutstandingLeaf)leaf.Tag).Html);tasks.ReserveSimpleImageSpace(leaf);
+                }
+                if(node.Nodes.Count==0)node.Collapse();else if(expanded)node.Expand();
+            }
+            RestoreOutstandingPositions(selection,top);
+        } finally {tasks.EndUpdate();rendering=wasRendering;}
+        return true;
     }
     void RestoreNormalOutstanding(List<TreeNode> nodes) {
         if(!simpleDetailsActive)return;
@@ -155,19 +185,13 @@ internal sealed partial class FloatingWindow {
         } finally {tasks.EndUpdate();rendering=wasRendering;}
     }
     async Task RefreshSimpleOutstandingWithReader(Func<long,Task<SharedList>> read) {
-        int version=++simpleOutstandingVersion;
         if(closing || IsDisposed)return;
         var nodes=SimpleTaskNodes(tasks.Nodes).ToList();
         tasks.SetSimpleImageLinks(simpleMode);
-        if(!simpleMode){RestoreNormalOutstanding(nodes);return;}
+        if(!simpleMode){InvalidateSimpleOutstanding();RestoreNormalOutstanding(nodes);return;}
         simpleDetailsActive=true;
-        var branches=nodes.SelectMany(node=>node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingBranch)).ToList();
-        bool changed=branches.Count>0;
-        if(changed) {
-            bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
-            try {foreach(var branch in branches)branch.Remove();}
-            finally {tasks.EndUpdate();rendering=wasRendering;}
-        }
+        bool changed=PrepareSimpleOutstandingTree();
+        int version=++simpleOutstandingVersion;
         Exception failed=null;
         using(var gate=new SemaphoreSlim(4,4)) {
             await Task.WhenAll(nodes.Select(async delegate(TreeNode node) {
@@ -262,13 +286,16 @@ internal sealed partial class FloatingWindow {
         var selection=CaptureOutstandingPosition(tasks.SelectedNode);var top=CaptureOutstandingPosition(tasks.TopNode);
         bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
         try {
+            // Collapse while the last native child still exists; after removal Windows can retain its expanded state bit.
+            if(shared.Items.Count==0 && !node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long))node.Collapse();
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf || child.Tag is OutstandingBranch).ToArray())node.Nodes.Remove(child);
             for(int index=0;index<shared.Items.Count;index++) {
                 var item=shared.Items[index];
                 var leaf=new TreeNode((index+1)+". "+OutstandingText(item.Html)){Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html}};
                 node.Nodes.Add(leaf);tasks.ReserveSimpleImageSpace(leaf);
             }
-            if(!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id)))node.Expand();
+            if(node.Nodes.Count==0)node.Collapse();
+            else if(!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id)))node.Expand();
             RestoreOutstandingPositions(selection,top);
         } finally {tasks.EndUpdate();rendering=wasRendering;}
         return true;
@@ -323,6 +350,22 @@ internal sealed partial class FloatingWindow {
             var shared=new SharedList();
             shared.Items.Add(new PendingItem{Id="image",Html="核对图片<p><img src=\"/api/v1/tasks/900001/attachments/1\"></p>"});
             shared.Items.Add(new PendingItem{Id="plain",Html="联系负责人"});
+            var cachedBranch=new TreeNode("遗留事项"){Tag=new OutstandingBranch{TaskId=900001L,Loaded=true}};
+            var cachedImage=new TreeNode("旧编号"){Tag=new OutstandingLeaf{TaskId=900001L,Id="image",Html=shared.Items[0].Html}};
+            var cachedPlain=new TreeNode("旧编号"){Tag=new OutstandingLeaf{TaskId=900001L,Id="plain",Html=shared.Items[1].Html}};
+            cachedBranch.Nodes.Add(cachedImage);cachedBranch.Nodes.Add(cachedPlain);parent.Nodes.Add(cachedBranch);
+            var emptyBranch=new TreeNode("遗留事项"){Tag=new OutstandingBranch{TaskId=900003L,Loaded=true}};
+            emptyBranch.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加"){Tag=new OutstandingBranch{TaskId=900003L,Loaded=true}});empty.Nodes.Add(emptyBranch);
+            rendering=true;parent.Expand();empty.Expand();
+            if(!PrepareSimpleOutstandingTree() || parent.Nodes.Count!=3 || parent.Nodes[0]!=child || parent.Nodes[1]!=cachedImage || parent.Nodes[2]!=cachedPlain || empty.Nodes.Count!=0 || empty.IsExpanded || !cachedImage.Text.StartsWith("1. ") || !cachedPlain.Text.StartsWith("2. "))throw new Exception("Simple preparation: parent="+parent.Nodes.Count+", child="+(parent.Nodes.Count>0 && parent.Nodes[0]==child)+", image="+(cachedImage.Parent==parent)+", plain="+(cachedPlain.Parent==parent)+", empty="+empty.Nodes.Count+", expanded="+empty.IsExpanded+", titles="+cachedImage.Text+"/"+cachedPlain.Text);
+            rendering=false;
+            bool readFailed=false;
+            try {await RefreshSimpleOutstandingWithReader(delegate(long taskId){var failedRead=new TaskCompletionSource<SharedList>();failedRead.SetException(new Exception("Expected test read failure"));return failedRead.Task;});}catch(Exception){readFailed=true;}
+            if(!readFailed || parent.Nodes[1]!=cachedImage || parent.Nodes[2]!=cachedPlain || OutstandingDescendants(tasks.Nodes).Any(node=>node.Tag is OutstandingBranch))throw new Exception("Failed shared read restored an empty layer or discarded cached items");
+            ApplySimpleOutstanding(parent,new SharedList());
+            if(parent.Nodes.Count!=1 || parent.Nodes[0]!=child || !parent.IsExpanded)throw new Exception("A real subtask must retain the task's native expansion without shared items");
+            ApplySimpleOutstanding(empty,shared);ApplySimpleOutstanding(empty,new SharedList());
+            if(empty.Nodes.Count!=0 || empty.IsExpanded)throw new Exception("Removing the last shared item must remove native expansion and every empty placeholder");
             Func<long,Task<SharedList>> read=delegate(long id){return Task.FromResult(id==900001L?shared:new SharedList());};
             await RefreshSimpleOutstandingWithReader(read);
             if(parent.Nodes.Count!=3 || parent.Nodes[0]!=child || empty.Nodes.Count!=0 || child.Nodes.Count!=0)throw new Exception("Simple outstanding leaves must be direct, preserve child tasks, and omit empty layers");
@@ -332,6 +375,7 @@ internal sealed partial class FloatingWindow {
             tasks.SelectedNode=image;var stableTop=tasks.TopNode;int invalidations=0;
             InvalidateEventHandler invalidated=delegate{invalidations++;};tasks.Invalidated+=invalidated;
             try {
+                if(PrepareSimpleOutstandingTree())throw new Exception("Already prepared simple tree reported a mutation");
                 if(ApplySimpleOutstanding(parent,shared))throw new Exception("Unchanged simple outstanding data reported a mutation");
                 tasks.SetSimpleImageLinks(true);await RefreshSimpleOutstandingWithReader(read);
                 ApplyBackgroundOutstanding(new Dictionary<long,SharedList>{{900001L,shared},{900002L,new SharedList()},{900003L,new SharedList()}});
@@ -391,7 +435,7 @@ internal sealed partial class FloatingWindow {
             stale=RefreshSimpleOutstandingWithReader(delegate(long id){return replaced.Task;});
             var fresh=new TreeNode("新树"){Tag=900001L};tasks.Nodes.Clear();tasks.Nodes.Add(fresh);replaced.SetResult(shared);await stale;
             if(fresh.Nodes.Count!=0)throw new Exception("Detached task results leaked into a reloaded tree");
-            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: direct numbered outstanding leaves; no empty layers; child tasks preserved; image-only links; single scoped click without check/drag/editor; move/reorder targets; normal branch restoration; stale mode/tree results discarded; identical simple/loaded normal refresh keeps references, selection, scroll, expansion and avoids invalidation; changed/empty loaded branches update without opening; unloaded branches untouched.");
+            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: direct numbered outstanding leaves; no empty layers; child tasks preserved; image-only links; single scoped click without check/drag/editor; move/reorder targets; normal branch restoration; stale mode/tree results discarded; identical simple/loaded normal refresh keeps references, selection, scroll, expansion and avoids invalidation; changed/empty loaded branches update without opening; unloaded branches untouched; synchronous simple preparation preserves cached leaves on failure and removes every grouping/empty layer; native expansion only for real child tasks/items.");
         } finally {
             InvalidateSimpleOutstanding();tasks.SimpleImageClicked=clicked;rendering=true;
             SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);simpleDetailsActive=false;

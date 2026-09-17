@@ -159,12 +159,14 @@ internal sealed partial class FloatingWindow : Form {
         };
         tasks.BeforeExpand += async delegate(object sender, TreeViewCancelEventArgs e) {
             var branch = e.Node.Tag as OutstandingBranch;
-            if(branch == null || branch.Loaded || rendering) return;
+            if(branch == null) return;
+            if(simpleMode) { e.Cancel = true; return; }
+            if(branch.Loaded || rendering) return;
             e.Cancel = true;
             try {
                 long revision=AutoRefreshRevision;
                 var shared = ReadShared(await ReadHistory(branch.TaskId));
-                if(e.Node.TreeView != tasks) return;
+                if(simpleMode || e.Node.TreeView != tasks) return;
                 e.Node.Nodes.Clear();
                 for(int index=0; index<shared.Items.Count; index++) { var item=shared.Items[index]; e.Node.Nodes.Add(new TreeNode((index+1)+". "+OutstandingText(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } }); }
                 if(shared.Items.Count == 0) e.Node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加") { Tag = new OutstandingBranch { TaskId = branch.TaskId, Loaded = true } });
@@ -788,6 +790,7 @@ internal sealed partial class FloatingWindow : Form {
             await TestPriorityFilter();
             TestPriorityLinks();
             await TestSimpleOutstandingDetails();
+            TestSimpleOutstandingActions();
             await TestUndo();
             await TestProgressReferences();
             await TestAutoRefresh();

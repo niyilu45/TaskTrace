@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -36,7 +37,10 @@ internal sealed partial class FloatingWindow {
     long preferredProjectId;
     readonly Label simpleEmpty = new Label {BorderStyle=BorderStyle.FixedSingle, Padding=new Padding(8), TextAlign=ContentAlignment.MiddleCenter, BackColor=Color.White, ForeColor=Color.FromArgb(90,100,115), Visible=false};
     readonly FlowLayoutPanel simpleActions = new FlowLayoutPanel {WrapContents=true, FlowDirection=FlowDirection.LeftToRight, Visible=false, Margin=Padding.Empty, Padding=Padding.Empty};
-    readonly Button simpleToggleTask = new Button {Text="展开/收起", AccessibleName="展开或收起选中任务"};
+    readonly Button simpleToggleTask = new Button {Text="展开/收起", AccessibleName="展开或收起选中任务", Visible=false};
+    readonly Button simpleAddOutstanding = new Button {Text="添加遗留事项", AccessibleName="为选中任务添加遗留事项"};
+    Action<long> simpleAddOutstandingRequested;
+    bool simpleTaskCanExpand;
     readonly Button simplePriorityButton = new Button {Text="按优先级", AccessibleName="按优先级筛选"};
     ToolStripMenuItem trayRestoreFull, treeRestoreFull, simpleExpandTaskMenu, simpleCollapseTaskMenu;
     bool simpleLayout, simpleActionsShown, simpleWindowWasMinimized, simpleRestoreLayoutQueued;
@@ -47,9 +51,11 @@ internal sealed partial class FloatingWindow {
         restoreSimple.AutoSize=false;restoreSimple.AccessibleName="回到完整悬浮窗";
         restoreSimple.Click+=delegate {RestoreFullFloatingWindow();};
         simpleToggleTask.Click+=delegate {SetSelectedSimpleTaskExpanded(null);};
+        simpleAddOutstandingRequested=delegate(long id){ShowOutstanding(id);};
+        simpleAddOutstanding.Click+=delegate {AddSelectedSimpleOutstanding();};
         var priorityMenu=CreatePriorityFilterDropDown();
         simplePriorityButton.Click+=delegate {if(!closing && !IsDisposed)priorityMenu.Show(simplePriorityButton,new Point(0,simplePriorityButton.Height));};
-        foreach(var button in new[]{simpleToggleTask,simplePriorityButton,restoreSimple}) {
+        foreach(var button in new[]{simpleToggleTask,simpleAddOutstanding,simplePriorityButton,restoreSimple}) {
             button.AutoSize=false;button.Margin=new Padding(0,0,6,4);simpleActions.Controls.Add(button);
         }
         Controls.Add(simpleActions);Controls.Add(simpleEmpty);
@@ -88,11 +94,23 @@ internal sealed partial class FloatingWindow {
         if(shouldExpand)node.Expand();else node.Collapse();
         UpdateSimpleActionState();
     }
+    void AddSelectedSimpleOutstanding() {
+        if(!simpleMode || busy || closing)return;
+        var node=SelectedSimpleTaskNode();if(node==null)return;
+        hoverTimer.Stop();progressTip.Hide(tasks);
+        if(simpleAddOutstandingRequested!=null)simpleAddOutstandingRequested((long)node.Tag);
+    }
     void UpdateSimpleActionState() {
-        var node=SelectedSimpleTaskNode();bool available=!busy && node!=null && node.Nodes.Count>0;
+        var node=SelectedSimpleTaskNode();
+        bool canExpand=node!=null && node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long || child.Tag is OutstandingLeaf);
+        bool layoutChanged=simpleTaskCanExpand!=canExpand;
+        simpleTaskCanExpand=canExpand;simpleToggleTask.Visible=canExpand;
+        bool available=!busy && canExpand;
         simpleToggleTask.Enabled=available;simplePriorityButton.Enabled=!busy;
-        if(simpleExpandTaskMenu!=null)simpleExpandTaskMenu.Enabled=available && !node.IsExpanded;
-        if(simpleCollapseTaskMenu!=null)simpleCollapseTaskMenu.Enabled=available && node.IsExpanded;
+        simpleAddOutstanding.Enabled=!busy && node!=null;
+        if(simpleExpandTaskMenu!=null){simpleExpandTaskMenu.Visible=canExpand;simpleExpandTaskMenu.Enabled=available && !node.IsExpanded;}
+        if(simpleCollapseTaskMenu!=null){simpleCollapseTaskMenu.Visible=canExpand;simpleCollapseTaskMenu.Enabled=available && node.IsExpanded;}
+        if(layoutChanged && simpleMode && !simpleLayout)PositionSimpleModeControls();
     }
     bool IsSimpleSurfaceDragSpace(Control surface,Point point) {
         if(surface==null || !surface.ClientRectangle.Contains(point))return false;
@@ -121,7 +139,8 @@ internal sealed partial class FloatingWindow {
     }
     int MeasureSimpleActions(int width) {
         int available=Math.Max(60,width),x=0,y=0,rowHeight=0;
-        foreach(var button in new[]{simpleToggleTask,simplePriorityButton,restoreSimple}) {
+        foreach(var button in new[]{simpleToggleTask,simpleAddOutstanding,simplePriorityButton,restoreSimple}) {
+            if(button==simpleToggleTask && !simpleTaskCanExpand)continue;
             int preferred=TextRenderer.MeasureText(button.Text,Font).Width+18;
             int buttonWidth=Math.Min(Math.Max(68,preferred),Math.Max(50,available-6));
             var text=TextRenderer.MeasureText(button.Text,Font,new Size(Math.Max(30,buttonWidth-12),0),TextFormatFlags.WordBreak);
@@ -208,6 +227,7 @@ internal sealed partial class FloatingWindow {
         try {
             if(enabled) {
                 if(collapsed)ToggleFold();fullBounds=Bounds;simpleMode=true;
+                PrepareSimpleOutstandingTree();UpdateSimpleActionState();
                 content.Controls.Remove(tasks);content.Visible=false;toolbar.Visible=false;
                 FormBorderStyle=FormBorderStyle.None;Padding=Padding.Empty;
                 Controls.Add(tasks);tasks.Dock=DockStyle.None;tasks.Visible=true;tasks.BringToFront();
@@ -278,4 +298,51 @@ internal sealed partial class FloatingWindow {
         SetSimpleMode(false);
         File.WriteAllText(Path.Combine(data,"floating-simple-recovery-test.txt"),"PASS: inactive mode has no reserved footer; focus/mousedown preserve viewport and persisted size; compact actions wrap; selected task and outstanding owner expand/collapse; empty explanations; Escape/context/tray recovery; selected project persists.");
     }
+    void TestSimpleOutstandingActions() {
+        var originalNodes=tasks.Nodes.Cast<TreeNode>().ToArray();var originalSelection=tasks.SelectedNode;
+        bool originalMode=simpleMode,originalBusy=busy,originalTesting=simpleDetailsTesting,originalRendering=rendering;
+        var originalBounds=Bounds;var originalSize=simpleSize;var callback=simpleAddOutstandingRequested;
+        simpleDetailsTesting=true;InvalidateSimpleOutstanding();rendering=true;
+        try {
+            SetSimpleMode(false);tasks.Nodes.Clear();
+            var owner=new TreeNode("1. [P9] 待办任务"){Name="910001",Tag=910001L};
+            var child=new TreeNode("1.1. [P9] 子任务"){Name="910002",Tag=910002L};
+            tasks.Nodes.Add(owner);SetSimpleMode(true);SetBusy(false);ShowSimpleModeRestore();Size=new Size(230,300);
+            tasks.SelectedNode=owner;UpdateSimpleActionState();
+            if(simpleToggleTask.Visible || simpleTaskCanExpand || owner.Nodes.Count!=0 || !simpleAddOutstanding.Enabled)throw new Exception("Empty task must offer add without an expansion control or placeholder");
+            long requested=0;int clicks=0;simpleAddOutstandingRequested=delegate(long id){requested=id;clicks++;};
+            simpleAddOutstanding.PerformClick();
+            if(clicks!=1 || requested!=910001L)throw new Exception("Add outstanding button targeted the wrong task");
+            var shared=new SharedList();shared.Items.Add(new PendingItem{Id="action-test",Html="核对遗留事项"});
+            ApplyBackgroundOutstanding(new Dictionary<long,SharedList>{{910001L,shared}});UpdateSimpleActionState();
+            if(!simpleToggleTask.Visible || !simpleToggleTask.Enabled || owner.Nodes.Count!=1 || !(owner.Nodes[0].Tag is OutstandingLeaf))throw new Exception("First outstanding item must create a direct leaf and expansion control");
+            var leaf=owner.Nodes[0];tasks.SelectedNode=leaf;simpleAddOutstanding.PerformClick();
+            if(clicks!=2 || requested!=910001L)throw new Exception("Selected outstanding leaf must add to its owning task");
+            tasks.SelectedNode=owner;simpleToggleTask.PerformClick();
+            if(owner.IsExpanded)throw new Exception("Expansion button failed to collapse its selected task");
+            simpleToggleTask.PerformClick();if(!owner.IsExpanded)throw new Exception("Expansion button failed to open its selected task");
+            ApplyBackgroundOutstanding(new Dictionary<long,SharedList>{{910001L,new SharedList()}});UpdateSimpleActionState();
+            if(owner.Nodes.Count!=0 || simpleToggleTask.Visible || simpleTaskCanExpand)throw new Exception("Removing the last outstanding item must remove its arrow and expansion control");
+            owner.Nodes.Add(child);owner.Expand();tasks.SelectedNode=owner;UpdateSimpleActionState();
+            if(!simpleToggleTask.Visible || !simpleToggleTask.Enabled)throw new Exception("Actual subtasks must remain expandable without outstanding items");
+            tasks.SelectedNode=child;UpdateSimpleActionState();
+            if(simpleToggleTask.Visible || !simpleAddOutstanding.Enabled)throw new Exception("Empty child must support add without expansion");
+            simpleAddOutstanding.PerformClick();if(clicks!=3 || requested!=910002L)throw new Exception("Add outstanding button did not target the selected child");
+            var viewport=tasks.Bounds;var savedSize=simpleSize;
+            HideSimpleModeActions();ShowSimpleModeRestore();
+            if(tasks.Bounds!=viewport || simpleSize!=savedSize)throw new Exception("Conditional actions moved the viewport across focus changes");
+            foreach(Control control in simpleActions.Controls)if(control.Visible && (control.Left<0 || control.Right>simpleActions.ClientSize.Width || control.Bottom>simpleActions.ClientSize.Height))throw new Exception("Compact outstanding action is clipped");
+            using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-simple-outstanding-actions-test.png"));}
+            SetBusy(true);simpleAddOutstanding.PerformClick();if(clicks!=3)throw new Exception("Busy state accepted an add action");
+            SetBusy(false);tasks.SelectedNode=null;UpdateSimpleActionState();simpleAddOutstanding.PerformClick();
+            if(simpleAddOutstanding.Enabled || simpleToggleTask.Visible || clicks!=3)throw new Exception("No selection exposed an expansion or accepted an add action");
+            File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: add button targets selected task/child or outstanding owner; no placeholder or expansion control for empty tasks; actual child/outstanding remains expandable; deleting last item removes expansion; busy/no selection disabled; narrow actions fit; focus preserves viewport.");
+        } finally {
+            simpleAddOutstandingRequested=callback;rendering=true;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
+            if(originalSelection!=null && originalSelection.TreeView==tasks)tasks.SelectedNode=originalSelection;
+            simpleSize=originalSize;if(originalMode)SetSimpleMode(true);Bounds=originalBounds;
+            simpleDetailsTesting=originalTesting;rendering=originalRendering;SetBusy(originalBusy);UpdateSimpleModeState();
+        }
+    }
+
 }
