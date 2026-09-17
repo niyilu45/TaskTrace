@@ -61,7 +61,7 @@ internal sealed partial class FloatingWindow {
             tasks.SelectedNode=node;hoverTimer.Stop();progressTip.Hide(tasks);
             await ShowPriority();
         };
-        tasks.SetSimpleImageLinks(false);
+        tasks.SetSimpleImageLinks(true);
         pictures.Click += async delegate {await ShowSelectedImages();};
         toolbar.Controls.AddRange(new Control[]{pictures,priorityFilterButton});
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
@@ -103,7 +103,7 @@ internal sealed partial class FloatingWindow {
     }
     void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked}));}catch{}}
     void ClearDropMark(){tasks.Dropping=false;tasks.DropNode=null;dropHover=null;tasks.Invalidate();progressTip.Hide(tasks);}
-    long SelectedTaskId(){var node=tasks.SelectedNode;if(node==null)return 0;if(node.Tag is long)return (long)node.Tag;var leaf=node.Tag as OutstandingLeaf;if(leaf!=null)return leaf.TaskId;var branch=node.Tag as OutstandingBranch;return branch==null?0:branch.TaskId;}
+    long SelectedTaskId(){var node=tasks.SelectedNode;if(node==null)return 0;if(node.Tag is long)return (long)node.Tag;var leaf=node.Tag as OutstandingLeaf;return leaf==null?0:leaf.TaskId;}
     static int DropZone(TreeNode source,TreeNode target,int y){
         if(target==null)return 0;
         if(source!=null && source.Tag is OutstandingLeaf)return target.Tag is OutstandingLeaf?(y<target.Bounds.Top+target.Bounds.Height/2?-1:1):0;
@@ -124,8 +124,8 @@ internal sealed partial class FloatingWindow {
             return new DropPlan{TaskId=id,ParentId=parent,BeforeId=before,Message=(zone==0?(parent==0?"移为顶层任务，放到末尾":"归入“"+TaskTitle(parent)+"”，放到末尾"):(zone<0?"插入任务之前":"插入任务之后"))+(prioritySort.Checked?" · 保存后按手动顺序显示":"")};
         }
         var item=source.Tag as OutstandingLeaf;if(item==null || target==null)return null;
-        long destination=0;string beforeItem="";var targetItem=target.Tag as OutstandingLeaf;var targetBranch=target.Tag as OutstandingBranch;
-        if(target.Tag is long)destination=(long)target.Tag;else if(targetBranch!=null)destination=targetBranch.TaskId;else if(targetItem!=null){destination=targetItem.TaskId;if(zone<0)beforeItem=targetItem.Id;else{var leaves=target.Parent.Nodes.Cast<TreeNode>().Select(node=>node.Tag as OutstandingLeaf).Where(leaf=>leaf!=null && !(leaf.TaskId==item.TaskId && leaf.Id==item.Id)).ToList();int index=leaves.FindIndex(leaf=>leaf.Id==targetItem.Id);if(index>=0 && index+1<leaves.Count)beforeItem=leaves[index+1].Id;}}
+        long destination=0;string beforeItem="";var targetItem=target.Tag as OutstandingLeaf;
+        if(target.Tag is long)destination=(long)target.Tag;else if(targetItem!=null){destination=targetItem.TaskId;if(zone<0)beforeItem=targetItem.Id;else{var leaves=target.Parent.Nodes.Cast<TreeNode>().Select(node=>node.Tag as OutstandingLeaf).Where(leaf=>leaf!=null && !(leaf.TaskId==item.TaskId && leaf.Id==item.Id)).ToList();int index=leaves.FindIndex(leaf=>leaf.Id==targetItem.Id);if(index>=0 && index+1<leaves.Count)beforeItem=leaves[index+1].Id;}}
         if(destination==0 || (destination==item.TaskId && beforeItem==item.Id))return null;
         return new DropPlan{TaskId=item.TaskId,TargetId=destination,ItemId=item.Id,BeforeItemId=beforeItem,Message="遗留事项移至“"+TaskTitle(destination)+"”"+(targetItem==null?"末尾":zone<0?"所选项之前":"所选项之后")};
     }
@@ -137,7 +137,7 @@ internal sealed partial class FloatingWindow {
             else {await Api("POST","/tasks/"+plan.TaskId+"/move",new{parent_id=plan.ParentId,before_task_id=plan.BeforeId,project_view_id=taskViewId});rendering=true;try{prioritySort.Checked=false;SaveSortPreference();}finally{rendering=false;}}
             if(plan.ParentId>0)collapsedTasks.Remove(plan.ParentId);
             await LoadTasks();
-            long selected=plan.ItemId==null?plan.TaskId:plan.TargetId;var matches=tasks.Nodes.Find(selected.ToString(),true);if(matches.Length>0){tasks.SelectedNode=matches[0];matches[0].EnsureVisible();if(plan.ItemId!=null){if(simpleMode)matches[0].Expand();else{var branch=matches[0].Nodes.Cast<TreeNode>().FirstOrDefault(node=>node.Tag is OutstandingBranch);if(branch!=null)branch.Expand();}}}
+            long selected=plan.ItemId==null?plan.TaskId:plan.TargetId;var matches=tasks.Nodes.Find(selected.ToString(),true);if(matches.Length>0){tasks.SelectedNode=matches[0];matches[0].EnsureVisible();if(plan.ItemId!=null)matches[0].Expand();}
             status.Text="归属和顺序已保存。";
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
@@ -426,23 +426,51 @@ internal sealed partial class FloatingWindow {
             var preference=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));if(!Convert.ToBoolean(preference["priority"]))throw new Exception("Sort preference not persisted");
             await TestInlinePriorityEdit(child,b,3,false);await TestInlinePriorityEdit(child,b,9,true);
             await ExecuteDrop(MakeDropPlan(node(c),node(a),-1));if(prioritySort.Checked)throw new Exception("Manual drag did not restore manual ordering");
+            SetSimpleMode(true);await LoadTasks();
+            var compactMove=MakeDropPlan(node(child),node(a),0);if(compactMove==null || compactMove.ParentId!=a)throw new Exception("Compact task drop target was not resolved");await ExecuteDrop(compactMove);
+            if(node(child).Parent!=node(a) || MakeDropPlan(node(a),node(child),0)!=null)throw new Exception("Compact task reparent or cycle protection failed");
+            compactMove=MakeDropPlan(node(child),node(sibling),-1);if(compactMove==null || compactMove.ParentId!=b || compactMove.BeforeId!=sibling)throw new Exception("Compact sibling drop target was not resolved");await ExecuteDrop(compactMove);
+            if(node(child).Parent!=node(b) || node(b).Nodes[0]!=node(child))throw new Exception("Compact child ordering did not survive reload");
+            SetSimpleMode(false);
             var pictures=new List<PastedImage>();using(var bitmap=new Bitmap(80,50)){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.SteelBlue);using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}
-            string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});await WriteShared(a,source);
-            var target=new SharedList();target.Items.Add(new PendingItem{Id="existing",Html="已存在的遗留事项"});await WriteShared(b,target);
-            await ExecuteDrop(new DropPlan{TaskId=a,TargetId=b,ItemId="drag-image",BeforeItemId="existing"});
-            var moved=ReadShared(await ReadHistory(b));var remaining=ReadShared(await ReadHistory(a));
-            if(moved.Items.Count!=2 || moved.Items[0].Id!="drag-image" || remaining.Items.Count!=1 || remaining.Items[0].Id!="drag-text")throw new Exception("Outstanding move lost contents or order");
-            if(moved.Items[0].Html.Contains("/tasks/"+a+"/attachments/"))throw new Exception("Moved image still depends on source task");
-            await ExecuteDrop(new DropPlan{TaskId=b,TargetId=b,ItemId="existing",BeforeItemId="drag-image"});moved=ReadShared(await ReadHistory(b));if(moved.Items[0].Id!="existing")throw new Exception("Outstanding reorder not saved");
+            string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});
+            var target=new SharedList();target.Items.Add(new PendingItem{Id="existing",Html="已存在的遗留事项"});
+            Func<long,string,TreeNode> leaf=delegate(long id,string itemId){return node(id).Nodes.Cast<TreeNode>().Single(item=>item.Tag is OutstandingLeaf && ((OutstandingLeaf)item.Tag).Id==itemId);};
+            SharedList moved=null;
+            foreach(bool compact in new[]{false,true}) {
+                SetSimpleMode(compact);await WriteShared(a,source);await WriteShared(b,target);await LoadTasks();
+                var sourceLeaf=leaf(a,"drag-image");tasks.SelectedNode=sourceLeaf;
+                if(SelectedTaskId()!=a || MakeDropPlan(node(a),leaf(b,"existing"),0)!=null || MakeDropPlan(sourceLeaf,sourceLeaf,0)!=null)throw new Exception("Direct outstanding owner or invalid drop protection failed");
+                var append=MakeDropPlan(sourceLeaf,node(b),0);
+                if(append==null || append.TaskId!=a || append.TargetId!=b || append.ItemId!="drag-image" || append.BeforeItemId!="")throw new Exception("Direct outstanding task append target was not resolved");
+                await ExecuteDrop(append);
+                moved=ReadShared(await ReadHistory(b));var remaining=ReadShared(await ReadHistory(a));
+                if(moved.Items.Count!=2 || moved.Items[0].Id!="existing" || moved.Items[1].Id!="drag-image" || remaining.Items.Count!=1 || remaining.Items[0].Id!="drag-text")throw new Exception("Outstanding move lost contents or append order");
+                if(moved.Items[1].Html.Contains("/tasks/"+a+"/attachments/"))throw new Exception("Moved image still depends on source task");
+                if(leaf(b,"drag-image").Parent!=node(b) || !node(b).IsExpanded)throw new Exception("Moved outstanding item was not directly visible under its task");
+                var before=MakeDropPlan(leaf(b,"drag-image"),leaf(b,"existing"),-1);
+                if(before==null || before.TargetId!=b || before.BeforeItemId!="existing")throw new Exception("Direct outstanding before target was not resolved");
+                await ExecuteDrop(before);moved=ReadShared(await ReadHistory(b));if(moved.Items[0].Id!="drag-image")throw new Exception("Outstanding before reorder not saved");
+                var after=MakeDropPlan(leaf(b,"drag-image"),leaf(b,"existing"),1);
+                if(after==null || after.TargetId!=b || after.BeforeItemId!="")throw new Exception("Direct outstanding after target was not resolved");
+                await ExecuteDrop(after);moved=ReadShared(await ReadHistory(b));if(moved.Items[0].Id!="existing" || moved.Items[1].Id!="drag-image")throw new Exception("Outstanding after reorder not saved");
+            }
+            SetSimpleMode(false);
             await Api("DELETE","/tasks/"+a,null);created.Remove(a);await LoadTasks();
             var images=new List<GalleryImage>();CollectImages(images,moved.Items[1].Html,"test");if(images.Count!=1)throw new Exception("Gallery did not discover moved image");
             byte[] bytes=await DownloadImage(images[0].Source);using(var stream=new MemoryStream(bytes))using(var bitmap=Image.FromStream(stream))if(bitmap.Width!=80)throw new Exception("Image copy was corrupted after source deletion");
             if(AttachmentPath("https://example.com/api/v1/tasks/1/attachments/1")!=null || AttachmentPath("//example.com/api/v1/tasks/1/attachments/1")!=null)throw new Exception("External gallery URL was accepted");
-            await ShowImageGallery(b,null,this);
-            await EditOutstanding(b,false,true);if(editingOutstanding)throw new Exception("Outstanding editor did not resume auto-save");
+            foreach(bool compact in new[]{false,true}) {
+                SetSimpleMode(compact);await LoadTasks();
+                var pictureLeaf=leaf(b,"drag-image");node(b).Expand();pictureLeaf.EnsureVisible();tasks.SelectedNode=pictureLeaf;
+                if(SelectedTaskId()!=b || tasks.SimpleImageBounds(pictureLeaf).IsEmpty)throw new Exception("Direct outstanding image link or owner is unavailable in this layout");
+                await ShowSelectedImages();await ShowImageGallery(b,null,this);
+                await EditOutstanding(b,false,true);if(editingOutstanding)throw new Exception("Outstanding editor did not resume auto-save");
+            }
+            SetSimpleMode(false);
             foreach(var item in moved.Items)if(String.IsNullOrEmpty(OutstandingText(item.Html)))throw new Exception("Image-only outstanding title missing");
             tasks.Nodes[0].Expand();using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-interactions-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, priorities 0-9 + default 9, persisted sort setting, inline priority click saves clicked task in full/simple mode, manual drag restores manual order, outstanding reorder + cross-task transfer, copied image survives deleting source, gallery downloads, external URLs rejected.");
+            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, priorities 0-9 + default 9, persisted sort setting, inline priority click saves clicked task in full/simple mode, manual drag restores manual order, shared full/simple task and direct outstanding drop targets, before/after reorder + cross-task append, copied image survives deleting source, image links + scoped/task galleries + image editor in both layouts, external URLs rejected.");
         }
         {
             foreach(long id in created.AsEnumerable().Reverse())try{await Api("DELETE","/tasks/"+id,null);}catch{}

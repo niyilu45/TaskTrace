@@ -14,7 +14,7 @@ internal sealed partial class FloatingWindow {
     string TaskViewContext() {
         var selected=projects.SelectedItem as Project;
         return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,
-            prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),simpleMode});
+            prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray()});
     }
     bool TaskLoadCurrent(int version,string context,bool background) {
         return version==taskLoadVersion && !closing && !IsDisposed && context==TaskViewContext() &&
@@ -36,8 +36,7 @@ internal sealed partial class FloatingWindow {
         if(node.Tag is long)return "task:"+node.Tag;
         var leaf=node.Tag as OutstandingLeaf;
         if(leaf!=null)return "leaf:"+leaf.TaskId+":"+leaf.Id;
-        var branch=node.Tag as OutstandingBranch;
-        return branch==null?"":(node.Parent!=null && node.Parent.Tag is OutstandingBranch?"placeholder:":"branch:")+branch.TaskId;
+        return "";
     }
     TreeNode FindRefreshNode(string key) {
         if(key=="")return null;
@@ -115,29 +114,20 @@ internal sealed partial class FloatingWindow {
         int nextPage=Math.Max(1,Math.Min(page,Math.Max(1,(roots.Count+49)/50)));
         var visibleRoots=roots.Skip((nextPage-1)*50).Take(50).ToArray();
         var sharedLists=new Dictionary<long,SharedList>();
-        if(background) {
-            var needed=new HashSet<long>();
-            if(simpleMode)foreach(var node in nodes.Values) {
-                var ancestor=node;while(ancestor.Parent!=null)ancestor=ancestor.Parent;
-                if(visibleRoots.Contains(ancestor))needed.Add((long)node.Tag);
-            }
-            else foreach(var node in SimpleTaskNodes(tasks.Nodes))
-                if(all.ContainsKey((long)node.Tag) && node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is OutstandingBranch && ((OutstandingBranch)child.Tag).Loaded))needed.Add((long)node.Tag);
-            using(var gate=new SemaphoreSlim(4,4)) {
-                await Task.WhenAll(needed.Select(async delegate(long id){
-                    await gate.WaitAsync();try{sharedLists[id]=ReadShared(await ReadHistory(id));}finally{gate.Release();}
-                }));
-            }
-            if(!TaskLoadCurrent(version,context,true))return false;
+        var needed=new HashSet<long>();
+        foreach(var node in nodes.Values) {
+            var ancestor=node;while(ancestor.Parent!=null)ancestor=ancestor.Parent;
+            if(visibleRoots.Contains(ancestor))needed.Add((long)node.Tag);
         }
+        using(var gate=new SemaphoreSlim(4,4)) {
+            await Task.WhenAll(needed.Select(async delegate(long id){
+                await gate.WaitAsync();try{sharedLists[id]=ReadShared(await ReadHistory(id));}finally{gate.Release();}
+            }));
+        }
+        if(!TaskLoadCurrent(version,context,background))return false;
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
             (oldProject==null?0:oldProject.Id)!=(project==null?0:project.Id);
         bool treeChanged=!background || json.Serialize(TaskTreeShape(tasks.Nodes.Cast<TreeNode>()))!=json.Serialize(TaskTreeShape(visibleRoots));
-        var normalBranches=new Dictionary<long,TreeNode>();var expandedBranches=new HashSet<long>();
-        if(background && treeChanged && !simpleMode)foreach(var node in SimpleTaskNodes(tasks.Nodes))foreach(TreeNode child in node.Nodes) {
-            var branch=child.Tag as OutstandingBranch;if(branch==null)continue;
-            normalBranches[branch.TaskId]=child;if(child.IsExpanded)expandedBranches.Add(branch.TaskId);
-        }
         var expansion=SimpleTaskNodes(tasks.Nodes).ToDictionary(node=>(long)node.Tag,node=>node.IsExpanded);
         string selectedKey=RefreshNodeKey(tasks.SelectedNode),topKey=RefreshNodeKey(tasks.TopNode);
         long selectedId=SelectedTaskId();
@@ -160,14 +150,6 @@ internal sealed partial class FloatingWindow {
                     if(background && expansion.TryGetValue(pair.Key,out expanded)) {if(!expanded)pair.Value.Collapse();}
                     else if(query.Length==0 && collapsedTasks.Contains(pair.Key))pair.Value.Collapse();
                 }
-                if(!selfTest && !simpleMode)foreach(var pair in nodes) {
-                    TreeNode branch;
-                    if(!normalBranches.TryGetValue(pair.Key,out branch)) {
-                        branch=new TreeNode("遗留事项（展开查看，双击管理）"){Tag=new OutstandingBranch{TaskId=pair.Key}};
-                        branch.Nodes.Add(new TreeNode("读取中…"));
-                    }else branch.Remove();
-                    pair.Value.Nodes.Add(branch);if(expandedBranches.Contains(pair.Key))branch.Expand();
-                }
                 if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView==tasks)tasks.SelectedNode=nodes[selectedId];
                 var selected=FindRefreshNode(selectedKey);if(selected!=null)tasks.SelectedNode=selected;
             }finally{tasks.EndUpdate();rendering=false;}
@@ -181,9 +163,9 @@ internal sealed partial class FloatingWindow {
             if(status.Text!=nextStatus)status.Text=nextStatus;
             if(!background || treeChanged || projectChanged)UpdateSimpleModeState();
         }
+        InvalidateSimpleOutstanding();
+        ApplyBackgroundOutstanding(sharedLists);
         if(background) {
-            InvalidateSimpleOutstanding();
-            ApplyBackgroundOutstanding(sharedLists);
             rendering=true;
             try {foreach(var node in SimpleTaskNodes(tasks.Nodes)) {
                 bool expanded;
@@ -191,9 +173,9 @@ internal sealed partial class FloatingWindow {
                     if(expanded)node.Expand();else node.Collapse();
                 }
             }}finally{rendering=false;}
-            var selected=FindRefreshNode(selectedKey);if(selected!=null && tasks.SelectedNode!=selected)tasks.SelectedNode=selected;
-            var top=FindRefreshNode(topKey);if(top!=null && tasks.TopNode!=top)tasks.TopNode=top;
-        }else if(simpleMode)await RefreshSimpleOutstanding();
+        }
+        var restoredSelection=FindRefreshNode(selectedKey);if(restoredSelection!=null && tasks.SelectedNode!=restoredSelection)tasks.SelectedNode=restoredSelection;
+        var restoredTop=FindRefreshNode(topKey);if(restoredTop!=null && tasks.TopNode!=restoredTop)tasks.TopNode=restoredTop;
         return version==taskLoadVersion;
     }
 }

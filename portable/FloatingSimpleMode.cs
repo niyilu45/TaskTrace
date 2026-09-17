@@ -114,9 +114,8 @@ internal sealed partial class FloatingWindow {
         simpleToggleTask.Enabled=available;simplePriorityButton.Enabled=!busy;
         simpleAddOutstanding.Enabled=!busy && node!=null;
         fullAddOutstanding.Enabled=simpleAddOutstanding.Enabled;
-        bool fullCanExpand=node!=null && node.Nodes.Count>0;
-        fullToggleTask.Visible=fullCanExpand;fullToggleTask.Enabled=!busy && fullCanExpand;
-        bool menuCanExpand=simpleMode?canExpand:fullCanExpand;
+        fullToggleTask.Visible=canExpand;fullToggleTask.Enabled=available;
+        bool menuCanExpand=canExpand;
         if(simpleExpandTaskMenu!=null){simpleExpandTaskMenu.Visible=menuCanExpand;simpleExpandTaskMenu.Enabled=!busy && menuCanExpand && !node.IsExpanded;}
         if(simpleCollapseTaskMenu!=null){simpleCollapseTaskMenu.Visible=menuCanExpand;simpleCollapseTaskMenu.Enabled=!busy && menuCanExpand && node.IsExpanded;}
         if(layoutChanged && simpleMode && !simpleLayout)PositionSimpleModeControls();
@@ -232,11 +231,12 @@ internal sealed partial class FloatingWindow {
     }
     void SetSimpleMode(bool enabled) {
         if(enabled==simpleMode){UpdateSimpleModeState();return;}
+        var selected=tasks.SelectedNode;var top=tasks.TopNode;
         SuspendLayout();content.SuspendLayout();simpleLayout=true;
         try {
             if(enabled) {
                 if(collapsed)ToggleFold();fullBounds=Bounds;simpleMode=true;
-                PrepareSimpleOutstandingTree();UpdateSimpleActionState();
+                UpdateSimpleActionState();
                 content.Controls.Remove(tasks);content.Visible=false;toolbar.Visible=false;
                 FormBorderStyle=FormBorderStyle.None;Padding=Padding.Empty;
                 Controls.Add(tasks);tasks.Dock=DockStyle.None;tasks.Visible=true;tasks.BringToFront();
@@ -251,7 +251,10 @@ internal sealed partial class FloatingWindow {
                 content.Controls.Add(tasks,0,3);tasks.Dock=DockStyle.Fill;tasks.Visible=true;content.Visible=true;toolbar.Visible=true;Bounds=fullBounds;
             }
         } finally {simpleLayout=false;content.ResumeLayout(true);ResumeLayout(true);}
-        PerformLayout();tasks.Invalidate();PositionSimpleModeControls();UpdateSimpleModeState();RefreshSimpleOutstandingInBackground();SaveSimpleMode();
+        PerformLayout();PositionSimpleModeControls();UpdateSimpleModeState();
+        if(selected!=null && selected.TreeView==tasks)tasks.SelectedNode=selected;
+        if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
+        tasks.Invalidate();SaveSimpleMode();
     }
     void SaveSimpleMode() {
         try {File.WriteAllText(Path.Combine(data,"simple-window.json"),json.Serialize(new {enabled=simpleMode,width=simpleSize.Width,height=simpleSize.Height}));}catch{}
@@ -348,12 +351,11 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);tasks.SelectedNode=child;UpdateSimpleActionState();
             if(!fullAddOutstanding.Visible || !fullAddOutstanding.Enabled || fullAddOutstanding.Parent!=toolbar || !priorityFilterButton.Visible || fullToggleTask.Visible)throw new Exception("Full mode is missing shared actions or exposes expansion for an empty task");
             fullAddOutstanding.PerformClick();if(clicks!=4 || requested!=910002L)throw new Exception("Full add action did not target the selected task");
-            var branch=new TreeNode("遗留事项"){Tag=new OutstandingBranch{TaskId=910002L,Loaded=true}};
             var normalLeaf=new TreeNode("1. 待核对"){Tag=new OutstandingLeaf{TaskId=910002L,Id="full-action",Html="待核对"}};
-            branch.Nodes.Add(normalLeaf);child.Nodes.Add(branch);owner.Expand();child.Expand();branch.Expand();
+            child.Nodes.Add(normalLeaf);owner.Expand();child.Expand();
             tasks.SelectedNode=normalLeaf;UpdateSimpleActionState();fullAddOutstanding.PerformClick();
-            if(clicks!=5 || requested!=910002L || !fullToggleTask.Visible || !fullToggleTask.Enabled)throw new Exception("Full actions do not support a task with only grouped outstanding items");
-            tasks.SelectedNode=branch;fullAddOutstanding.PerformClick();if(clicks!=6 || requested!=910002L)throw new Exception("Full add action did not resolve the outstanding branch owner");
+            if(clicks!=5 || requested!=910002L || !fullToggleTask.Visible || !fullToggleTask.Enabled)throw new Exception("Full actions do not support a task with only direct outstanding items");
+            tasks.SelectedNode=child;fullAddOutstanding.PerformClick();if(clicks!=6 || requested!=910002L)throw new Exception("Full add action did not resolve the selected child");
             fullToggleTask.PerformClick();if(child.IsExpanded)throw new Exception("Full collapse action did not target the selected outstanding owner");
             tasks.SelectedNode=child;fullToggleTask.PerformClick();if(!child.IsExpanded)throw new Exception("Full expansion action failed");
             SetBusy(true);fullAddOutstanding.PerformClick();if(clicks!=6 || fullAddOutstanding.Enabled || fullToggleTask.Enabled)throw new Exception("Full actions remained usable while busy");
@@ -379,9 +381,15 @@ internal sealed partial class FloatingWindow {
             Width=350;assertToolbar();if(ClientSize.Height!=toolbar.Height)throw new Exception("Narrow folded toolbar was clipped");
             Width=900;assertToolbar();if(ClientSize.Height!=toolbar.Height)throw new Exception("Wide folded toolbar retained blank rows");
             ToggleFold();if(Height!=unfoldedHeight || !content.Visible)throw new Exception("Full window lost its expanded height");
-            var fullArea=Bounds;SetSimpleMode(true);SetSimpleMode(false);assertToolbar();
+            var fullArea=Bounds;tasks.SelectedNode=normalLeaf;tasks.TopNode=owner;
+            var top=tasks.TopNode;int loads=taskLoadVersion,reads=simpleOutstandingVersion;
+            string context=TaskViewContext();
+            SetSimpleMode(true);
+            if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || child.Parent!=owner || !owner.IsExpanded || !child.IsExpanded || tasks.TopNode!=top || !simpleTaskCanExpand)throw new Exception("Simple layout switch changed shared tree state: selection="+(tasks.SelectedNode==normalLeaf)+", leaf="+(normalLeaf.Parent==child)+", parent="+(child.Parent==owner)+", expanded="+owner.IsExpanded+"/"+child.IsExpanded+", top="+(tasks.TopNode==top)+", expandable="+simpleTaskCanExpand);
+            SetSimpleMode(false);assertToolbar();
+            if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || !child.IsExpanded || tasks.TopNode!=top || taskLoadVersion!=loads || simpleOutstandingVersion!=reads || TaskViewContext()!=context)throw new Exception("Mode switching refreshed data or lost shared tree state");
             if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions");
-            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: full/simple add and selected-owner expand/collapse parity; grouped outstanding targets; busy/empty selection guards; 350/400/900 widths without clipped actions or reserved rows; priority label reflow; folded resizing fits toolbar; expanded size and mode switches retained.");
+            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: full/simple add and selected-owner expand/collapse parity; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; 350/400/900 widths without clipped actions or reserved rows; priority label reflow; folded resizing fits toolbar; expanded size and mode switches retained.");
             File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: add button targets selected task/child or outstanding owner; no placeholder or expansion control for empty tasks; actual child/outstanding remains expandable; deleting last item removes expansion; busy/no selection disabled; narrow actions fit; focus preserves viewport.");
         } finally {
             addOutstandingRequested=callback;rendering=true;if(collapsed)ToggleFold();SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);

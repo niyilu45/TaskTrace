@@ -48,7 +48,6 @@ internal sealed partial class FloatingWindow : Form {
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
-    sealed class OutstandingBranch { public long TaskId; public bool Loaded; }
     sealed class OutstandingLeaf { public long TaskId; public string Id, Html; }
     sealed class PendingItem { public string Id, Html; public int Number; public override string ToString() { return Number + ". " + OutstandingText(Html); } }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -150,28 +149,11 @@ internal sealed partial class FloatingWindow : Form {
             }
         };
         tasks.NodeMouseDoubleClick += delegate(object sender, TreeNodeMouseClickEventArgs e) {
-            if(e.Node.Tag is OutstandingBranch || e.Node.Tag is OutstandingLeaf) { var branch = e.Node.Tag as OutstandingBranch; var leaf = e.Node.Tag as OutstandingLeaf; ShowOutstanding(branch != null ? branch.TaskId : leaf.TaskId); }
+            if(e.Node.Tag is OutstandingLeaf) ShowOutstanding(((OutstandingLeaf)e.Node.Tag).TaskId);
             else if(e.Node.Tag is long) { tasks.SelectedNode = e.Node; ShowProgress(); }
         };
         tasks.AfterCollapse += delegate(object sender, TreeViewEventArgs e) {
             if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
-        };
-        tasks.BeforeExpand += async delegate(object sender, TreeViewCancelEventArgs e) {
-            var branch = e.Node.Tag as OutstandingBranch;
-            if(branch == null) return;
-            if(simpleMode) { e.Cancel = true; return; }
-            if(branch.Loaded || rendering) return;
-            e.Cancel = true;
-            try {
-                long revision=AutoRefreshRevision;
-                var shared = ReadShared(await ReadHistory(branch.TaskId));
-                if(simpleMode || e.Node.TreeView != tasks) return;
-                e.Node.Nodes.Clear();
-                for(int index=0; index<shared.Items.Count; index++) { var item=shared.Items[index]; e.Node.Nodes.Add(new TreeNode((index+1)+". "+OutstandingText(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } }); }
-                if(shared.Items.Count == 0) e.Node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加") { Tag = new OutstandingBranch { TaskId = branch.TaskId, Loaded = true } });
-                branch.Loaded = true; e.Node.Expand();
-                if(revision!=AutoRefreshRevision)SignalAutoRefreshChange();
-            } catch { if(!closing) { Error(new Exception("遗留事项读取失败，请重新展开重试。")); } }
         };
         tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
             if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
@@ -734,27 +716,28 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);if(Bounds!=beforeSimple || tasks.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
             long grandchildId = await CreateSubtask(childId, Convert.ToInt64(parentWithChild["project_id"]), "下级子任务验收");
             await LoadTasks();
-            if(tasks.Nodes.Count != 1 || tasks.Nodes[0].Nodes.Count != 1 || tasks.Nodes[0].Nodes[0].Nodes.Count != 1) throw new Exception("Task hierarchy missing");
+            if(tasks.Nodes.Count != 1 || tasks.Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1 || tasks.Nodes[0].Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1) throw new Exception("Task hierarchy missing");
             if(tasks.Nodes[0].Nodes[0].Level != 1 || tasks.Nodes[0].Nodes[0].Nodes[0].Level != 2) throw new Exception("Subtask indentation missing");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-tree-test.png")); }
-            var outstandingTest = new TreeNode("遗留事项") {Tag = new OutstandingBranch {TaskId=childId}};
-            outstandingTest.Nodes.Add(new TreeNode("读取中…")); tasks.Nodes[0].Nodes[0].Nodes.Add(outstandingTest); outstandingTest.Expand();
-            for(int attempt=0;attempt<100 && !((OutstandingBranch)outstandingTest.Tag).Loaded;attempt++) await Task.Delay(50);
-            if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="1. 跨日期待办二")throw new Exception("Outstanding dropdown failed");
-            SetSimpleMode(true);Size=new Size(330,260);await RefreshSimpleOutstanding();
+            var sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();
+            var sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
+            if(sharedLeaf.Text!="1. 跨日期待办二")throw new Exception("Full mode direct outstanding list failed");
+            tasks.SelectedNode=sharedLeaf;int beforeModeLoad=taskLoadVersion;
+            SetSimpleMode(true);Size=new Size(330,260);
+            if(tasks.Nodes.Find(childId.ToString(),true).Single()!=sharedChild || sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
             ShowSimpleModeRestore();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
             restoreSimple.PerformClick();if(simpleMode)throw new Exception("Simple mode restore button failed");
-            outstandingTest.Remove();
+            if(sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Full mode restore changed shared task data or selection");
             tasks.Nodes[0].Collapse(); collapsedTasks.Clear(); LoadTreePreferences(); await LoadTasks();
             if(tasks.Nodes[0].IsExpanded || !collapsedTasks.Contains(id)) throw new Exception("Collapsed state not retained");
             search.Text = "下级子任务验收"; await LoadTasks();
-            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].IsExpanded || tasks.Nodes[0].Nodes[0].Nodes.Count != 1) throw new Exception("Search lost hierarchy");
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].IsExpanded || tasks.Nodes[0].Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1) throw new Exception("Search lost hierarchy");
             search.Clear(); await LoadTasks(); tasks.Nodes[0].Expand();
             if(collapsedTasks.Contains(id)) throw new Exception("Expand state not retained");
             await Api("PATCH", "/tasks/" + id, new { done = true }); await LoadTasks();
-            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked || tasks.Nodes[0].Nodes.Count != 1) throw new Exception("Completed ancestor lost pending children");
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked || tasks.Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1) throw new Exception("Completed ancestor lost pending children");
             await Api("PATCH", "/tasks/" + id, new { done = false });
             long levelFour = await CreateSubtask(grandchildId, Convert.ToInt64(parentWithChild["project_id"]), "第四级验收");
             long levelFive = await CreateSubtask(levelFour, Convert.ToInt64(parentWithChild["project_id"]), "第五级验收");
@@ -829,7 +812,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

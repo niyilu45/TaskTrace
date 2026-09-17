@@ -339,6 +339,22 @@ internal sealed partial class FloatingWindow {
             if(AutoRefreshTestTask(parentId)!=parent || AutoRefreshTestTask(childId)!=child || changedLeaf==leaf || tasks.SelectedNode!=changedLeaf || tasks.TopNode!=parent || child.IsExpanded)
                 throw new Exception("Outstanding update recreated task nodes or lost item selection, scroll, or collapsed children");
 
+            int modeLoads=taskLoadVersion;long modeReads=AutoRefreshReadCount;
+            SetSimpleMode(false);
+            if(taskLoadVersion!=modeLoads || AutoRefreshReadCount!=modeReads || AutoRefreshTestTask(parentId)!=parent || changedLeaf.Parent!=parent || tasks.SelectedNode!=changedLeaf || child.IsExpanded)throw new Exception("Full layout switch reloaded data or lost shared tree state");
+            invalidations=0;enabledChanges=0;tasks.Invalidated+=invalidated;tasks.EnabledChanged+=enabledChanged;
+            try {
+                if(!await LoadTasks(true) || invalidations!=0 || enabledChanges!=0 || AutoRefreshTestTask(parentId)!=parent || changedLeaf.Parent!=parent || tasks.SelectedNode!=changedLeaf || child.IsExpanded)throw new Exception("Full mode unchanged refresh changed the shared tree");
+            }finally{tasks.Invalidated-=invalidated;tasks.EnabledChanged-=enabledChanged;}
+            var fullShared=ReadShared(await ReadHistory(childId));fullShared.Items[0].Html="完整悬浮窗更新遗留事项";
+            previousRevision=AutoRefreshRevision;
+            using(BeginUndoGroup())await WriteShared(childId,fullShared);
+            await WaitForAutoRefreshSignalTest(previousRevision);
+            await WaitForAutoRefreshTest(delegate{return child.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Html=="完整悬浮窗更新遗留事项");},"Full mode did not apply direct outstanding changes");
+            if(AutoRefreshTestTask(childId)!=child || child.IsExpanded || tasks.SelectedNode!=changedLeaf)throw new Exception("Full mode update lost shared tree state");
+            var inFlight=LoadTasks(true);SetSimpleMode(true);
+            if(!await inFlight || AutoRefreshTestTask(parentId)!=parent || tasks.SelectedNode!=changedLeaf)throw new Exception("Layout switch discarded an in-flight task refresh");
+
             long readsBefore=AutoRefreshReadCount;
             SetBusy(true);SignalAutoRefreshChange();await Task.Delay(700);await ProcessAutoRefresh();
             if(!AutoRefreshPending || AutoRefreshReadCount!=readsBefore)throw new Exception("Busy state dropped or consumed a pending change");
@@ -378,7 +394,7 @@ internal sealed partial class FloatingWindow {
             }catch { }
         }
         File.WriteAllText(Path.Combine(data,"floating-auto-refresh-test.txt"),failure==null?
-            "PASS: real isolated parent/child tasks and shared outstanding; unchanged background load retains task and leaf instances, selection, expansion, scroll, bounds, enabled state and zero invalidation; file bursts debounce to one silent read; idle polling makes no data request; committed task and outstanding edits are detected through persistent read-only SQLite data_version plus filesystem hints and apply; busy/hidden events persist until resumed; changes during reads keep a pending revision; fixtures removed.":"FAIL: "+failure);
+            "PASS: real isolated parent/child tasks and shared outstanding; both layouts share direct leaves and accept in-flight reads across switches; unchanged background load in both layouts retains task and leaf instances, selection, expansion, scroll, bounds, enabled state and zero invalidation; file bursts debounce to one silent read; idle polling makes no data request; committed task and outstanding edits are detected through persistent read-only SQLite data_version plus filesystem hints and apply; busy/hidden events persist until resumed; changes during reads keep a pending revision; fixtures removed.":"FAIL: "+failure);
         if(failure!=null)throw new Exception("Auto refresh self-test failed",failure);
     }
 }

@@ -98,7 +98,7 @@ internal sealed partial class FloatingWindow {
             tasks.PriorityClicked=delegate(TreeNode node){clicked=node;clicks++;};
             tasks.BeforeCheck+=check;tasks.ItemDrag+=drag;tasks.NodeMouseDoubleClick+=doubleClick;tasks.AfterExpand+=expand;tasks.AfterCollapse+=expand;
             foreach(bool simple in new[]{false,true}) {
-                SetSimpleMode(simple);if(simple)Size=new Size(360,570);tasks.SetSimpleImageLinks(simple);
+                SetSimpleMode(simple);if(simple)Size=new Size(360,570);tasks.SetSimpleImageLinks(true);
                 if(tasks.DrawMode!=TreeViewDrawMode.OwnerDrawText)throw new Exception("Priority links need owner drawing in both window modes");
                 foreach(var node in tasks.Nodes.Cast<TreeNode>().Where(item=>item!=unnumbered).Concat(new[]{nested})) {
                     node.EnsureVisible();tasks.Refresh();var bounds=tasks.PriorityLinkBounds(node);
@@ -143,7 +143,7 @@ internal sealed partial class FloatingWindow {
         } finally {
             tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.AfterExpand-=expand;tasks.AfterCollapse-=expand;
             InvalidateSimpleOutstanding();tasks.PriorityClicked=originalCallback;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
-            if(originalMode)SetSimpleMode(true);tasks.SetSimpleImageLinks(originalMode);Size=originalSize;
+            if(originalMode)SetSimpleMode(true);tasks.SetSimpleImageLinks(true);Size=originalSize;
             if(originalSelected!=null && originalSelected.TreeView==tasks)tasks.SelectedNode=originalSelected;
             rendering=originalRendering;simpleDetailsTesting=originalTesting;SetBusy(originalBusy);
         }
