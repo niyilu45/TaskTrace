@@ -1,0 +1,45 @@
+import {test, expect} from '@playwright/test'
+import {readFileSync} from 'node:fs'
+import path from 'node:path'
+test('current tasks are grouped by project with nested tasks and filtered ancestors', async ({page, request}) => {
+ const root=process.env.TASKTRACE_LOCAL_TEST_DIR
+ test.skip(!root,'Requires isolated portable server')
+ const session=JSON.parse(readFileSync(path.join(root!,'data/local-session.json'),'utf8').replace(/^\uFEFF/,''))
+ const base=readFileSync(path.join(root!,'data/local-config.yml'),'utf8').match(/publicurl: "(http:\/\/127\.0\.0\.1:\d+)\/"/)![1]
+ const headers={Authorization:'Bearer '+session.token}
+ async function create(url:string,data:object){const result=await request.post(base+'/api/v2'+url,{headers,data});expect(result.ok()).toBeTruthy();return result.json()}
+ const a=await create('/projects',{title:'总表甲'}), b=await create('/projects',{title:'总表乙'})
+ const parent=await create(`/projects/${a.id}/tasks`,{title:'已完成父任务',done:true})
+ const child=await create(`/projects/${a.id}/tasks`,{title:'子任务甲'})
+ const grandchild=await create(`/projects/${a.id}/tasks`,{title:'下级任务甲'})
+ await create(`/tasks/${child.id}/relations`,{other_task_id:parent.id,relation_kind:'parenttask'})
+ await create(`/tasks/${grandchild.id}/relations`,{other_task_id:child.id,relation_kind:'parenttask'})
+ for(let i=0;i<51;i++)await create(`/projects/${b.id}/tasks`,{title:`乙事项 ${i}`})
+ await page.addInitScript(()=>localStorage.setItem('tasktrace-completion-scope','pending'))
+ await page.goto(base+'/#tasktrace-local='+encodeURIComponent(JSON.stringify(session)))
+ const groupA=page.locator(`[data-overview-project="${a.id}"]`),groupB=page.locator(`[data-overview-project="${b.id}"]`)
+ await expect(groupA).toBeVisible();await expect(groupB.locator('[data-overview-task]')).toHaveCount(51)
+ await expect(groupA.locator(`[data-overview-task="${parent.id}"]`)).toHaveAttribute('data-depth','0')
+ await expect(groupA.locator(`[data-overview-task="${parent.id}"]`)).toContainText('为保留层级显示')
+ await expect(groupA.locator(`[data-overview-task="${child.id}"]`)).toHaveAttribute('data-depth','1')
+ await expect(groupA.locator(`[data-overview-task="${grandchild.id}"]`)).toHaveAttribute('data-depth','2')
+ await groupA.getByRole('button',{name:'收起任务 子任务甲',exact:true}).click()
+ await expect(groupA.locator(`[data-overview-task="${grandchild.id}"]`)).toHaveCount(0)
+ await groupA.getByRole('button',{name:'展开任务 子任务甲',exact:true}).click()
+ await groupB.getByRole('button',{name:'收起项目 总表乙',exact:true}).click()
+ await expect(groupB.locator('[data-overview-task]')).toHaveCount(0)
+ await groupB.getByRole('button',{name:'展开项目 总表乙',exact:true}).click()
+ await expect(groupB.locator('[data-overview-task]')).toHaveCount(51)
+ await page.getByRole('combobox',{name:'任务显示范围'}).selectOption('done')
+ await expect(groupA.locator('[data-overview-task]')).toHaveCount(1);await expect(groupB).toHaveCount(0)
+ await page.getByRole('combobox',{name:'任务显示范围'}).selectOption('all')
+ await expect(groupA.locator('[data-overview-task]')).toHaveCount(3)
+ await groupB.getByRole('button',{name:'收起项目 总表乙',exact:true}).click()
+ await groupA.locator(`[data-overview-task="${child.id}"]`).locator('.fancy-checkbox').click()
+ await expect.poll(async()=>(await(await request.get(`${base}/api/v2/tasks/${child.id}`,{headers})).json()).done).toBe(true)
+ await expect(groupA.locator(`[data-overview-task="${grandchild.id}"]`)).toHaveAttribute('data-depth','2')
+ await page.screenshot({path:path.join(root!,'overview-groups-desktop.png'),fullPage:true})
+ await page.setViewportSize({width:390,height:844})
+ await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy()
+ await page.screenshot({path:path.join(root!,'overview-groups-mobile.png'),fullPage:true})
+})

@@ -97,19 +97,11 @@
 			:has-content="false"
 			:loading="loading"
 		>
-			<ul class="p-2 tasks">
-				<li
-					v-for="task in tasks"
-					:key="task.id"
-				>
-					<SingleTaskInProject
-						:show-project="true"
-						:the-task="task"
-						:can-mark-as-done="(projectStore.projects[task.projectId]?.maxPermission ?? 0) > PERMISSIONS.READ"
-						@taskUpdated="updateTasks"
-					/>
-				</li>
-			</ul>
+			<OverviewTaskGroups
+				:tasks="tasks"
+				:ancestors="ancestors"
+				@taskUpdated="updateTasks"
+			/>
 		</Card>
 		<div
 			v-else
@@ -120,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, ref, watch, watchEffect} from 'vue'
+import {computed, ref, watch, watchEffect, onBeforeUnmount} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {useI18n} from 'vue-i18n'
 
@@ -131,7 +123,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import Icon from '@/components/misc/Icon'
 import Message from '@/components/misc/Message.vue'
 import FancyCheckbox from '@/components/input/FancyCheckbox.vue'
-import SingleTaskInProject from '@/components/tasks/partials/SingleTaskInProject.vue'
+import OverviewTaskGroups from '@/components/tasks/partials/OverviewTaskGroups.vue'
 import DatepickerWithRange from '@/components/date/DatepickerWithRange.vue'
 import XLabel from '@/components/tasks/partials/Label.vue'
 import {DATE_RANGES} from '@/components/date/dateRanges'
@@ -143,7 +135,8 @@ import {useProjectStore} from '@/stores/projects'
 import {useLabels} from '@/composables/useLabels'
 import type {TaskFilterParams} from '@/services/taskCollection'
 import TaskCollectionService from '@/services/taskCollection'
-import {PERMISSIONS} from '@/constants/permissions'
+import TaskService from '@/services/task'
+import {queueProgressRead} from '@/helpers/projectProgress'
 
 const props = withDefaults(defineProps<{
 	dateFrom?: Date | string,
@@ -178,6 +171,10 @@ const router = useRouter()
 const {t} = useI18n({useScope: 'global'})
 
 const tasks = ref<ITask[]>([])
+const ancestors = ref<ITask[]>([])
+const hierarchyLoading = ref(false)
+let loadVersion = 0
+onBeforeUnmount(() => { ++loadVersion })
 const showNothingToDo = ref<boolean>(false)
 const taskCollectionService = ref(new TaskCollectionService())
 
@@ -218,7 +215,7 @@ const pageTitle = computed(() => {
 })
 const hasTasks = computed(() => tasks.value && tasks.value.length > 0)
 const userAuthenticated = computed(() => authStore.authenticated)
-const loading = computed(() => taskStore.isLoading || taskCollectionService.value.loading)
+const loading = computed(() => hierarchyLoading.value || taskStore.isLoading || taskCollectionService.value.loading)
 const filterIdUsedOnOverview = computed(() => authStore.settings?.frontendSettings?.filterIdUsedOnOverview)
 
 interface dateStrings {
@@ -276,6 +273,7 @@ async function loadPendingTasks(from: Date|string, to: Date|string, filterId: nu
 		order_by: ['asc', 'desc'],
 		filter: completionScope.value === 'pending' ? 'done = false' : completionScope.value === 'done' ? 'done = true' : '',
 		filter_include_nulls: props.showNulls,
+		filter_timezone: authStore.settings.timezone,
 		s: '',
 		expand: ['comment_count', 'is_unread'],
 	}
@@ -304,32 +302,43 @@ async function loadPendingTasks(from: Date|string, to: Date|string, filterId: nu
 		projectId = filterId
 	}
 
-	tasks.value = await taskStore.loadTasks(params, projectId)
-	emit('tasksLoaded', true)
-}
-
-// FIXME: this modification should happen in the store
-function updateTasks(updatedTask: ITask) {
-	if ((completionScope.value === 'pending' && updatedTask.done) || (completionScope.value === 'done' && !updatedTask.done)) {
-		tasks.value = tasks.value.filter(task => task.id !== updatedTask.id)
-		return
-	}
-	for (let t = 0; t < tasks.value.length; t++) {
-		if (tasks.value[t].id === updatedTask.id) {
-			tasks.value[t] = updatedTask
-			// Move the task to the end of the done tasks if it is now done
-			if (updatedTask.done) {
-				tasks.value.splice(t, 1)
-				tasks.value.push(updatedTask)
-			}
-			break
+	const request = ++loadVersion
+	hierarchyLoading.value = true
+	try {
+		const service = projectId === null ? new TaskService() : new TaskCollectionService()
+		const matches: ITask[] = []
+		for (let page = 1; ; page++) {
+			const batch = await service.getAll(projectId === null ? {} : {projectId}, params, page)
+			if (request !== loadVersion) return
+			matches.push(...batch)
+			if (page >= service.totalPages || !batch.length) break
 		}
-	}
+		const known = new Map(matches.map(task => [task.id, task]))
+		const attempted = new Set(known.keys())
+		let frontier = matches
+		while (frontier.length) {
+			const ids = frontier.flatMap(task => (task.relatedTasks?.parenttask || [])
+				.filter(parent => parent.projectId === task.projectId).map(parent => parent.id))
+				.filter(id => { if (attempted.has(id)) return false; attempted.add(id); return true })
+			frontier = (await Promise.all(ids.map(id => queueProgressRead(async () => {
+				try { return await new TaskService().get({id}) } catch { return null }
+			})))).filter((task): task is ITask => task !== null)
+			if (request !== loadVersion) return
+			frontier.forEach(task => known.set(task.id, task))
+		}
+		tasks.value = matches
+		const matchedIds = new Set(matches.map(task => task.id))
+		ancestors.value = [...known.values()].filter(task => !matchedIds.has(task.id))
+		emit('tasksLoaded', true)
+	} finally { if (request === loadVersion) hierarchyLoading.value = false }
 }
 
+function updateTasks() {
+	void loadPendingTasks(props.dateFrom, props.dateTo, filterIdUsedOnOverview.value)
+}
 // Keep sidebar setting changes from reloading tasks.
 watch(
-	[() => props.dateFrom, () => props.dateTo, filterIdUsedOnOverview, () => props.showOverdue, () => props.showNulls, completionScope],
+	[() => props.dateFrom, () => props.dateTo, filterIdUsedOnOverview, () => props.showOverdue, () => props.showNulls, completionScope, () => props.labelIds],
 	([from, to, filterId]) => loadPendingTasks(from, to, filterId),
 	{immediate: true},
 )
