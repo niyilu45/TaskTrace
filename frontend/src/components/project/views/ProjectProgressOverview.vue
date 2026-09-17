@@ -20,6 +20,25 @@
 				v-model="scope"
 				class="input"
 			><option value="all">全部事项</option><option value="pending">未完成</option><option value="done">已完成</option></select></label>
+			<label>进展范围 <select
+				v-model="progressRange"
+				class="input"
+				aria-label="进展显示范围"
+				@change="changeProgressRange"
+			><option value="all">全部</option><option value="1">最近 1 天</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option><option value="custom">自定义</option></select></label>
+			<label v-if="progressRange === 'custom'">显示 <input
+				v-model="progressDaysInput"
+				class="input progress-days-input"
+				type="number"
+				min="1"
+				max="36500"
+				step="1"
+				aria-label="进展显示天数"
+				:aria-invalid="!!progressRangeError"
+				:aria-describedby="`progress-range-hint-${projectId}`"
+				@change="applyProgressDays"
+				@keydown.enter.prevent="applyProgressDays"
+			> 天</label>
 			<XButton
 				variant="secondary"
 				:disabled="loading"
@@ -40,6 +59,24 @@
 			role="status"
 		>
 			{{ columnsStorageError }}
+		</p>
+		<p
+			v-if="progressRangeError"
+			role="alert"
+		>
+			{{ progressRangeError }}
+		</p>
+		<p
+			v-if="progressRangeStorageError"
+			role="status"
+		>
+			{{ progressRangeStorageError }}
+		</p>
+		<p
+			:id="`progress-range-hint-${projectId}`"
+			class="browse-hint"
+		>
+			{{ progressDays ? `各事项以自己的最新进展日期为起点，显示含当天的最近 ${progressDays} 个自然日，空白日期也计入。` : '进展范围：显示全部历史记录。' }}
 		</p>
 		<p class="browse-hint">
 			按任务、子任务逐级显示，点击名称旁的按钮可展开或收起。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。拖动表头右侧分隔线可调整列宽，自动记住本项目的设置。
@@ -103,6 +140,7 @@
 							:task="group.root"
 							:descendants="group.rows.slice(1).map(row => row.task)"
 							:depth="0"
+							:progress-days="progressDays"
 						/>
 					</ProjectProgressTable>
 				</details>
@@ -119,6 +157,7 @@
 						:key="row.task.id"
 						:task="row.task"
 						:depth="row.depth"
+						:progress-days="progressDays"
 						:has-children="parents.has(row.task.id)"
 						:expanded="isExpanded(row.task.id)"
 						@toggle="toggle(row.task.id)"
@@ -191,6 +230,53 @@ function saveColumns() {
 function resetColumns() {
 	customWidths.value = null
 	saveColumns()
+}
+const progressRange = ref('all')
+const customProgressDays = ref(7)
+const progressDaysInput = ref('7')
+const progressRangeError = ref('')
+const progressRangeStorageError = ref('')
+const progressRangeKey = computed(() => `tasktrace:progress-range:${props.projectId}`)
+const progressDays = computed(() => progressRange.value === 'all' ? 0 : progressRange.value === 'custom' ? customProgressDays.value : Number(progressRange.value))
+function validProgressDays(days: unknown): days is number {
+	return typeof days === 'number' && Number.isSafeInteger(days) && days >= 1 && days <= 36500
+}
+watch(progressRangeKey, key => {
+	progressRange.value = 'all'
+	customProgressDays.value = 7
+	progressDaysInput.value = '7'
+	progressRangeError.value = ''
+	progressRangeStorageError.value = ''
+	try {
+		const saved = JSON.parse(localStorage.getItem(key) || 'null')
+		if (saved && ['all', '1', '7', '30', 'custom'].includes(saved.mode) && validProgressDays(saved.days)) {
+			progressRange.value = saved.mode
+			customProgressDays.value = saved.days
+			progressDaysInput.value = String(saved.days)
+		}
+	} catch { /* Keep all progress visible when saved settings cannot be read. */ }
+}, {immediate: true})
+function saveProgressRange() {
+	try {
+		localStorage.setItem(progressRangeKey.value, JSON.stringify({mode: progressRange.value, days: customProgressDays.value}))
+		progressRangeStorageError.value = ''
+	} catch { progressRangeStorageError.value = '显示范围已调整，但当前浏览器无法保存设置。' }
+}
+function changeProgressRange() {
+	progressRangeError.value = ''
+	progressDaysInput.value = String(customProgressDays.value)
+	saveProgressRange()
+}
+function applyProgressDays() {
+	const days = Number(progressDaysInput.value)
+	if (!validProgressDays(days)) {
+		progressRangeError.value = `请输入 1～36500 之间的整数天数。当前仍显示最近 ${customProgressDays.value} 天。`
+		return
+	}
+	customProgressDays.value = days
+	progressDaysInput.value = String(days)
+	progressRangeError.value = ''
+	saveProgressRange()
 }
 const tasks = ref<ProgressTask[]>([])
 const loading = ref(false)
@@ -296,6 +382,9 @@ onBeforeUnmount(() => requestId++)
 	inline-size: auto;
 	max-inline-size: 15rem;
 	}
+.progress-toolbar .progress-days-input {
+ inline-size: 6rem;
+}
 .browse-hint {
 	color: var(--grey-600);
 	font-size: .8125rem;

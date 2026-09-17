@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {parseProgressNote, sortProgressNotes, mergedDay} from './progressNotes'
+import {parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes} from './progressNotes'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
  it('sorts by entered dates even when older progress was entered later', () => {
@@ -36,4 +36,62 @@ it('merges same-day content and images while hiding absorbed source records', ()
  const saved = {...original[1], comment: '<h3 data-tasktrace-merged="1">每日进展 · 2026-09-20</h3><p>edited</p>'}
  expect(sortProgressNotes([original[0], saved]).map(note => note.id)).toEqual([2])
  expect(mergedDay([original[0], saved], '2026-09-20').mergedIds).toEqual([1])
+})
+
+describe('progress date range', () => {
+	const notesWithDates = (dates: string[]) => dates.map((date, index) => ({...parseProgressNote({id: index + 1, comment: daily('2026-01-01', `progress ${index}`)}), date}))
+
+	it.each([0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1])('keeps all notes for invalid or unlimited days %s', days => {
+		const notes = notesWithDates(['2026-09-20', '2020-01-01'])
+		expect(limitProgressNotes(notes, days)).toBe(notes)
+	})
+
+	it('anchors to the latest parsed date instead of today, creation time or the number of records', () => {
+		const notes = sortProgressNotes([
+			{id: 1, created: '2020-06-11T00:00:00Z', comment: daily('2020-06-10', 'latest')},
+			{id: 2, created: '2099-01-01T00:00:00Z', comment: daily('2020-06-08', 'boundary')},
+			{id: 3, created: '2099-02-01T00:00:00Z', comment: daily('2020-06-07', 'outside')},
+		])
+		expect(limitProgressNotes(notes, 3).map(note => note.id)).toEqual([1, 2])
+	})
+
+	it('retains every record on the latest day even when only one day is selected', () => {
+		const notes = notesWithDates(['2026-09-20', '2026-09-20', '2026-09-19'])
+		expect(limitProgressNotes(notes, 1).map(note => note.id)).toEqual([1, 2])
+	})
+
+	it.each([
+		[['2026-03-01', '2026-02-28', '2026-02-27'], 2, 2],
+		[['2027-01-01', '2026-12-31', '2026-12-30'], 2, 2],
+		[['2024-03-01', '2024-02-29', '2024-02-28', '2024-02-27'], 3, 3],
+		[['2025-03-01', '2025-02-28', '2025-02-27'], 2, 2],
+		[['2026-03-09', '2026-03-08', '2026-03-07'], 2, 2],
+		[['2026-11-02', '2026-11-01', '2026-10-31'], 2, 2],
+	] as [string[], number, number][])('uses inclusive natural days across calendar boundaries: %j', (dates, days, count) => {
+		const notes = notesWithDates(dates)
+		expect(limitProgressNotes(notes, days).map(note => note.date)).toEqual(dates.slice(0, count))
+	})
+
+	it('retains unknown and invalid dates without using them as anchors', () => {
+		const dates = ['日期未知', '2026-02-30', '2026-13-01', '', '2026-09-09', '2026-09-07']
+		const notes = notesWithDates(dates)
+		expect(limitProgressNotes(notes, 1).map(note => note.date)).toEqual(dates.slice(0, 5))
+	})
+
+	it('preserves original ordering and objects without mutating unsorted input', () => {
+		const notes = notesWithDates(['2026-09-18', '2026-09-16', '日期未知', '2026-09-19'])
+		notes.forEach(Object.freeze)
+		Object.freeze(notes)
+		const filtered = limitProgressNotes(notes, 2)
+		expect(filtered).toEqual([notes[0], notes[2], notes[3]])
+		expect(filtered[0]).toBe(notes[0])
+		expect(notes.map(note => note.date)).toEqual(['2026-09-18', '2026-09-16', '日期未知', '2026-09-19'])
+	})
+
+	it('keeps empty or entirely undated history unchanged', () => {
+		const empty = notesWithDates([])
+		const unknown = notesWithDates(['日期未知', '2026-02-30'])
+		expect(limitProgressNotes(empty, 7)).toBe(empty)
+		expect(limitProgressNotes(unknown, 7)).toBe(unknown)
+	})
 })

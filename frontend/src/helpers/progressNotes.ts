@@ -33,6 +33,24 @@ export function sortProgressNotes(notes: TaskComment[]) {
 	return notes.filter(note => !absorbed.has(note.id || 0)).filter(note => new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')?.textContent !== 'TaskTrace 遗留事项清单').map(parseProgressNote).sort((a, b) => (b.date === '日期未知' ? '' : b.date).localeCompare(a.date === '日期未知' ? '' : a.date) || b.created - a.created || (b.id || 0) - (a.id || 0))
 }
 
+export function limitProgressNotes(notes: ReturnType<typeof sortProgressNotes>, days: number): ReturnType<typeof sortProgressNotes> {
+	if (!Number.isSafeInteger(days) || days <= 0) return notes
+	const dates = notes.map(note => {
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(note.date)) return null
+		const parsed = new Date(`${note.date}T00:00:00Z`)
+		if (Number.isNaN(+parsed) || parsed.toISOString().slice(0, 10) !== note.date) return null
+		// UTC day numbers avoid local daylight-saving changes at month/day boundaries.
+		return +parsed / 86400000
+	})
+	let latest: number | null = null
+	for (const date of dates) if (date !== null && (latest === null || date > latest)) latest = date
+	if (latest === null) return notes
+	const earliest = latest - days + 1
+	return notes.filter((_, index) => {
+		const date = dates[index]
+		return date === null || date >= earliest
+	})
+}
 export function mergedDay(history: TaskComment[], date: string) {
 	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
 	const primary = notes.reduce<number | undefined>((id, note) => Math.max(id || 0, note.id || 0) || undefined, undefined)
