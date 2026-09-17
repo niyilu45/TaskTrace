@@ -91,12 +91,6 @@ internal sealed partial class FloatingWindow : Form {
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
         toolbar.Controls.AddRange(new Control[] { full, reload, pin, fold, settingsButton, simple });
-        restoreSimple.Click += delegate { SetSimpleMode(false); };
-        Controls.Add(restoreSimple);
-        Resize += delegate { restoreSimple.Location = new Point(Math.Max(6, ClientSize.Width - restoreSimple.Width - 10), 8); };
-        Deactivate += delegate { if(simpleMode) restoreSimple.Visible = false; };
-        tasks.NodeMouseClick += delegate { if(simpleMode) { restoreSimple.Visible = true; restoreSimple.BringToFront(); } };
-        tasks.MouseDown += delegate(object sender, MouseEventArgs e) { if(simpleMode && e.Button == MouseButtons.Left && tasks.GetNodeAt(e.Location) == null) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), null); } };
         tasks.ShowNodeToolTips = false;
         tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
@@ -142,7 +136,7 @@ internal sealed partial class FloatingWindow : Form {
         fold.Click += delegate { ToggleFold(); };
         previous.Click += async delegate { if (page > 1) { page--; await Reload(); } };
         next.Click += async delegate { if (page * 50 < total) { page++; await Reload(); } };
-        projects.SelectedIndexChanged += async delegate { if (!rendering) { page = 1; await Reload(); } };
+        projects.SelectedIndexChanged += async delegate { if (!rendering) { page = 1; SaveBounds(); await Reload(); } };
         entry.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await AddTask(); } };
         search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await Reload(); } };
         KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.F5) { e.Handled = true; await Reload(); } };
@@ -186,6 +180,7 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
+        InitializeSimpleModeRecovery(menu);
         timer.Tick += async delegate { if(Visible && !collapsed && !busy && !dragging) { projectsDirty = true; await Reload(); } };
         Shown += async delegate { await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
@@ -208,24 +203,6 @@ internal sealed partial class FloatingWindow : Form {
             else if(bottom) message.Result = new IntPtr(left ? 16 : right ? 17 : 15);
             else if(left || right) message.Result = new IntPtr(left ? 10 : 11);
         }
-    }
-    void SetSimpleMode(bool enabled) {
-        if(enabled == simpleMode) return;
-        if(enabled) {
-            if(collapsed) ToggleFold(); fullBounds = Bounds; simpleMode = true;
-            content.Controls.Remove(tasks); content.Visible = false; toolbar.Visible = false;
-            FormBorderStyle = FormBorderStyle.None; MinimumSize = new Size(160,120); Padding = new Padding(7);
-            Controls.Add(tasks); tasks.Dock = DockStyle.Fill; Size = simpleSize;
-            restoreSimple.Visible = false;
-        } else {
-            simpleSize = Size; simpleMode = false; Controls.Remove(tasks); Padding = Padding.Empty;
-            FormBorderStyle = FormBorderStyle.Sizable; MinimumSize = new Size(350,420);
-            content.Controls.Add(tasks, 0, 3); content.Visible = true; toolbar.Visible = true; restoreSimple.Visible = false; Bounds = fullBounds;
-        }
-        SaveSimpleMode();
-    }
-    void SaveSimpleMode() {
-        try { if(simpleMode && WindowState == FormWindowState.Normal) simpleSize = Size; File.WriteAllText(Path.Combine(data,"simple-window.json"), json.Serialize(new {enabled=simpleMode,width=simpleSize.Width,height=simpleSize.Height})); } catch { }
     }
     static string Plain(string html) {
         string value = Regex.Replace(html ?? "", @"<br\s*/?>|</p>|</div>|</li>", "\r\n", RegexOptions.IgnoreCase);
@@ -315,7 +292,7 @@ internal sealed partial class FloatingWindow : Form {
             }
         }
     }
-    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; UpdateUndoControls(); } }
+    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
         try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); await RefreshUndo(); }
@@ -325,6 +302,7 @@ internal sealed partial class FloatingWindow : Form {
     async Task LoadTasks() {
         if(projectsDirty) {
             var previousProject = projects.SelectedItem as Project;
+            long requestedProject = previousProject == null ? preferredProjectId : previousProject.Id;
             rendering = true;
             try {
                 projects.Items.Clear();
@@ -336,13 +314,13 @@ internal sealed partial class FloatingWindow : Form {
                 }
                 if(projects.Items.Count > 0) {
                     projects.SelectedIndex = 0;
-                    if(previousProject != null) foreach(Project candidate in projects.Items) if(candidate.Id == previousProject.Id) { projects.SelectedItem = candidate; break; }
+                    if(requestedProject > 0) foreach(Project candidate in projects.Items) if(candidate.Id == requestedProject) { projects.SelectedItem = candidate; break; }
                 }
                 projectsDirty = false;
             } finally { rendering = false; }
         }
         var project = projects.SelectedItem as Project;
-        if(project == null) { status.Text = "请先在完整界面建立项目。"; return; }
+        if(project == null) { tasks.Nodes.Clear(); status.Text = "请先在完整界面建立项目。"; UpdateSimpleModeState(); return; }
         var all = new Dictionary<long, Dictionary<string, object>>();
         var ordered = new List<long>();
         for(int fetchPage = 1; ; fetchPage++) {
@@ -418,7 +396,7 @@ internal sealed partial class FloatingWindow : Form {
             previous.Enabled = page > 1; next.Enabled = page * 50 < total;
             status.ForeColor = ForeColor;
             status.Text = matches.Count == 0 ? "没有匹配事项，可清空搜索或显示已完成。" : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
-        } finally { tasks.EndUpdate(); rendering = false; }
+        } finally { tasks.EndUpdate(); rendering = false; UpdateSimpleModeState(); }
     }
     void LoadTreePreferences() {
         try { var values = json.Deserialize<long[]>(File.ReadAllText(Path.Combine(data, "floating-tree.json"))); foreach(long id in values) collapsedTasks.Add(id); } catch { }
@@ -739,7 +717,7 @@ internal sealed partial class FloatingWindow : Form {
             lastError += "\r\n\r\n错误日志：" + file;
         } catch { }
         status.ForeColor = Color.FromArgb(170, 35, 35);
-        status.Text = "操作失败，点击此处查看完整错误详情。";
+        status.Text = "操作失败，点击此处查看完整错误详情。"; UpdateSimpleModeState();
     }
     void HideToTray() {
         SaveSimpleMode(); SaveBounds(); hoverTimer.Stop(); progressTip.Hide(tasks);
@@ -779,6 +757,7 @@ internal sealed partial class FloatingWindow : Form {
     void LoadBounds() {
         try {
             var saved = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
+            if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
             var bounds = new Rectangle(Convert.ToInt32(saved["x"]), Convert.ToInt32(saved["y"]), Math.Max(350, Convert.ToInt32(saved["width"])), Math.Max(300, Convert.ToInt32(saved["height"])));
             var area = Screen.FromRectangle(bounds).WorkingArea;
@@ -787,7 +766,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -827,6 +806,7 @@ internal sealed partial class FloatingWindow : Form {
             if(ReadShared(sharedHistory).Items.Count!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding or merged history failed");
             sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
+            TestSimpleModeRecovery();
             var beforeSimple=Bounds;SetSimpleMode(true);Size=new Size(230,220);
             if(!simpleMode || content.Visible || toolbar.Visible || tasks.Parent!=this || FormBorderStyle!=FormBorderStyle.None || restoreSimple.Visible)throw new Exception("Simple mode layout failed");
             SetSimpleMode(false);if(Bounds!=beforeSimple || tasks.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
@@ -841,7 +821,7 @@ internal sealed partial class FloatingWindow : Form {
             if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="1. 跨日期待办二")throw new Exception("Outstanding dropdown failed");
             SetSimpleMode(true);Size=new Size(330,260);
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
-            restoreSimple.Visible=true;restoreSimple.BringToFront();
+            ShowSimpleModeRestore();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
             restoreSimple.PerformClick();if(simpleMode)throw new Exception("Simple mode restore button failed");
             outstandingTest.Remove();
