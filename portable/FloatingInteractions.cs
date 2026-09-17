@@ -16,7 +16,72 @@ internal sealed partial class TaskTreeView : TreeView {
     internal TreeNode DropNode;
     internal int DropZone;
     internal bool Dropping;
+    internal Action<TreeNode> CompletionClicked;
+    readonly ImageList completionImages=CreateCompletionImages();
+    TreeNode pressedCompletionNode;
+    bool swallowCompletionUp;
+
+    internal TaskTreeView() {
+        CheckBoxes=false;
+        StateImageList=completionImages;
+    }
+    static ImageList CreateCompletionImages() {
+        var images=new ImageList {ColorDepth=ColorDepth.Depth32Bit,ImageSize=new Size(16,16),TransparentColor=Color.Transparent};
+        images.Images.Add(new Bitmap(16,16));
+        foreach(var state in new[]{System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal,System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal}) {
+            var bitmap=new Bitmap(16,16,System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using(var canvas=Graphics.FromImage(bitmap)) {canvas.Clear(Color.Transparent);CheckBoxRenderer.DrawCheckBox(canvas,new Point(1,1),state);}
+            images.Images.Add(bitmap);
+        }
+        return images;
+    }
+    internal void SyncCompletionState(TreeNode node) {
+        if(node==null)return;
+        node.StateImageIndex=node.Tag is long?(node.Checked?2:1):0;
+        foreach(TreeNode child in node.Nodes)SyncCompletionState(child);
+    }
+    internal void SyncCompletionStates() {foreach(TreeNode node in Nodes)SyncCompletionState(node);}
+    TreeNode CompletionNodeAt(Point point) {
+        var hit=HitTest(point);
+        return hit.Node!=null && hit.Node.Tag is long && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
+    }
+    internal Rectangle CompletionBounds(TreeNode node) {
+        if(node==null || node.TreeView!=this || !node.IsVisible)return Rectangle.Empty;
+        int y=node.Bounds.Top+node.Bounds.Height/2,left=-1,right=-1;
+        for(int x=0;x<ClientSize.Width;x++) {
+            var hit=HitTest(x,y);
+            if(hit.Node==node && (hit.Location&TreeViewHitTestLocations.StateImage)!=0) {if(left<0)left=x;right=x;}
+            else if(left>=0)break;
+        }
+        return left<0?Rectangle.Empty:new Rectangle(left,node.Bounds.Top,right-left+1,node.Bounds.Height);
+    }
+    bool HandleCompletionMessage(ref Message message) {
+        const int LeftDown=0x201,LeftUp=0x202,LeftDoubleClick=0x203,MouseMove=0x200,CaptureChanged=0x215;
+        if(message.Msg==CaptureChanged){pressedCompletionNode=null;swallowCompletionUp=false;return false;}
+        if(!Enabled || (message.Msg!=LeftDown && message.Msg!=LeftUp && message.Msg!=LeftDoubleClick && message.Msg!=MouseMove))return false;
+        long coordinates=message.LParam.ToInt64();
+        var point=new Point(unchecked((short)(coordinates&0xffff)),unchecked((short)((coordinates>>16)&0xffff)));
+        if(message.Msg==LeftDown || message.Msg==LeftDoubleClick) {
+            var node=CompletionNodeAt(point);if(node==null)return false;
+            Focus();SelectedNode=node;pressedCompletionNode=message.Msg==LeftDown?node:null;swallowCompletionUp=true;Capture=true;
+            return true;
+        }
+        if(message.Msg==MouseMove && swallowCompletionUp)return true;
+        if(message.Msg==LeftUp && swallowCompletionUp) {
+            var node=pressedCompletionNode;pressedCompletionNode=null;swallowCompletionUp=false;Capture=false;
+            if(node!=null && CompletionNodeAt(point)==node && CompletionClicked!=null)CompletionClicked(node);
+            return true;
+        }
+        return false;
+    }
+    protected override void OnKeyDown(KeyEventArgs e) {
+        if(e.KeyCode==Keys.Space && Enabled && SelectedNode!=null && SelectedNode.Tag is long) {
+            e.Handled=true;e.SuppressKeyPress=true;if(CompletionClicked!=null)CompletionClicked(SelectedNode);return;
+        }
+        base.OnKeyDown(e);
+    }
     protected override void WndProc(ref Message message) {
+        if(HandleCompletionMessage(ref message)) return;
         if(HandleSimpleImageMessage(ref message)) return;
         if(HandleWindowDragMessage(ref message)) return;
         base.WndProc(ref message);
@@ -31,6 +96,7 @@ internal sealed partial class TaskTreeView : TreeView {
             }
         }
     }
+    protected override void Dispose(bool disposing) {if(disposing)completionImages.Dispose();base.Dispose(disposing);}
 }
 
 internal sealed partial class FloatingWindow {

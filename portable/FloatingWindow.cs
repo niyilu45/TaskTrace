@@ -24,7 +24,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新事项名称" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "查找事项" };
-    readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, CheckBoxes = true, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
+    readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly Button previous = new Button { Text = "上一页", AutoSize = true };
@@ -35,7 +35,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
     readonly Timer timer = new Timer { Interval = 1000 };
     readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Visible = false };
-    bool busy, rendering, collapsed, closing, projectsDirty = true;
+    bool busy, rendering, collapsed, closing, completionPending, projectsDirty = true;
     bool autoSaveEnabled = true;
     int autoSaveSeconds = 30;
     int page = 1, total, expandedHeight = 560;
@@ -138,15 +138,11 @@ internal sealed partial class FloatingWindow : Form {
         entry.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await AddTask(); } };
         search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await Reload(); } };
         KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.F5) { e.Handled = true; await Reload(); } };
-        tasks.BeforeCheck += delegate(object sender, TreeViewCancelEventArgs e) {
-            if(rendering) return;
-            e.Cancel = true;
-            if(!(e.Node.Tag is long)) return;
-            if(!busy) {
-                long id = Convert.ToInt64(e.Node.Tag);
-                bool done = !e.Node.Checked;
-                BeginInvoke(new Action(async delegate { await Complete(id, done); }));
-            }
+        tasks.CompletionClicked = delegate(TreeNode node) {
+            if(rendering || busy || closing || completionPending || node==null || !(node.Tag is long) || node.TreeView!=tasks)return;
+            long id=Convert.ToInt64(node.Tag);bool done=!node.Checked;
+            completionPending=true;
+            BeginInvoke(new Action(async delegate {try{await Complete(id,done);}finally{completionPending=false;}}));
         };
         tasks.NodeMouseDoubleClick += delegate(object sender, TreeNodeMouseClickEventArgs e) {
             if(e.Node.Tag is OutstandingLeaf) ShowOutstanding(((OutstandingLeaf)e.Node.Tag).TaskId);
@@ -691,6 +687,15 @@ internal sealed partial class FloatingWindow : Form {
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
+            tasks.Nodes[0].EnsureVisible();tasks.Refresh();var completionBounds=tasks.CompletionBounds(tasks.Nodes[0]);
+            if(completionBounds.IsEmpty)throw new Exception("Task completion box is not visible");
+            int completionPoint=((completionBounds.Top+completionBounds.Height/2)<<16)|((completionBounds.Left+completionBounds.Width/2)&0xffff);
+            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(completionPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(completionPoint));
+            bool clickCompleted=false;
+            for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+id,null))["done"])){clickCompleted=true;break;}}
+            if(!clickCompleted)throw new Exception("Task completion box click did not persist");
+            while(busy)await Task.Delay(20);await Complete(id,false);
+            if(Convert.ToBoolean((await Api("GET","/tasks/"+id,null))["done"]))throw new Exception("Task did not reopen after completion click test");
             await Api("PATCH", "/tasks/" + id, new { description = "保留已有进展" });
             await SaveProgress(id, DateTime.Today, "已完成接口联调 <检查>", "明天补充图片");
             var testPictures = new List<PastedImage>();

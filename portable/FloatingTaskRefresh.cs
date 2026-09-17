@@ -111,6 +111,7 @@ internal sealed partial class FloatingWindow {
             if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id]))nodes[parents[id]].Nodes.Add(nodes[id]);else roots.Add(nodes[id]);
         }
         NumberTasks(roots,all);
+        foreach(var node in roots)tasks.SyncCompletionState(node);
         int nextPage=Math.Max(1,Math.Min(page,Math.Max(1,(roots.Count+49)/50)));
         var visibleRoots=roots.Skip((nextPage-1)*50).Take(50).ToArray();
         var sharedLists=new Dictionary<long,SharedList>();

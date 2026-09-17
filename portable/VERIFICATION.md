@@ -238,3 +238,9 @@
 - 前端正式构建通过；全库类型检查仍有上游既有错误，本次新增模板未引入新的编译错误。
 - 隔离成品完整原生自检通过，包含文本框标签存在性断言及原有任务、进展、图片、撤销、层级、托盘和简洁模式回归。
 - 已检查 `floating-test.png`、`floating-outstanding-editor-test.png`、`floating-progress-references-test.png` 和 `floating-progress-reference-snapshot-test.png`，标签可见且未被裁切。日志位于 `.local-build/text-field-labels-*`，不进入发布包。
+
+## 2026-09-17 悬浮窗完成勾选框对齐
+- 用任务专用状态图替代 TreeView 对所有节点统一添加的原生勾选框；任务和子任务显示完成框，遗留事项使用透明等宽状态位，不再出现无法点击的假勾选框。
+- 鼠标按下、释放和双击使用独立命中逻辑，单击只切换一次；选中任务后按空格也可切换完成状态。遗留事项的透明状态位不会触发完成操作。
+- 专项测试在完整和简洁模式中逐像素确认同层任务与遗留事项文字对齐，模拟鼠标点击并验证只有任务收到完成请求；完整原生自检进一步确认真实点击已写入后台并可恢复未完成。
+- 已检查 `.local-build/checkbox-hit-verified/data/floating-simple-details-test.png`、`floating-interactions-test.png` 和 `floating-test.png`，任务勾选框、子任务缩进及遗留事项均对齐。
