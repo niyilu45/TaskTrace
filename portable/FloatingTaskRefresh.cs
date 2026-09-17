@@ -112,8 +112,8 @@ internal sealed partial class FloatingWindow {
         }
         NumberTasks(roots,all);
         foreach(var node in roots)tasks.SyncCompletionState(node);
-        int nextPage=Math.Max(1,Math.Min(page,Math.Max(1,(roots.Count+49)/50)));
-        var visibleRoots=roots.Skip((nextPage-1)*50).Take(50).ToArray();
+        page=1;
+        var visibleRoots=roots.ToArray();
         var sharedLists=new Dictionary<long,SharedList>();
         var needed=new HashSet<long>();
         foreach(var node in nodes.Values) {
@@ -155,11 +155,10 @@ internal sealed partial class FloatingWindow {
                 var selected=FindRefreshNode(selectedKey);if(selected!=null)tasks.SelectedNode=selected;
             }finally{tasks.EndUpdate();rendering=false;}
         }
-        int previousTotal=total;total=roots.Count;page=nextPage;
+        int previousTotal=total;total=roots.Count;
         string nextStatus=project==null?"请先在完整界面建立项目。":matches.Count==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可清空搜索或显示已完成。"):
-            matches.Count+" 项 · "+total+" 个任务组 · 第 "+page+" 页";
+            matches.Count+" 项 · "+total+" 个任务组";
         if(!background || treeChanged || projectChanged || previousTotal!=total || status.Text!=nextStatus) {
-            previous.Enabled=page>1;next.Enabled=page*50<total;
             if(!background || treeChanged || projectChanged)status.ForeColor=ForeColor;
             if(status.Text!=nextStatus)status.Text=nextStatus;
             if(!background || treeChanged || projectChanged)UpdateSimpleModeState();

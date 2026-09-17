@@ -8,8 +8,6 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 internal sealed partial class FloatingWindow {
-    readonly Button undoButton = new Button { Text = "撤销", AutoSize = true, Enabled = false, AccessibleName = "撤销最近操作" };
-    ToolStripItem undoMenu;
     long undoId;
     string undoLabel = "", undoGroup;
     bool undoRecording = true, undoing;
@@ -21,11 +19,6 @@ internal sealed partial class FloatingWindow {
     }
     IDisposable BeginUndoGroup(string group = null) { return new UndoScope(this,group); }
     void InitializeUndo(ContextMenuStrip menu) {
-        toolbar.Controls.Add(undoButton);
-        undoButton.Click += async delegate { await PerformUndo(); };
-        menu.Items.Add(new ToolStripSeparator());
-        undoMenu=menu.Items.Add("撤销最近操作 (Ctrl+Z)",null,async delegate {await PerformUndo();});
-        undoMenu.Enabled=false;
         KeyDown+=async delegate(object sender,KeyEventArgs e) {
             if(e.Control && !e.Shift && !e.Alt && e.KeyCode==Keys.Z && !EditingText()) {
                 e.Handled=true;e.SuppressKeyPress=true;await PerformUndo();
@@ -38,12 +31,7 @@ internal sealed partial class FloatingWindow {
         return active is TextBoxBase || active is ComboBox;
     }
     void UpdateUndoControls() {
-        if(closing || IsDisposed)return;
-        bool available=undoId>0 && !busy && !undoing;
-        undoButton.Enabled=available;
-        string text=undoId>0 ? "撤销："+undoLabel+" (Ctrl+Z)" : "暂无可撤销操作";
-        progressTip.SetToolTip(undoButton,text);
-        if(undoMenu!=null){undoMenu.Enabled=available;undoMenu.Text=text;}
+        // Undo remains available through Ctrl+Z without occupying toolbar or context-menu space.
     }
     async Task RefreshUndo() {
         long previousId=undoId;string previousLabel=undoLabel;
@@ -114,10 +102,10 @@ internal sealed partial class FloatingWindow {
         if(shared.Items.Count!=1 || shared.Items[0].Id!="undo-image" || target.Items.Count!=1 || target.Items[0].Id!="keep")throw new Exception("Outstanding move undo lost items");
         if((await DownloadImage("/api/v1/tasks/"+a+"/attachments/"+picture[0].Id)).Length==0)throw new Exception("Undo removed original image");
         await Api("PATCH","/tasks/"+a,new{title="按钮撤销"});await RefreshUndo();SetBusy(false);
-        if(!undoButton.Enabled)throw new Exception("Undo button is not enabled");
-        await PerformUndo();if((string)(await Api("GET","/tasks/"+a,null))["title"]!="撤销验收 A")throw new Exception("Undo button action failed");
+        if(undoId==0)throw new Exception("Undo shortcut state is not available");
+        await PerformUndo();if((string)(await Api("GET","/tasks/"+a,null))["title"]!="撤销验收 A")throw new Exception("Undo shortcut action failed");
         ShowNewTaskEditor();entry.Focus();if(!EditingText())throw new Exception("Text Ctrl+Z was not isolated");HideNewTaskEditor();tasks.Focus();if(EditingText())throw new Exception("Tree Ctrl+Z was not enabled");
         undoRecording=false;foreach(long id in cleanup)await Api("DELETE","/tasks/"+id,null);undoRecording=true;await LoadTasks();await RefreshUndo();
-        File.WriteAllText(Path.Combine(data,"floating-undo-test.txt"),"PASS: native toolbar undo, stale request rejection, unrelated field preservation, conflict safety and retry, grouped child creation, task delete/restore, progress create/edit undo, task move undo, outstanding image transfer undo, original image retained, input Ctrl+Z isolation.");
+        File.WriteAllText(Path.Combine(data,"floating-undo-test.txt"),"PASS: shortcut-only undo, stale request rejection, unrelated field preservation, conflict safety and retry, grouped child creation, task delete/restore, progress create/edit undo, task move undo, outstanding image transfer undo, original image retained, input Ctrl+Z isolation.");
     }
 }

@@ -82,11 +82,11 @@ internal sealed partial class TaskTreeView {
 
 internal sealed partial class FloatingWindow {
     void TestPriorityLinks() {
-        var originalNodes=tasks.Nodes.Cast<TreeNode>().ToArray();var originalCallback=tasks.PriorityClicked;
+        var originalNodes=tasks.Nodes.Cast<TreeNode>().ToArray();var originalCallback=tasks.PriorityClicked;var originalDoubleClick=tasks.NodeDoubleClicked;
         bool originalMode=simpleMode,originalBusy=busy,originalRendering=rendering,originalTesting=simpleDetailsTesting;
         var originalSize=Size;var originalSelected=tasks.SelectedNode;
         simpleDetailsTesting=true;InvalidateSimpleOutstanding();rendering=true;SetBusy(false);
-        int clicks=0,checks=0,drags=0,doubleClicks=0,expands=0;TreeNode clicked=null;
+        int clicks=0,checks=0,drags=0,doubleClicks=0,taskDoubleClicks=0,expands=0;TreeNode clicked=null;
         TreeViewCancelEventHandler check=delegate{checks++;};ItemDragEventHandler drag=delegate{drags++;};
         TreeNodeMouseClickEventHandler doubleClick=delegate{doubleClicks++;};TreeViewEventHandler expand=delegate{expands++;};
         try {
@@ -96,6 +96,7 @@ internal sealed partial class FloatingWindow {
             var leaf=new TreeNode("1. [P9] 遗留正文不是优先级"){Tag=new OutstandingLeaf{TaskId=910000L,Id="plain",Html="[P9]"}};tasks.Nodes[0].Nodes.Add(leaf);
             var unnumbered=new TreeNode("正文中的 [P5] 不是行首优先级"){Tag=910011L};tasks.Nodes.Add(unnumbered);tasks.ExpandAll();
             tasks.PriorityClicked=delegate(TreeNode node){clicked=node;clicks++;};
+            tasks.NodeDoubleClicked=delegate(TreeNode node){taskDoubleClicks++;clicked=node;};
             tasks.BeforeCheck+=check;tasks.ItemDrag+=drag;tasks.NodeMouseDoubleClick+=doubleClick;tasks.AfterExpand+=expand;tasks.AfterCollapse+=expand;
             foreach(bool simple in new[]{false,true}) {
                 SetSimpleMode(simple);if(simple)Size=new Size(360,570);tasks.SetSimpleImageLinks(true);
@@ -103,20 +104,29 @@ internal sealed partial class FloatingWindow {
                 foreach(var node in tasks.Nodes.Cast<TreeNode>().Where(item=>item!=unnumbered).Concat(new[]{nested})) {
                     node.EnsureVisible();tasks.Refresh();var bounds=tasks.PriorityLinkBounds(node);
                     if(bounds.IsEmpty || !tasks.ClientRectangle.Contains(new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2)))throw new Exception("Priority marker is not visible/hit-testable");
-                    int before=clicks,beforeExpand=expands;clicked=null;
+                    int before=clicks,beforeExpand=expands,beforeTaskDouble=taskDoubleClicks;clicked=null;
                     int coordinates=((bounds.Top+bounds.Height/2)<<16)|((bounds.Left+bounds.Width/2)&0xffff);
                     SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(coordinates));
                     SendSimpleMessage(tasks.Handle,0x200,new IntPtr(1),new IntPtr(coordinates+2));
                     SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(coordinates));
                     SendSimpleMessage(tasks.Handle,0x203,new IntPtr(1),new IntPtr(coordinates));
                     SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(coordinates));
-                    if(clicks!=before+1 || clicked!=node || checks!=0 || drags!=0 || doubleClicks!=0 || expands!=beforeExpand)throw new Exception("Priority click/double-click escaped into another tree action");
+                    if(clicks!=before+1 || clicked!=node || checks!=0 || drags!=0 || doubleClicks!=0 || taskDoubleClicks!=beforeTaskDouble || expands!=beforeExpand)throw new Exception("Priority click/double-click escaped into another tree action");
                     var titlePoint=new Point(bounds.Right+10,bounds.Top+bounds.Height/2);
                     var titleHit=tasks.HitTest(titlePoint);
                     var down=Message.Create(tasks.Handle,0x201,new IntPtr(1),new IntPtr((titlePoint.Y<<16)|(titlePoint.X&0xffff)));
                     if(titleHit.Node!=node || (titleHit.Location&TreeViewHitTestLocations.Label)==0 || tasks.HandleSimpleImageMessage(ref down))throw new Exception("Task title lost its native selection/drag target");
                 }
                 if(!tasks.PriorityLinkBounds(leaf).IsEmpty || !tasks.PriorityLinkBounds(unnumbered).IsEmpty)throw new Exception("A marker in ordinary title text was made clickable");
+                var owner=tasks.Nodes[0];owner.Expand();owner.EnsureVisible();tasks.Refresh();
+                var ownerPriority=tasks.PriorityLinkBounds(owner);var ownerTitle=new Point(ownerPriority.Right+12,owner.Bounds.Top+owner.Bounds.Height/2);
+                int ownerCoordinates=(ownerTitle.Y<<16)|(ownerTitle.X&0xffff),ownerBeforeDouble=taskDoubleClicks;
+                SendSimpleMessage(tasks.Handle,0x203,new IntPtr(1),new IntPtr(ownerCoordinates));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(ownerCoordinates));
+                if(!owner.IsExpanded || taskDoubleClicks!=ownerBeforeDouble+1 || clicked!=owner)throw new Exception("Double-click expanded task changed its expansion state");
+                owner.Collapse();tasks.Refresh();ownerBeforeDouble=taskDoubleClicks;
+                SendSimpleMessage(tasks.Handle,0x203,new IntPtr(1),new IntPtr(ownerCoordinates));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(ownerCoordinates));
+                if(owner.IsExpanded || taskDoubleClicks!=ownerBeforeDouble+1 || clicked!=owner)throw new Exception("Double-click collapsed task changed its expansion state");
+                owner.Expand();
                 nested.EnsureVisible();tasks.Refresh();var nestedBounds=tasks.PriorityLinkBounds(nested);
                 int titleMarker=nested.Text.LastIndexOf("[P2]",StringComparison.Ordinal);
                 int bodyX=nested.Bounds.Left+2+TextRenderer.MeasureText(nested.Text.Substring(0,titleMarker)+"x",tasks.Font,Size.Empty,TextFormatFlags.NoPadding).Width-TextRenderer.MeasureText("x",tasks.Font,Size.Empty,TextFormatFlags.NoPadding).Width+2;
@@ -139,10 +149,10 @@ internal sealed partial class FloatingWindow {
             if(clicks!=cancelBefore)throw new Exception("Releasing outside a priority link should cancel it");
             SendSimpleMessage(tasks.Handle,0x114,new IntPtr(6),IntPtr.Zero);longNode.Text="1. [P0] 点击优先级标记即可修改";Size=new Size(390,570);longNode.EnsureVisible();tasks.SelectedNode=null;tasks.Refresh();
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-priority-links-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 and nested tasks in full/simple mode; title markers and outstanding leaves excluded; single/double-click isolated from checks, drag, expansion, progress editor; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
+            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 and nested tasks in full/simple mode; title markers and outstanding leaves excluded; task double-click invokes its action without changing expanded/collapsed state; priority single/double-click isolated from checks, drag and expansion; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
         } finally {
             tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.AfterExpand-=expand;tasks.AfterCollapse-=expand;
-            InvalidateSimpleOutstanding();tasks.PriorityClicked=originalCallback;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
+            InvalidateSimpleOutstanding();tasks.PriorityClicked=originalCallback;tasks.NodeDoubleClicked=originalDoubleClick;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
             if(originalMode)SetSimpleMode(true);tasks.SetSimpleImageLinks(true);Size=originalSize;
             if(originalSelected!=null && originalSelected.TreeView==tasks)tasks.SelectedNode=originalSelected;
             rendering=originalRendering;simpleDetailsTesting=originalTesting;SetBusy(originalBusy);

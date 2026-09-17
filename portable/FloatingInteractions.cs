@@ -17,6 +17,7 @@ internal sealed partial class TaskTreeView : TreeView {
     internal int DropZone;
     internal bool Dropping;
     internal Action<TreeNode> CompletionClicked;
+    internal Action<TreeNode> NodeDoubleClicked;
     readonly ImageList completionImages=CreateCompletionImages();
     TreeNode pressedCompletionNode;
     bool swallowCompletionUp;
@@ -74,6 +75,15 @@ internal sealed partial class TaskTreeView : TreeView {
         }
         return false;
     }
+    bool HandleTaskDoubleClick(ref Message message) {
+        if(message.Msg!=0x203 || !Enabled)return false;
+        long coordinates=message.LParam.ToInt64();
+        var point=new Point(unchecked((short)(coordinates&0xffff)),unchecked((short)((coordinates>>16)&0xffff)));
+        var node=GetNodeAt(point);if(node==null)return false;
+        Focus();SelectedNode=node;
+        if(NodeDoubleClicked!=null)NodeDoubleClicked(node);
+        return true;
+    }
     protected override void OnKeyDown(KeyEventArgs e) {
         if(e.KeyCode==Keys.Space && Enabled && SelectedNode!=null && SelectedNode.Tag is long) {
             e.Handled=true;e.SuppressKeyPress=true;if(CompletionClicked!=null)CompletionClicked(SelectedNode);return;
@@ -83,6 +93,7 @@ internal sealed partial class TaskTreeView : TreeView {
     protected override void WndProc(ref Message message) {
         if(HandleCompletionMessage(ref message)) return;
         if(HandleSimpleImageMessage(ref message)) return;
+        if(HandleTaskDoubleClick(ref message)) return;
         if(HandleWindowDragMessage(ref message)) return;
         base.WndProc(ref message);
         if(message.Msg != 0xF || !Dropping) return;
@@ -121,15 +132,13 @@ internal sealed partial class FloatingWindow {
         return raw >= 1 && raw <= 10 ? 10-(int)raw : 9;
     }
     void InitializeInteractions() {
-        var pictures = new Button {Text="查看图片",AutoSize=true};
         tasks.PriorityClicked += async delegate(TreeNode node) {
             if(busy || closing || dragging || node == null || !(node.Tag is long) || node.TreeView != tasks)return;
             tasks.SelectedNode=node;hoverTimer.Stop();progressTip.Hide(tasks);
             await ShowPriority();
         };
         tasks.SetSimpleImageLinks(true);
-        pictures.Click += async delegate {await ShowSelectedImages();};
-        toolbar.Controls.AddRange(new Control[]{pictures,priorityFilterButton});
+        toolbar.Controls.Add(priorityFilterButton);
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
         prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
         InitializePriorityFilter();

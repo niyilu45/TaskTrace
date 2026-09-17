@@ -38,7 +38,7 @@ internal sealed partial class FloatingWindow {
     readonly Label simpleEmpty = new Label {BorderStyle=BorderStyle.FixedSingle, Padding=new Padding(8), TextAlign=ContentAlignment.MiddleCenter, BackColor=Color.White, ForeColor=Color.FromArgb(90,100,115), Visible=false};
     readonly FlowLayoutPanel simpleActions = new FlowLayoutPanel {WrapContents=true, FlowDirection=FlowDirection.LeftToRight, Visible=false, Margin=Padding.Empty, Padding=Padding.Empty};
     readonly Button fullToggleTask = new Button {Text="展开/收起", AutoSize=true, Visible=false, AccessibleName="展开或收起选中任务"};
-    readonly Button fullAddOutstanding = new Button {Text="添加遗留事项", AutoSize=true, AccessibleName="为选中任务添加遗留事项"};
+    readonly Button fullAddOutstanding = new Button {Text="新遗留", AutoSize=true, AccessibleName="为选中任务添加遗留事项"};
     Action<long> addOutstandingRequested;
     ToolStripMenuItem trayRestoreFull, treeRestoreFull;
     bool simpleLayout, simpleActionsShown, simpleWindowWasMinimized, simpleRestoreLayoutQueued;
@@ -51,7 +51,7 @@ internal sealed partial class FloatingWindow {
         addOutstandingRequested=delegate(long id){ShowOutstanding(id);};
         fullToggleTask.Click+=delegate {SetSelectedSimpleTaskExpanded(null);};
         fullAddOutstanding.Click+=delegate {AddSelectedOutstanding();};
-        toolbar.Controls.AddRange(new Control[]{fullToggleTask,fullAddOutstanding});
+        toolbar.Controls.Add(fullToggleTask);
         restoreSimple.Margin=new Padding(0,0,6,4);simpleActions.Controls.Add(restoreSimple);
         Controls.Add(simpleActions);Controls.Add(simpleEmpty);
         Resize+=delegate {SimpleModeResized();};
@@ -316,7 +316,8 @@ internal sealed partial class FloatingWindow {
             SetBusy(true);if(!restoreSimple.Enabled || simpleActions.Controls.Count!=1)throw new Exception("Busy state hid the only simple-mode recovery action");
             SetBusy(false);
             SetSimpleMode(false);tasks.SelectedNode=child;UpdateSimpleActionState();
-            if(!fullAddOutstanding.Visible || !fullAddOutstanding.Enabled || fullAddOutstanding.Parent!=toolbar || !priorityFilterButton.Visible || fullToggleTask.Visible)throw new Exception("Full mode is missing shared actions or exposes expansion for an empty task");
+            var bottomLabels=bottomActions.Controls.Cast<Control>().Select(control=>control.Text).ToArray();
+            if(!bottomLabels.SequenceEqual(new[]{"记录进展","新事项","新任务","新遗留"}) || !fullAddOutstanding.Visible || !fullAddOutstanding.Enabled || fullAddOutstanding.Parent!=bottomActions || !priorityFilterButton.Visible || fullToggleTask.Visible)throw new Exception("Full mode is missing the four bottom actions or exposes expansion for an empty task");
             fullAddOutstanding.PerformClick();if(clicks!=1 || requested!=910002L)throw new Exception("Full add action did not target the selected task");
             var normalLeaf=new TreeNode("1. 待核对"){Tag=new OutstandingLeaf{TaskId=910002L,Id="full-action",Html="待核对"}};
             child.Nodes.Add(normalLeaf);owner.Expand();child.Expand();
@@ -343,11 +344,7 @@ internal sealed partial class FloatingWindow {
             }
             string filterText=priorityFilterButton.Text;
             priorityFilterButton.Text="按优先级 (9/10)";assertToolbar();priorityFilterButton.Text=filterText;assertToolbar();
-            int unfoldedHeight=Height;ToggleFold();assertToolbar();
-            if(content.Visible || ClientSize.Height!=toolbar.Height)throw new Exception("Folded window did not fit all toolbar rows");
-            Width=350;assertToolbar();if(ClientSize.Height!=toolbar.Height)throw new Exception("Narrow folded toolbar was clipped");
-            Width=900;assertToolbar();if(ClientSize.Height!=toolbar.Height)throw new Exception("Wide folded toolbar retained blank rows");
-            ToggleFold();if(Height!=unfoldedHeight || !content.Visible)throw new Exception("Full window lost its expanded height");
+            if(toolbar.Controls.Cast<Control>().Any(control=>new[]{"收起","展开","刷新","撤销","查看图片","新事项"}.Contains(control.Text)))throw new Exception("A removed toolbar action is still visible");
             var fullArea=Bounds;tasks.SelectedNode=normalLeaf;tasks.TopNode=owner;
             var top=tasks.TopNode;int loads=taskLoadVersion,reads=simpleOutstandingVersion;
             string context=TaskViewContext();
@@ -356,7 +353,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);assertToolbar();
             if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || !child.IsExpanded || tasks.TopNode!=top || taskLoadVersion!=loads || simpleOutstandingVersion!=reads || TaskViewContext()!=context)throw new Exception("Mode switching refreshed data or lost shared tree state");
             if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions");
-            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: full-mode add and selected-owner expand/collapse actions; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; 350/400/900 widths without clipped actions or reserved rows; priority label reflow; folded resizing fits toolbar; expanded size and mode switches retained.");
+            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; selected-owner expand/collapse action; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts without clipped actions; removed toolbar actions absent; priority label reflow; mode switches retained.");
             File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: simple mode exposes only the restore button; task-tree expand/collapse and direct outstanding items remain usable; restore remains available while busy; narrow footer fits; focus preserves viewport.");
         } finally {
             addOutstandingRequested=callback;rendering=true;if(collapsed)ToggleFold();SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
