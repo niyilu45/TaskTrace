@@ -41,6 +41,7 @@
 			>暂无描述</span>
 		</td>
 		<td class="outstanding-cell">
+			<strong v-if="descendants?.length">任务自身</strong>
 			<span
 				v-if="loading"
 				class="empty"
@@ -57,6 +58,10 @@
 				v-else
 				class="empty"
 			>暂无遗留事项</span>
+			<SubtaskOutstandingSummary
+				v-if="descendants?.length"
+				:tasks="descendants"
+			/>
 		</td>
 		<td class="progress-cell">
 			<p
@@ -97,8 +102,9 @@ import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
 import {sortProgressNotes} from '@/helpers/progressNotes'
+import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
-const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean}>()
+const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[]}>()
 defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()
 const history = ref<TaskComment[]>([])

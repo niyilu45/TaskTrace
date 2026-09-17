@@ -83,6 +83,7 @@
 							<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
 								<ProjectProgressRow
 									:task="group.root"
+									:descendants="group.rows.slice(1).map(row => row.task)"
 									:depth="0"
 								/>
 							</tbody>
