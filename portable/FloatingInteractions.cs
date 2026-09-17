@@ -293,9 +293,9 @@ internal sealed partial class FloatingWindow {
             string source=AttachmentPath(match.Groups[1].Value);if(source!=null && !images.Any(image=>image.Source==source))images.Add(new GalleryImage{Source=source,Caption=caption});
         }
     }
-    async Task<List<GalleryImage>> GatherImages(long taskId,string onlyHtml,Form gallery){
+    async Task<List<GalleryImage>> GatherImages(long taskId,string onlyHtml,Form gallery,string scopeLabel=null){
         var images=new List<GalleryImage>();
-        if(onlyHtml!=null){CollectImages(images,onlyHtml,TaskTitle(taskId)+" · 遗留事项");return images;}
+        if(onlyHtml!=null){CollectImages(images,onlyHtml,TaskTitle(taskId)+" · "+(scopeLabel??"遗留事项"));return images;}
         var queue=new Queue<long>();var seen=new HashSet<long>();queue.Enqueue(taskId);
         while(queue.Count>0 && !gallery.IsDisposed){
             long id=queue.Dequeue();if(!seen.Add(id))continue;
@@ -303,7 +303,7 @@ internal sealed partial class FloatingWindow {
             CollectImages(images,Convert.ToString(task["description"]),title+" · 描述");
             var history=await ReadHistory(id);var shared=ReadShared(history);int index=0;
             foreach(var item in shared.Items)CollectImages(images,item.Html,title+" · 遗留事项 "+(++index));
-            foreach(var note in DailyHistory(history))CollectImages(images,ProgressBody((string)note["comment"]),title+" · "+DayOf(note)+" 进展");
+            foreach(var note in DailyHistory(history))CollectImages(images,ProgressDisplayBody((string)note["comment"]),title+" · "+DayOf(note)+" 进展");
             foreach(var note in history.Where(note=>DayOf(note)=="" && !((string)note["comment"]).Contains(SharedHeading)))CollectImages(images,(string)note["comment"],title+" · 备注");
             var relations=task["related_tasks"] as Dictionary<string,object>;if(relations!=null && relations.ContainsKey("subtask"))foreach(Dictionary<string,object> child in (IEnumerable)relations["subtask"])if(Convert.ToInt64(child["project_id"])==Convert.ToInt64(task["project_id"]))queue.Enqueue(Convert.ToInt64(child["id"]));
         }
@@ -325,7 +325,7 @@ internal sealed partial class FloatingWindow {
         if(busy || closing)return;long id=SelectedTaskId();if(id==0){status.Text="请先选中任务或遗留事项。";return;}
         var leaf=tasks.SelectedNode.Tag as OutstandingLeaf;await ShowImageGallery(id,leaf==null?null:leaf.Html,this);
     }
-    async Task ShowImageGallery(long id,string onlyHtml,Form owner){
+    async Task ShowImageGallery(long id,string onlyHtml,Form owner,string scopeLabel=null){
         var gallery=new Form{Text="查看图片 · "+TaskTitle(id),Size=new Size(800,650),MinimumSize=new Size(400,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false};
         var heading=new Label{Dock=DockStyle.Top,Height=42,Padding=new Padding(12,10,12,0),Text="正在收集图片…"};
         var flow=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(10)};
@@ -333,8 +333,8 @@ internal sealed partial class FloatingWindow {
         gallery.FormClosed+=delegate{foreach(var image in bitmaps)image.Dispose();};
         gallery.Show(owner);
         try{
-            var images=await GatherImages(id,onlyHtml,gallery);if(gallery.IsDisposed)return;
-            heading.Text=images.Count==0?"没有图片。可在遗留事项、任务描述或每日进展中添加。":images.Count+" 张图片 · "+(onlyHtml==null?"当前任务及所有下级任务":"当前遗留事项");
+            var images=await GatherImages(id,onlyHtml,gallery,scopeLabel);if(gallery.IsDisposed)return;
+            heading.Text=images.Count==0?"没有图片。可在遗留事项、任务描述或每日进展中添加。":images.Count+" 张图片 · "+(onlyHtml==null?"当前任务及所有下级任务":(scopeLabel??"当前遗留事项"));
             int loaded=0;
             foreach(var item in images){
                 if(gallery.IsDisposed)return;

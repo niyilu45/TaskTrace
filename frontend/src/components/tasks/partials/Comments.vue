@@ -7,6 +7,7 @@
 		<DailyProgress
 			v-if="canWrite"
 			:key="taskId"
+			ref="dailyProgress"
 			:task-id="taskId"
 			@saved="dailyProgressSaved"
 		/>
@@ -31,6 +32,22 @@
 			</BaseButton>
 		</h2>
 		<div class="comments">
+			<p
+				v-if="sourceMessage"
+				role="status"
+			>
+				{{ sourceMessage }}
+			</p>
+			<div
+				v-if="linkedComment && !comments.some(item => item.id === linkedComment?.id)"
+				:id="`comment-${linkedComment.id}`"
+				class="media comment linked-comment"
+			>
+				<div class="media-content">
+					<strong>引用的原记录</strong>
+					<ReadonlyRichText :html="linkedComment.comment" />
+				</div>
+			</div>
 			<span
 				v-if="taskCommentService.loading && saving === null && !creating"
 				class="is-flex is-align-items-center mbs-4 mbe-4 mis-2"
@@ -106,7 +123,30 @@
 							</span>
 						</CustomTransition>
 					</div>
+					<template v-if="referencedDates[c.id]">
+						<ReadonlyRichText :html="c.comment" />
+						<div
+							v-if="canWrite && c.author.id === currentUserId"
+							class="reference-comment-actions d-print-none"
+						>
+							<button
+								type="button"
+								class="button is-small"
+								@click="editDailyProgress(referencedDates[c.id])"
+							>
+								编辑当天进展
+							</button>
+							<button
+								type="button"
+								class="button is-small"
+								@click="toggleDelete(c.id)"
+							>
+								{{ $t('misc.delete') }}
+							</button>
+						</div>
+					</template>
 					<Editor
+						v-else
 						v-model="c.comment"
 						:is-edit-enabled="canWrite && c.author.id === currentUserId"
 						:upload-callback="attachmentUpload"
@@ -229,6 +269,10 @@ import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {useI18n} from 'vue-i18n'
+import {useRoute} from 'vue-router'
+import {taskCommentsRead, type TaskComment} from '@/client/generated'
+import {parseProgressNote} from '@/helpers/progressNotes'
+import ReadonlyRichText from './ReadonlyRichText.vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
@@ -264,6 +308,40 @@ const props = withDefaults(defineProps<{
 })
 
 const copy = useCopyToClipboard()
+const route = useRoute()
+const dailyProgress = ref<InstanceType<typeof DailyProgress> | null>(null)
+const linkedComment = ref<TaskComment | null>(null)
+const sourceMessage = ref('')
+let sourceRequest = 0
+const referencedDates = computed<Record<number, string>>(() => Object.fromEntries(comments.value.flatMap(comment => {
+	const note = parseProgressNote({comment: comment.comment})
+	return note.daily && note.references.length ? [[comment.id, note.date]] : []
+})))
+async function editDailyProgress(date: string) {
+	if (!await dailyProgress.value?.switchDate(date)) return
+	const input = document.getElementById(`progress-text-${props.taskId}`)
+	input?.scrollIntoView({block: 'center', behavior: 'smooth'})
+	input?.focus({preventScroll: true})
+}
+async function revealSourceComment() {
+	const request = ++sourceRequest
+	const id = Number(route.hash.match(/^#comment-([1-9]\d*)$/)?.[1])
+	linkedComment.value = null; sourceMessage.value = ''
+	if (!Number.isSafeInteger(id) || id < 1 || !enabled.value) return
+	try {
+		if (!comments.value.some(comment => comment.id === id)) {
+			sourceMessage.value = '正在读取原记录…'
+			const result = await taskCommentsRead({path: {task: props.taskId, commentid: id}})
+			if (request !== sourceRequest) return
+			linkedComment.value = result.data
+		}
+		sourceMessage.value = ''
+		await nextTick()
+		if (request === sourceRequest) scrollAndHighlightComment(id)
+	} catch {
+		if (request === sourceRequest) sourceMessage.value = '原记录暂时无法读取，可能已删除或无访问权限；引用中的快照仍可查看。'
+	}
+}
 
 const {t} = useI18n({useScope: 'global'})
 const configStore = useConfigStore()
@@ -278,6 +356,7 @@ const uploading = ref(0)
 function rememberComments() {
 	savedComments.clear()
 	comments.value.forEach(comment => savedComments.set(comment.id, comment.comment))
+	void revealSourceComment()
 }
 
 const showDeleteModal = ref(false)
@@ -449,6 +528,8 @@ watch(
 	{immediate: true},
 )
 
+watch(() => route.hash, revealSourceComment)
+
 const editorActive = ref(true)
 const creating = ref(false)
 
@@ -508,6 +589,7 @@ onBeforeUnmount(() => {
 		changeTimeout.value = null
 		if (!undoInProgress.value) void editComment()
 	}
+	sourceRequest++
 	disposed = true
 })
 
@@ -567,6 +649,13 @@ function getCommentUrl(commentId: string) {
 </script>
 
 <style lang="scss" scoped>
+.reference-comment-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .5rem;
+	margin-block-start: .5rem;
+}
+
 .media {
 	align-items: flex-start;
 	display: flex;

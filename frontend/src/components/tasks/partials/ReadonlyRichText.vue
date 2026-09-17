@@ -15,7 +15,11 @@ let version = 0
 watch(() => props.html, async value => {
 	const current = ++version
 	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(value || '', {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
-	for (const anchor of doc.querySelectorAll('a')) { anchor.removeAttribute('target'); anchor.setAttribute('rel', 'noopener noreferrer') }
+	for (const anchor of doc.querySelectorAll('a')) {
+		anchor.removeAttribute('target')
+		anchor.setAttribute('rel', 'noopener noreferrer')
+		if (anchor.closest('blockquote[data-tasktrace-reference="1"]') && /^\/tasks\/\d+#comment-\d+$/.test(anchor.getAttribute('href') || '')) anchor.setAttribute('target', '_blank')
+	}
 	const images = Array.from(doc.querySelectorAll('img'))
 	await Promise.all(images.map(async image => {
 		const source = image.getAttribute('data-src') || image.getAttribute('src') || ''
@@ -37,6 +41,13 @@ onBeforeUnmount(() => version++)
 <style scoped lang="scss">
 .readonly-rich-text {
 	overflow-wrap: anywhere;
+	:deep(blockquote[data-tasktrace-reference="1"]) {
+		margin: .65rem 0;
+		padding: .4rem .75rem;
+		border-inline-start: 3px solid var(--grey-300);
+		background: var(--grey-50);
+		font-size: .9em;
+	}
 	:deep(img) {
 	max-inline-size: 100%;
 	max-block-size: 24rem;

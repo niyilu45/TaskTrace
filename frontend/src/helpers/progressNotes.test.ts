@@ -1,41 +1,42 @@
 import {describe, it, expect} from 'vitest'
 import {parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes} from './progressNotes'
+import {serializeProgressReferences, type ProgressReference} from './progressReferences'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
- it('sorts by entered dates even when older progress was entered later', () => {
-  const notes = sortProgressNotes([{id: 1, created: '2026-09-20T10:00:00Z', comment: daily('2026-09-19', 'new')}, {id: 2, created: '2026-09-21T10:00:00Z', comment: daily('2026-09-16', 'old')}])
-  expect(notes.map(note => note.id)).toEqual([1, 2])
- })
- it('splits outstanding items without dropping progress images', () => {
-  const note = parseProgressNote({comment: daily('2026-09-19', '完成测试', '等待确认') + '<p><img src="/api/v1/tasks/1/attachments/2"></p>'})
-  expect(note.outstanding).toBe('等待确认')
-  expect(note.progress).toContain('完成测试')
-  expect(note.progress).toContain('<img')
-  expect(note.progress).not.toContain('等待确认')
-  expect(note.progress).not.toContain('每日进展')
- })
- it('keeps normal comments and uses their creation date', () => {
-  const note = parseProgressNote({comment: '<p>普通记录</p>', created: '2026-09-10T12:00:00'})
-  expect(note.date).toBe('2026-09-10')
-  expect(note.progress).toContain('普通记录')
-  expect(note.daily).toBe(false)
- })
- it('clears earlier outstanding items when latest daily record has none', () => {
-  const notes = sortProgressNotes([{comment: daily('2026-09-18', '全部完成')}, {comment: daily('2026-09-17', '处理中', '待确认')}])
-  expect(notes[0].outstanding).toBe('')
- })
+	it('sorts by entered dates even when older progress was entered later', () => {
+		const notes = sortProgressNotes([{id: 1, created: '2026-09-20T10:00:00Z', comment: daily('2026-09-19', 'new')}, {id: 2, created: '2026-09-21T10:00:00Z', comment: daily('2026-09-16', 'old')}])
+		expect(notes.map(note => note.id)).toEqual([1, 2])
+	})
+	it('splits outstanding items without dropping progress images', () => {
+		const note = parseProgressNote({comment: daily('2026-09-19', '完成测试', '等待确认') + '<p><img src="/api/v1/tasks/1/attachments/2"></p>'})
+		expect(note.outstanding).toBe('等待确认')
+		expect(note.progress).toContain('完成测试')
+		expect(note.progress).toContain('<img')
+		expect(note.progress).not.toContain('等待确认')
+		expect(note.progress).not.toContain('每日进展')
+	})
+	it('keeps normal comments and uses their creation date', () => {
+		const note = parseProgressNote({comment: '<p>普通记录</p>', created: '2026-09-10T12:00:00'})
+		expect(note.date).toBe('2026-09-10')
+		expect(note.progress).toContain('普通记录')
+		expect(note.daily).toBe(false)
+	})
+	it('clears earlier outstanding items when latest daily record has none', () => {
+		const notes = sortProgressNotes([{comment: daily('2026-09-18', '全部完成')}, {comment: daily('2026-09-17', '处理中', '待确认')}])
+		expect(notes[0].outstanding).toBe('')
+	})
 })
 
 it('merges same-day content and images while hiding absorbed source records', () => {
- const original = [{id: 1, comment: daily('2026-09-20', 'first')}, {id: 2, comment: daily('2026-09-20', 'second') + '<img src="/api/v1/tasks/1/attachments/9">'}]
- const merged = mergedDay(original, '2026-09-20')
- expect(merged.text).toContain('first')
- expect(merged.text).toContain('second')
- expect(merged.images).toContain('/attachments/9')
- expect(merged.mergedIds).toEqual([1])
- const saved = {...original[1], comment: '<h3 data-tasktrace-merged="1">每日进展 · 2026-09-20</h3><p>edited</p>'}
- expect(sortProgressNotes([original[0], saved]).map(note => note.id)).toEqual([2])
- expect(mergedDay([original[0], saved], '2026-09-20').mergedIds).toEqual([1])
+	const original = [{id: 1, comment: daily('2026-09-20', 'first')}, {id: 2, comment: daily('2026-09-20', 'second') + '<img src="/api/v1/tasks/1/attachments/9">'}]
+	const merged = mergedDay(original, '2026-09-20')
+	expect(merged.text).toContain('first')
+	expect(merged.text).toContain('second')
+	expect(merged.images).toContain('/attachments/9')
+	expect(merged.mergedIds).toEqual([1])
+	const saved = {...original[1], comment: '<h3 data-tasktrace-merged="1">每日进展 · 2026-09-20</h3><p>edited</p>'}
+	expect(sortProgressNotes([original[0], saved]).map(note => note.id)).toEqual([2])
+	expect(mergedDay([original[0], saved], '2026-09-20').mergedIds).toEqual([1])
 })
 
 describe('progress date range', () => {
@@ -93,5 +94,37 @@ describe('progress date range', () => {
 		const unknown = notesWithDates(['日期未知', '2026-02-30'])
 		expect(limitProgressNotes(empty, 7)).toBe(empty)
 		expect(limitProgressNotes(unknown, 7)).toBe(unknown)
+	})
+})
+describe('progress reference isolation', () => {
+	const ref: ProgressReference = {id: 'r0123456789abcdef0123456789abcdef', taskId: 123, date: '2026-09-17', commentIds: [55], html: '<p>引用旧内容</p><p><img src="/api/v1/tasks/123/attachments/4"></p>'}
+	it('keeps full display HTML but excludes quotes from editable text and own images', () => {
+		const history = [{id: 90, comment: daily('2026-09-18', '今日更正', '仍然待办') + '<p><img src="/api/v1/tasks/123/attachments/6"></p>' + serializeProgressReferences([ref])}]
+		const note = parseProgressNote(history[0])
+		expect(note.progress).toContain('引用旧内容')
+		expect(note.ownProgress).not.toContain('引用旧内容')
+		expect(note.outstanding).toBe('仍然待办')
+		const merged = mergedDay(history, '2026-09-18')
+		expect(merged.text).toBe('今日更正')
+		expect(merged.html).not.toContain('data-tasktrace-reference')
+		expect(merged.images).toContain('/attachments/6')
+		expect(merged.images).not.toContain('/attachments/4')
+		expect(merged.references).toEqual([ref])
+	})
+	it('deduplicates identical reference IDs during day merge without hiding source records', () => {
+		const second = {...ref, id: 'rfedcba9876543210fedcba9876543210', html: '<p>不同快照</p>'}
+		const history = [
+			{id: 55, comment: daily('2026-09-17', '历史原记录')},
+			{id: 90, comment: daily('2026-09-18', '更正一') + serializeProgressReferences([ref])},
+			{id: 91, comment: daily('2026-09-18', '更正二') + serializeProgressReferences([ref, second])},
+		]
+		const merged = mergedDay(history, '2026-09-18')
+		expect(merged.id).toBe(91)
+		expect(merged.mergedIds).toEqual([90])
+		expect(merged.references.map(value => value.id)).toEqual([ref.id, second.id])
+		expect(sortProgressNotes(history).map(note => note.id)).toEqual([91, 90, 55])
+		const saved = {...history[2], comment: '<h3 data-tasktrace-merged="90">每日进展 · 2026-09-18</h3>' + merged.html + serializeProgressReferences(merged.references)}
+		expect(sortProgressNotes([history[0], history[1], saved]).map(note => note.id)).toEqual([91, 55])
+		expect(mergedDay([history[0], history[1], saved], '2026-09-18').references).toEqual(merged.references)
 	})
 })

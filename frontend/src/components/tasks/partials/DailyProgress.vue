@@ -13,7 +13,7 @@
 			v-if="restoring"
 			type="button"
 			class="button"
-			:disabled="saving"
+			:disabled="saving || referenceLoading"
 			@click="switchDate(date, true)"
 		>
 			重新读取当天进展
@@ -25,7 +25,7 @@
 			class="input"
 			type="date"
 			required
-			:disabled="saving"
+			:disabled="saving || referenceLoading"
 			@change="switchDate(($event.target as HTMLInputElement).value)"
 		>
 		<label :for="`progress-text-${taskId}`">今日进展</label>
@@ -37,9 +37,75 @@
 			placeholder="今天完成了什么？"
 			:disabled="saving || restoring"
 		/>
+		<div class="reference-picker">
+			<label :for="`reference-date-${taskId}`">引用历史进展</label>
+			<div class="reference-picker-actions">
+				<div class="select">
+					<select
+						:id="`reference-date-${taskId}`"
+						v-model="referenceDate"
+						aria-label="选择要引用的进展日期"
+						:disabled="saving || restoring || referenceLoading"
+					>
+						<option value="">
+							选择历史日期
+						</option>
+						<option
+							v-for="day in referenceDates"
+							:key="day"
+							:value="day"
+						>
+							{{ day }}
+						</option>
+					</select>
+				</div>
+				<button
+					type="button"
+					class="button"
+					:disabled="!referenceDate || saving || restoring || referenceLoading"
+					@click="addReference"
+				>
+					{{ referenceLoading ? '正在读取…' : '添加引用' }}
+				</button>
+			</div>
+			<p class="reference-hint">
+				选择更早日期的进展，在“今日进展”中填写更正。引用保留当时内容，原记录不变。
+			</p>
+		</div>
+		<section
+			v-if="references.length"
+			aria-label="已引用的历史进展"
+			class="progress-references"
+		>
+			<article
+				v-for="reference in references"
+				:key="reference.id"
+				class="progress-reference"
+				:data-reference-date="reference.date"
+			>
+				<div class="reference-heading">
+					<strong>引用 {{ reference.date }} 的进展</strong>
+					<a
+						:href="`/tasks/${reference.taskId}#comment-${Math.max(...reference.commentIds)}`"
+						target="_blank"
+						rel="noopener noreferrer"
+					>查看原记录</a>
+					<button
+						type="button"
+						class="button is-small"
+						:aria-label="`移除 ${reference.date} 的引用`"
+						:disabled="saving || restoring || referenceLoading"
+						@click="references = references.filter(item => item.id !== reference.id)"
+					>
+						移除引用
+					</button>
+				</div>
+				<ReadonlyRichText :html="reference.html" />
+			</article>
+		</section>
 		<SharedOutstanding
 			:task-id="taskId"
-			:disabled="saving"
+			:disabled="saving || referenceLoading"
 			@saved="emit('saved')"
 			@busy="sharedBusy = $event"
 		/>
@@ -74,7 +140,7 @@
 			<button
 				class="button is-primary"
 				type="submit"
-				:disabled="saving || restoring || sharedBusy || (!progress.trim() && images.length === 0 && !autoCommentId)"
+				:disabled="saving || referenceLoading || restoring || sharedBusy || (!progress.trim() && images.length === 0 && !references.length && !autoCommentId)"
 			>
 				{{ saving ? '正在保存…' : '保存进展' }}
 			</button>
@@ -85,14 +151,15 @@
 
 <script setup lang="ts">
 import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
-import {ref, reactive, watch, onBeforeUnmount} from 'vue'
+import {ref, reactive, computed, watch, onBeforeUnmount} from 'vue'
 import {taskCommentsCreate, taskCommentsUpdate, taskAttachmentsUpload} from '@/client/generated'
 import AutoSaveSettings from './AutoSaveSettings.vue'
 import SharedOutstanding from './SharedOutstanding.vue'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {readTaskHistory, sharedOutstanding, changeOutstanding} from '@/helpers/sharedOutstanding'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
-import {mergedDay} from '@/helpers/progressNotes'
+import {mergedDay, sortProgressNotes} from '@/helpers/progressNotes'
+import {createProgressReference, normalizeProgressReferences, serializeProgressReferences, type ProgressReference} from '@/helpers/progressReferences'
 import {useAutoSave} from '@/helpers/autoSave'
 const props = defineProps<{taskId: number}>()
 const emit = defineEmits<{saved: []}>()
@@ -106,13 +173,20 @@ const mergedIds = ref<number[]>([])
 const autoCommentId = ref<number>()
 const saving = ref(false)
 const sharedBusy = ref(false)
+const references = ref<ProgressReference[]>([])
+const referenceDate = ref('')
+const referenceLoading = ref(false)
+const referenceHistory = ref<Awaited<ReturnType<typeof readTaskHistory>>>([])
+const referenceDates = computed(() => [...new Set(sortProgressNotes(referenceHistory.value)
+	.filter(note => note.daily && note.date < date.value && !references.value.some(reference => reference.date === note.date))
+	.map(note => note.date))].sort().reverse())
 const restoring = ref(true)
 const message = ref('')
 const lastSaved = ref('')
 let version = 0
-const snapshot = () => JSON.stringify([date.value, progress.value, images.value.map(image => image.attachmentId || image.preview)])
-const drafts = reactive(new Map<string, {text: string, images: typeof images.value}>())
-useTasktraceUndoGuard(() => saving.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
+const snapshot = () => JSON.stringify([date.value, progress.value, images.value.map(image => image.attachmentId || image.preview), references.value])
+const drafts = reactive(new Map<string, {text: string, images: typeof images.value, references: ProgressReference[]}>())
+useTasktraceUndoGuard(() => saving.value || referenceLoading.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
 function stash() {
 	if (undoInProgress.value || restoring.value || !date.value) return
 	if (snapshot() === lastSaved.value) {
@@ -124,11 +198,12 @@ function stash() {
 		} catch { /* Optional draft cleanup. */ }
 		return
 	}
-	drafts.set(`${props.taskId}:${date.value}`, {text: progress.value, images: [...images.value]})
-	try { localStorage.setItem(`tasktrace-day-draft-${props.taskId}-${date.value}`, JSON.stringify({progress: progress.value, attachments: images.value.map(image => image.attachmentId).filter(Boolean)})) } catch { /* Server save remains available. */ }
+	drafts.set(`${props.taskId}:${date.value}`, {text: progress.value, images: [...images.value], references: normalizeProgressReferences(references.value)})
+	try { localStorage.setItem(`tasktrace-day-draft-${props.taskId}-${date.value}`, JSON.stringify({progress: progress.value, references: references.value, attachments: images.value.map(image => image.attachmentId).filter(Boolean)})) } catch { /* Server save remains available. */ }
 }
 async function switchDate(value: string, initial = false) {
-	if (saving.value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return
+	if (saving.value || referenceLoading.value) { message.value = '正在保存或读取引用，请完成后再切换日期。'; return false }
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
 	if (!initial) stash()
 	const request = ++version
 	const taskId = props.taskId
@@ -136,11 +211,12 @@ async function switchDate(value: string, initial = false) {
 	let loaded = false
 	try {
 		const history = await readTaskHistory(taskId)
-		if (request !== version || taskId !== props.taskId) return
+		if (request !== version || taskId !== props.taskId) return false
+		referenceHistory.value = history; referenceDate.value = ''
 		const selected = mergedDay(history, value)
 		date.value = value; autoCommentId.value = selected.id; mergedIds.value = selected.mergedIds
 		originalHtml.value = selected.html; originalText.value = selected.text; existingImages.value = selected.images
-		progress.value = selected.text; images.value = []
+		progress.value = selected.text; images.value = []; references.value = normalizeProgressReferences(selected.references)
 		let draft = drafts.get(`${taskId}:${value}`)
 		if (!draft) {
 			try {
@@ -150,24 +226,44 @@ async function switchDate(value: string, initial = false) {
 				if (saved && typeof saved.progress === 'string') {
 					const pictures: typeof images.value = []
 					for (const id of saved.attachments || []) if (Number.isInteger(id) && id > 0) pictures.push({attachmentId: id, preview: await fetchAttachmentBlobUrl({taskId, id})})
-					draft = {text: saved.progress, images: pictures}
+					draft = {text: saved.progress, images: pictures, references: normalizeProgressReferences(saved.references)}
 				}
 			} catch { message.value = '草稿恢复失败，已保留服务器内容。' }
 		}
-		if (request !== version || taskId !== props.taskId) return
+		if (request !== version || taskId !== props.taskId) return false
 		lastSaved.value = snapshot()
-		if (draft) { progress.value = draft.text; images.value = draft.images }
+		if (draft) { progress.value = draft.text; images.value = draft.images; references.value = normalizeProgressReferences(draft.references) }
 		loaded = true
 		message.value = selected.id ? '已载入当天进展；同日记录合并编辑，保存会更新当天内容。' : '此日期尚无进展。'
-	} catch { message.value = '历史读取失败，已暂停保存，请重新选择日期重试。'; return }
+	} catch { message.value = '历史读取失败，已暂停保存，请重新选择日期重试。'; return false }
 	finally { if (request === version) restoring.value = !loaded }
+	return loaded
 }
 watch(() => props.taskId, async () => {
 	const now = new Date()
 	const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
 	await switchDate(today, true)
 }, {immediate: true})
-watch([progress, images], stash, {deep: true})
+watch([progress, images, references], stash, {deep: true})
+async function addReference() {
+	if (saving.value || restoring.value || referenceLoading.value || !referenceDate.value) return
+	const sourceDate = referenceDate.value
+	const taskId = props.taskId
+	const request = version
+	referenceLoading.value = true
+	try {
+		const history = await readTaskHistory(taskId)
+		if (request !== version || taskId !== props.taskId) return
+		referenceHistory.value = history
+		const reference = createProgressReference(taskId, sourceDate, date.value, mergedDay(history, sourceDate))
+		if (!reference) { message.value = '该日期已无可引用的进展，请选择其他日期。'; return }
+		if (!references.value.some(item => item.date === sourceDate)) references.value.push(reference)
+		referenceDate.value = ''
+		message.value = '已添加引用，请在今日进展中填写更正说明。'
+	} catch { message.value = '引用读取失败，现有内容已保留，请重试。' }
+	finally { referenceLoading.value = false }
+}
+defineExpose({switchDate})
 function pasteImages(event: ClipboardEvent) {
 	const files = Array.from(event.clipboardData?.items || []).filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter((file): file is File => !!file)
 	if (!files.length) return
@@ -179,7 +275,7 @@ function pasteImages(event: ClipboardEvent) {
 function removeImage(index: number) { const [picture] = images.value.splice(index, 1); if (picture?.file) URL.revokeObjectURL(picture.preview) }
 function html(value: string) { return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,'<br>') }
 async function save(automatic = false) {
-	if (undoInProgress.value || restoring.value || saving.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !autoCommentId.value)) return
+	if (undoInProgress.value || restoring.value || saving.value || referenceLoading.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !references.value.length && !autoCommentId.value)) return
 	saving.value = true
 	const taskId = props.taskId
 	const undoHeaders = undoGroupHeaders()
@@ -195,7 +291,7 @@ async function save(automatic = false) {
 			}
 			body += `<p><img src="/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}" alt="进展图片"></p>`
 		}
-		const comment = `<h3 data-tasktrace-merged="${mergedIds.value.join(',')}">每日进展 · ${date.value}</h3>${body}`
+		const comment = `<h3 data-tasktrace-merged="${mergedIds.value.join(',')}">每日进展 · ${date.value}</h3>${body}${serializeProgressReferences(references.value)}`
 		if (snapshot() !== lastSaved.value || mergedIds.value.length) {
 			if (autoCommentId.value) await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}, headers: undoHeaders})
 			else autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoHeaders})).data.id
@@ -224,6 +320,31 @@ onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.valu
 	input { max-inline-size: 12rem; }
 	label { font-weight: 600; }
 }
+.reference-picker-actions, .reference-heading {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .65rem;
+}
+.reference-picker label {
+	display: block;
+	margin-block-end: .5rem;
+}
+.reference-hint {
+	font-size: .875rem;
+	color: var(--grey-600);
+}
+.progress-references {
+	display: grid;
+	gap: .75rem;
+	min-inline-size: 0;
+}
+.progress-reference {
+	border-inline-start: 3px solid var(--grey-300);
+	padding: .5rem .75rem;
+	background: var(--grey-50);
+}
+.reference-heading { font-size: .875rem; }
 .progress-images {
     display: flex;
     flex-wrap: wrap;

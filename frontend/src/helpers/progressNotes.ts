@@ -1,4 +1,5 @@
 import type {TaskComment} from '@/client/generated'
+import {splitProgressReferences, normalizeProgressReferences} from './progressReferences'
 
 export function parseProgressNote(note: TaskComment) {
 	// Parse in an inert document; all returned HTML is sanitized by ReadonlyRichText before rendering.
@@ -21,7 +22,9 @@ export function parseProgressNote(note: TaskComment) {
 			label.remove()
 		}
 	}
-	return {id: note.id, date, daily: !!match, progress: doc.body.innerHTML, outstanding, created: Number.isNaN(+created) ? 0 : +created}
+	const progress = doc.body.innerHTML
+	const {html: ownProgress, references} = splitProgressReferences(progress)
+	return {id: note.id, date, daily: !!match, progress, ownProgress, references, outstanding, created: Number.isNaN(+created) ? 0 : +created}
 }
 
 export function sortProgressNotes(notes: TaskComment[]) {
@@ -59,11 +62,12 @@ export function mergedDay(history: TaskComment[], date: string) {
 		const heading = new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')
 		for (const id of (heading?.getAttribute('data-tasktrace-merged') || '').split(',')) if (Number(id) > 0 && Number(id) !== primary) ids.add(Number(id))
 	}
-	const html = notes.map(note => note.progress).join('')
+	const html = notes.map(note => note.ownProgress).join('')
+	const references = normalizeProgressReferences(notes.flatMap(note => note.references))
 	const doc = new DOMParser().parseFromString(html, 'text/html')
 	const images = Array.from(doc.querySelectorAll('img')).map(img => img.outerHTML).join('')
 	doc.querySelectorAll('img').forEach(img => img.remove())
 	doc.querySelectorAll('br').forEach(br => br.replaceWith('\n'))
 	doc.querySelectorAll('p,div,li').forEach(el => el.append('\n'))
-	return {id: primary, mergedIds: [...ids], html, images, text: (doc.body.textContent || '').trim()}
+	return {id: primary, mergedIds: [...ids], html, images, text: (doc.body.textContent || '').trim(), references}
 }
