@@ -91,8 +91,8 @@ func taskTraceIDs(list *taskTraceOutstandingList) []string {
 func TestTaskTraceOutstandingMove(t *testing.T) {
 	t.Run("reorder then move without losing neighboring items", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
-		sourceID := taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "<b>A</b>"}, taskTraceOutstandingItem{"b", "B"}, taskTraceOutstandingItem{"c", "C"})
-		targetID := taskTraceSeedList(t, 2, taskTraceOutstandingItem{"d", "D"})
+		sourceID := taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "<b>A</b>", ` data-done="true" data-priority="2"`}, taskTraceOutstandingItem{"b", "B", ""}, taskTraceOutstandingItem{"c", "C", ""})
+		targetID := taskTraceSeedList(t, 2, taskTraceOutstandingItem{"d", "D", ""})
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 1, ItemID: "c", BeforeItemID: "a"}))
 		assert.Equal(t, []string{"c", "a", "b"}, taskTraceIDs(taskTraceReadList(t, 1)))
 		move := &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "a", BeforeItemID: "d"}
@@ -103,13 +103,14 @@ func TestTaskTraceOutstandingMove(t *testing.T) {
 		target := taskTraceReadList(t, 2)
 		assert.Equal(t, []string{"a", "d"}, taskTraceIDs(target))
 		assert.Equal(t, "<b>A</b>", target.items[0].content)
+		assert.Equal(t, ` data-done="true" data-priority="2"`, target.items[0].metadata)
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 2, TargetTaskID: 2, ItemID: "a"}))
 		assert.Equal(t, []string{"d", "a"}, taskTraceIDs(taskTraceReadList(t, 2)))
 	})
 	t.Run("stale or duplicate item does not change either list", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "A"})
-		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B"})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "A", ""})
+		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B", ""})
 		for _, move := range []*TaskTraceOutstandingMove{
 			{TaskID: 1, TargetTaskID: 2, ItemID: "missing"},
 			{TaskID: 1, TargetTaskID: 2, ItemID: "a", BeforeItemID: "missing"},
@@ -118,7 +119,7 @@ func TestTaskTraceOutstandingMove(t *testing.T) {
 			assert.Equal(t, []string{"a"}, taskTraceIDs(taskTraceReadList(t, 1)))
 			assert.Equal(t, []string{"b"}, taskTraceIDs(taskTraceReadList(t, 2)))
 		}
-		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"a", "Other A"})
+		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"a", "Other A", ""})
 		require.ErrorAs(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "a"}), new(ErrTaskTraceOutstandingMove))
 		assert.Equal(t, "A", taskTraceReadList(t, 1).items[0].content)
 		assert.Equal(t, "Other A", taskTraceReadList(t, 2).items[0].content)
@@ -140,7 +141,7 @@ func TestTaskTraceOutstandingMove(t *testing.T) {
 	})
 	t.Run("compare and swap refuses a changed comment", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "A"})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "A", ""})
 		s := db.NewSession()
 		defer s.Close()
 		stale, err := taskTraceReadOutstanding(s, 1)
@@ -212,7 +213,7 @@ func TestTaskTraceOutstandingImages(t *testing.T) {
 		require.NoError(t, s.Commit())
 		s.Close()
 		image := fmt.Sprintf(`<img src="/api/v1/tasks/1/attachments/%d"/>`, original.ID)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"move", "image " + image + image}, taskTraceOutstandingItem{"keep", image})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"move", "image " + image + image, ""}, taskTraceOutstandingItem{"keep", image, ""})
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "move"}))
 		target := taskTraceReadList(t, 2)
 		assert.Contains(t, target.items[0].content, "/api/v1/tasks/2/attachments/")
@@ -236,8 +237,8 @@ func TestTaskTraceOutstandingImages(t *testing.T) {
 	t.Run("broken image aborts lists and cleans earlier copies", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
 		files.InitTestFileFixtures(t)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", `<img src="/api/v1/tasks/1/attachments/1"><img src="/api/v1/tasks/1/attachments/999999">`})
-		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B"})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", `<img src="/api/v1/tasks/1/attachments/1"><img src="/api/v1/tasks/1/attachments/999999">`, ""})
+		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B", ""})
 		move := &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "a"}
 		err := taskTraceRunMove(move)
 		require.Error(t, err)

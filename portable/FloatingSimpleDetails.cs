@@ -167,7 +167,7 @@ internal sealed partial class FloatingWindow {
         if(leaves.Count!=shared.Items.Count)return false;
         for(int index=0;index<leaves.Count;index++) {
             var leaf=leaves[index];var item=shared.Items[index];
-            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html)return false;
+            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.Done!=item.Done || leaf.Priority!=item.Priority)return false;
         }
         return true;
     }
@@ -220,7 +220,10 @@ internal sealed partial class FloatingWindow {
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf).ToArray())node.Nodes.Remove(child);
             for(int index=0;index<shared.Items.Count;index++) {
                 var item=shared.Items[index];
-                var leaf=new TreeNode((index+1)+". "+OutstandingText(item.Html)){Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html},StateImageIndex=0};
+                var leaf=new TreeNode((index+1)+". [P"+item.Priority+"] "+OutstandingText(item.Html)){
+                    Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html,Done=item.Done,Priority=item.Priority},Checked=item.Done,
+                    ForeColor=item.Done?Color.FromArgb(100,110,125):ForeColor,
+                    ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};
                 node.Nodes.Add(leaf);tasks.ReserveSimpleImageSpace(leaf);
             }
             tasks.SyncCompletionState(node);
@@ -269,7 +272,7 @@ internal sealed partial class FloatingWindow {
             var image=parent.Nodes[1];var plain=parent.Nodes[2];
             if(!image.Text.StartsWith("1. ") || !plain.Text.StartsWith("2. "))throw new Exception("Direct outstanding numbering failed");
             tasks.SyncCompletionStates();
-            if(parent.StateImageIndex!=1 || child.StateImageIndex!=1 || image.StateImageIndex!=0 || plain.StateImageIndex!=0)throw new Exception("Task completion boxes and outstanding alignment are not separated");
+            if(parent.StateImageIndex!=1 || child.StateImageIndex!=1 || image.StateImageIndex!=1 || plain.StateImageIndex!=1)throw new Exception("Task and outstanding completion boxes are not visible");
             tasks.SimpleImageClicked=delegate(TreeNode selected){if(selected!=image)throw new Exception("Image link selected a different leaf");};
             foreach(bool simple in new[]{false,true,false}) {
                 parent.Expand();tasks.SelectedNode=image;var sameNodes=OutstandingDescendants(tasks.Nodes).ToArray();int previousVersion=simpleOutstandingVersion;
@@ -296,7 +299,7 @@ internal sealed partial class FloatingWindow {
                     int leafPoint=((leafSpace.Top+leafSpace.Height/2)<<16)|((leafSpace.Left+leafSpace.Width/2)&0xffff);
                     SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(leafPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(leafPoint));
                     tasks.SelectedNode=child;SendSimpleMessage(tasks.Handle,0x100,new IntPtr((int)Keys.Space),IntPtr.Zero);
-                    if(completions!=2 || completionNode!=child)throw new Exception("Completion mouse/keyboard input missed its task or leaked into an outstanding row");
+                    if(completions!=3 || completionNode!=child)throw new Exception("Completion mouse/keyboard input missed a task or outstanding row");
                 } finally {tasks.CompletionClicked=originalCompletion;}
                 int clicks=0,checks=0,drags=0,doubleClicks=0;
                 TreeViewCancelEventHandler check=delegate{checks++;};ItemDragEventHandler drag=delegate{drags++;};TreeNodeMouseClickEventHandler doubleClick=delegate{doubleClicks++;};
@@ -351,7 +354,7 @@ internal sealed partial class FloatingWindow {
             stale=RefreshSimpleOutstandingWithReader(delegate(long id){return id==900001L?detachedResult.Task:Task.FromResult(new SharedList());});
             var fresh=new TreeNode("重新载入的任务"){Tag=900001L};parent.Remove();tasks.Nodes.Add(fresh);detachedResult.SetResult(changedShared);await stale;
             if(fresh.Nodes.Count!=0)throw new Exception("Detached shared read leaked into a replacement task node");
-            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: aligned task-only completion boxes with working clicks in both layouts; outstanding rows cannot toggle completion; one direct task/outstanding tree in both layouts; stable nodes and read generation across switches; shared image links and click isolation; native title drag/select targets; matching drop plans; unchanged refresh zero invalidation; cached data retained on read errors; in-flight reads survive layout changes and respect manual collapse; shared additions/edits/deletions/order; empty tasks have no placeholders; newer generation and detached-node guards.");
+            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: aligned task and outstanding completion boxes with working mouse/keyboard callbacks in both layouts; one direct task/outstanding tree in both layouts; stable nodes and read generation across switches; shared image links and click isolation; native title drag/select targets; matching drop plans; unchanged refresh zero invalidation; cached data retained on read errors; in-flight reads survive layout changes and respect manual collapse; shared additions/edits/deletions/order; empty tasks have no placeholders; newer generation and detached-node guards.");
         } finally {
             InvalidateSimpleOutstanding();tasks.SimpleImageClicked=clicked;rendering=true;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
             collapsedTasks.Clear();collapsedTasks.UnionWith(originalCollapsed);simpleCollapsedDuringRead.Clear();simpleCollapsedDuringRead.UnionWith(originalReadCollapsed);search.Text=originalSearch;

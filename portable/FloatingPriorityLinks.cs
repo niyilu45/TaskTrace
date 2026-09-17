@@ -13,7 +13,7 @@ internal sealed partial class TaskTreeView {
     bool swallowPriorityUp;
 
     static Match TaskPriorityMatch(TreeNode node) {
-        return node!=null && node.Tag is long?PriorityPrefix.Match(node.Text):Match.Empty;
+        return node!=null && (node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf)?PriorityPrefix.Match(node.Text):Match.Empty;
     }
     static int PriorityTextAdvance(string text,Font font) {
         // Appending a glyph measures trailing spaces without MeasureText's minimum-width shortcut.
@@ -24,7 +24,8 @@ internal sealed partial class TaskTreeView {
         var match=TaskPriorityMatch(node);var bounds=node.Bounds;
         if(!match.Success || bounds.Height<=0)return Rectangle.Empty;
         Font font=node.NodeFont??Font;
-        int left=bounds.Left+2+PriorityTextAdvance(match.Groups["prefix"].Value,font);
+        var image=SimpleImageBounds(node);int textLeft=image.IsEmpty?bounds.Left+2:image.Right+6;
+        int left=textLeft+PriorityTextAdvance(match.Groups["prefix"].Value,font);
         int width=PriorityTextAdvance(match.Groups["priority"].Value,font);
         return new Rectangle(left,bounds.Top,width,bounds.Height);
     }
@@ -46,8 +47,10 @@ internal sealed partial class TaskTreeView {
         if(!Enabled)foreground=SystemColors.GrayText;
         var bounds=e.Node.Bounds;
         using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,bounds);
-        var text=new Rectangle(bounds.Left+2,bounds.Top,Math.Max(0,bounds.Width-2),bounds.Height);
-        TextRenderer.DrawText(e.Graphics,e.Node.Text,font,text,foreground,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
+        var image=SimpleImageBounds(e.Node);int textLeft=image.IsEmpty?bounds.Left+2:image.Right+6;
+        if(!image.IsEmpty)using(var underline=new Font(font,font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
+        var text=new Rectangle(textLeft,bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),bounds.Height);
+        TextRenderer.DrawText(e.Graphics,e.Node.Text.TrimEnd(' '),font,text,foreground,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
         // Repaint only the marker; the native text/title and its hit-test width stay unchanged.
         using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,link);
         using(var underline=new Font(font,font.Style|FontStyle.Underline)) {
@@ -93,7 +96,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);Size=new Size(470,700);tasks.Nodes.Clear();
             for(int priority=0;priority<=9;priority++)tasks.Nodes.Add(new TreeNode((priority+1)+". [P"+priority+"] 优先级验收事项"){Tag=910000L+priority});
             var nested=new TreeNode("1.1. [P4] 子任务正文 [P2] 不是链接"){Tag=910010L};tasks.Nodes[0].Nodes.Add(nested);
-            var leaf=new TreeNode("1. [P9] 遗留正文不是优先级"){Tag=new OutstandingLeaf{TaskId=910000L,Id="plain",Html="[P9]"}};tasks.Nodes[0].Nodes.Add(leaf);
+            var leaf=new TreeNode("1. [P9] 遗留正文"){Tag=new OutstandingLeaf{TaskId=910000L,Id="plain",Html="遗留正文",Priority=9}};tasks.Nodes[0].Nodes.Add(leaf);
             var unnumbered=new TreeNode("正文中的 [P5] 不是行首优先级"){Tag=910011L};tasks.Nodes.Add(unnumbered);tasks.ExpandAll();
             tasks.PriorityClicked=delegate(TreeNode node){clicked=node;clicks++;};
             tasks.NodeDoubleClicked=delegate(TreeNode node){taskDoubleClicks++;clicked=node;};
@@ -101,7 +104,7 @@ internal sealed partial class FloatingWindow {
             foreach(bool simple in new[]{false,true}) {
                 SetSimpleMode(simple);if(simple)Size=new Size(360,570);tasks.SetSimpleImageLinks(true);
                 if(tasks.DrawMode!=TreeViewDrawMode.OwnerDrawText)throw new Exception("Priority links need owner drawing in both window modes");
-                foreach(var node in tasks.Nodes.Cast<TreeNode>().Where(item=>item!=unnumbered).Concat(new[]{nested})) {
+                foreach(var node in tasks.Nodes.Cast<TreeNode>().Where(item=>item!=unnumbered).Concat(new[]{nested,leaf})) {
                     node.EnsureVisible();tasks.Refresh();var bounds=tasks.PriorityLinkBounds(node);
                     if(bounds.IsEmpty || !tasks.ClientRectangle.Contains(new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2)))throw new Exception("Priority marker is not visible/hit-testable");
                     int before=clicks,beforeExpand=expands,beforeTaskDouble=taskDoubleClicks;clicked=null;
@@ -117,7 +120,7 @@ internal sealed partial class FloatingWindow {
                     var down=Message.Create(tasks.Handle,0x201,new IntPtr(1),new IntPtr((titlePoint.Y<<16)|(titlePoint.X&0xffff)));
                     if(titleHit.Node!=node || (titleHit.Location&TreeViewHitTestLocations.Label)==0 || tasks.HandleSimpleImageMessage(ref down))throw new Exception("Task title lost its native selection/drag target");
                 }
-                if(!tasks.PriorityLinkBounds(leaf).IsEmpty || !tasks.PriorityLinkBounds(unnumbered).IsEmpty)throw new Exception("A marker in ordinary title text was made clickable");
+                if(tasks.PriorityLinkBounds(leaf).IsEmpty || !tasks.PriorityLinkBounds(unnumbered).IsEmpty)throw new Exception("Outstanding priority marker or ordinary title exclusion failed");
                 var owner=tasks.Nodes[0];owner.Expand();owner.EnsureVisible();tasks.Refresh();
                 var ownerPriority=tasks.PriorityLinkBounds(owner);var ownerTitle=new Point(ownerPriority.Right+12,owner.Bounds.Top+owner.Bounds.Height/2);
                 int ownerCoordinates=(ownerTitle.Y<<16)|(ownerTitle.X&0xffff),ownerBeforeDouble=taskDoubleClicks;
@@ -149,7 +152,7 @@ internal sealed partial class FloatingWindow {
             if(clicks!=cancelBefore)throw new Exception("Releasing outside a priority link should cancel it");
             SendSimpleMessage(tasks.Handle,0x114,new IntPtr(6),IntPtr.Zero);longNode.Text="1. [P0] 点击优先级标记即可修改";Size=new Size(390,570);longNode.EnsureVisible();tasks.SelectedNode=null;tasks.Refresh();
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-priority-links-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 and nested tasks in full/simple mode; title markers and outstanding leaves excluded; task double-click invokes its action without changing expanded/collapsed state; priority single/double-click isolated from checks, drag and expansion; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
+            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 on tasks and outstanding items in full/simple mode; body markers excluded; task double-click invokes its action without changing expanded/collapsed state; priority single/double-click isolated from checks, drag and expansion; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
         } finally {
             tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.AfterExpand-=expand;tasks.AfterCollapse-=expand;
             InvalidateSimpleOutstanding();tasks.PriorityClicked=originalCallback;tasks.NodeDoubleClicked=originalDoubleClick;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);

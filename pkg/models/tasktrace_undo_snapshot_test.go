@@ -297,8 +297,8 @@ func TestTaskTraceUndoSnapshotOutstandingImages(t *testing.T) {
 			attachment = &TaskAttachment{TaskID: 1}
 			require.NoError(t, attachment.NewAttachment(s, bytes.NewReader([]byte("image")), "image.png", 5, actor))
 		})
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", fmt.Sprintf(`<img src="/api/v1/tasks/1/attachments/%d">`, attachment.ID)})
-		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B"})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", fmt.Sprintf(`<img src="/api/v1/tasks/1/attachments/%d">`, attachment.ID), ""})
+		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B", ""})
 		moved, _ := taskTraceUndoSnapshotMutation(t, "create", &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "a"})
 		require.NoError(t, taskTraceUndoSnapshotApply(moved, actor))
 		assert.Equal(t, []string{"a"}, taskTraceIDs(taskTraceReadList(t, 1)))
@@ -308,8 +308,8 @@ func TestTaskTraceUndoSnapshotOutstandingImages(t *testing.T) {
 	t.Run("missing original attachment refuses whole undo", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
 		files.InitTestFileFixtures(t)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", `<img src="/api/v1/tasks/1/attachments/1">`})
-		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B"})
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", `<img src="/api/v1/tasks/1/attachments/1">`, ""})
+		taskTraceSeedList(t, 2, taskTraceOutstandingItem{"b", "B", ""})
 		moved, _ := taskTraceUndoSnapshotMutation(t, "create", &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "a"})
 		taskTraceUndoSnapshotDirect(t, func(s *xorm.Session) { require.NoError(t, (&TaskAttachment{ID: 1, TaskID: 1}).Delete(s, actor)) })
 		require.ErrorAs(t, taskTraceUndoSnapshotApply(moved, actor), new(ErrTaskTraceUndoConflict))

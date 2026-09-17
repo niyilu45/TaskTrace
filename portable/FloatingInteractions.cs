@@ -38,13 +38,14 @@ internal sealed partial class TaskTreeView : TreeView {
     }
     internal void SyncCompletionState(TreeNode node) {
         if(node==null)return;
-        node.StateImageIndex=node.Tag is long?(node.Checked?2:1):0;
+        var leaf=node.Tag as FloatingWindow.OutstandingLeaf;
+        node.StateImageIndex=node.Tag is long?(node.Checked?2:1):leaf!=null?(leaf.Done?2:1):0;
         foreach(TreeNode child in node.Nodes)SyncCompletionState(child);
     }
     internal void SyncCompletionStates() {foreach(TreeNode node in Nodes)SyncCompletionState(node);}
     TreeNode CompletionNodeAt(Point point) {
         var hit=HitTest(point);
-        return hit.Node!=null && hit.Node.Tag is long && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
+        return hit.Node!=null && (hit.Node.Tag is long || hit.Node.Tag is FloatingWindow.OutstandingLeaf) && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
     }
     internal Rectangle CompletionBounds(TreeNode node) {
         if(node==null || node.TreeView!=this || !node.IsVisible)return Rectangle.Empty;
@@ -85,7 +86,7 @@ internal sealed partial class TaskTreeView : TreeView {
         return true;
     }
     protected override void OnKeyDown(KeyEventArgs e) {
-        if(e.KeyCode==Keys.Space && Enabled && SelectedNode!=null && SelectedNode.Tag is long) {
+        if(e.KeyCode==Keys.Space && Enabled && SelectedNode!=null && (SelectedNode.Tag is long || SelectedNode.Tag is FloatingWindow.OutstandingLeaf)) {
             e.Handled=true;e.SuppressKeyPress=true;if(CompletionClicked!=null)CompletionClicked(SelectedNode);return;
         }
         base.OnKeyDown(e);
@@ -133,7 +134,7 @@ internal sealed partial class FloatingWindow {
     }
     void InitializeInteractions() {
         tasks.PriorityClicked += async delegate(TreeNode node) {
-            if(busy || closing || dragging || node == null || !(node.Tag is long) || node.TreeView != tasks)return;
+            if(busy || closing || dragging || node == null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)) || node.TreeView != tasks)return;
             tasks.SelectedNode=node;hoverTimer.Stop();progressTip.Hide(tasks);
             await ShowPriority();
         };
@@ -148,7 +149,7 @@ internal sealed partial class FloatingWindow {
         menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
         var toRoot=menu.Items.Add("移为顶层任务",null,async delegate{long id=SelectedTaskId();if(id>0)await ExecuteDrop(new DropPlan{TaskId=id,ParentId=0,BeforeId=0,Message="移为顶层任务"});});
-        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;toRoot.Enabled=setPriority.Enabled && taskParents.ContainsKey(SelectedTaskId());};
+        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);toRoot.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long && taskParents.ContainsKey(SelectedTaskId());};
         InitializeUndo(menu);
         tasks.ContextMenuStrip=menu;
         tasks.NodeMouseClick+=delegate(object sender,TreeNodeMouseClickEventArgs e){if(e.Button==MouseButtons.Right)tasks.SelectedNode=e.Node;};
@@ -247,18 +248,27 @@ internal sealed partial class FloatingWindow {
         long id=(long)node.Tag;int priority=PriorityNumber(all[id]);node.Text=number+". "+"[P"+priority+"] "+(string)all[id]["title"];
         int index=0;foreach(TreeNode child in node.Nodes)if(child.Tag is long)NumberTask(child,number+"."+(++index),all);
     }
+    async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
+        var shared=ReadShared(await ReadHistory(taskId));var item=shared.Items.FirstOrDefault(value=>value.Id==itemId);
+        if(item==null)throw new Exception("这条遗留事项已被移动或移除，请刷新后重试。");
+        if(done.HasValue)item.Done=done.Value;
+        if(priority.HasValue)item.Priority=Math.Max(0,Math.Min(9,priority.Value));
+        await WriteShared(taskId,shared);
+    }
     async Task ShowPriority(){
-        if(busy || closing)return;long id=SelectedTaskId();if(id==0 || !(tasks.SelectedNode.Tag is long)){status.Text="请先选中一个任务。";return;}
+        if(busy || closing)return;var selected=tasks.SelectedNode;long id=SelectedTaskId();var leaf=selected==null?null:selected.Tag as OutstandingLeaf;
+        if(id==0 || selected==null || (!(selected.Tag is long) && leaf==null)){status.Text="请先选中一个任务或遗留事项。";return;}
         SetBusy(true);timer.Stop();
         try {
-            var current=await Api("GET","/tasks/"+id,null);
-            using(var dialog=new Form{Text="优先级 · "+(string)current["title"],Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
+            var current=leaf==null?await Api("GET","/tasks/"+id,null):null;
+            string title=leaf==null?(string)current["title"]:OutstandingText(leaf.Html);int selectedPriority=leaf==null?PriorityNumber(current):leaf.Priority;
+            using(var dialog=new Form{Text="优先级 · "+title,Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(value+(value==0?" · 最高":value==9?" · 最低（默认）":""));choice.SelectedIndex=PriorityNumber(current);
+                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(value+(value==0?" · 最高":value==9?" · 最低（默认）":""));choice.SelectedIndex=selectedPriority;
                 var save=new Button{Text="保存优先级",AutoSize=true};bool writing=false;
-                layout.Controls.Add(new Label{Text="0 最高，9 最低；默认 9。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
-                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
+                layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；默认 9。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；遗留事项默认 9。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
+                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
             await LoadTasks();
@@ -508,7 +518,7 @@ internal sealed partial class FloatingWindow {
             if(node(child).Parent!=node(b) || node(b).Nodes[0]!=node(child))throw new Exception("Compact child ordering did not survive reload");
             SetSimpleMode(false);
             var pictures=new List<PastedImage>();using(var bitmap=new Bitmap(80,50)){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.SteelBlue);using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}
-            string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});
+            string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml,Done=true,Priority=3});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});
             var target=new SharedList();target.Items.Add(new PendingItem{Id="existing",Html="已存在的遗留事项"});
             Func<long,string,TreeNode> leaf=delegate(long id,string itemId){return node(id).Nodes.Cast<TreeNode>().Single(item=>item.Tag is OutstandingLeaf && ((OutstandingLeaf)item.Tag).Id==itemId);};
             SharedList moved=null;
@@ -520,7 +530,7 @@ internal sealed partial class FloatingWindow {
                 if(append==null || append.TaskId!=a || append.TargetId!=b || append.ItemId!="drag-image" || append.BeforeItemId!="")throw new Exception("Direct outstanding task append target was not resolved");
                 await ExecuteDrop(append);
                 moved=ReadShared(await ReadHistory(b));var remaining=ReadShared(await ReadHistory(a));
-                if(moved.Items.Count!=2 || moved.Items[0].Id!="existing" || moved.Items[1].Id!="drag-image" || remaining.Items.Count!=1 || remaining.Items[0].Id!="drag-text")throw new Exception("Outstanding move lost contents or append order");
+                if(moved.Items.Count!=2 || moved.Items[0].Id!="existing" || moved.Items[1].Id!="drag-image" || !moved.Items[1].Done || moved.Items[1].Priority!=3 || remaining.Items.Count!=1 || remaining.Items[0].Id!="drag-text")throw new Exception("Outstanding move lost contents, completion, priority or append order");
                 if(moved.Items[1].Html.Contains("/tasks/"+a+"/attachments/"))throw new Exception("Moved image still depends on source task");
                 if(leaf(b,"drag-image").Parent!=node(b) || !node(b).IsExpanded)throw new Exception("Moved outstanding item was not directly visible under its task");
                 var before=MakeDropPlan(leaf(b,"drag-image"),leaf(b,"existing"),-1);
@@ -545,7 +555,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);
             foreach(var item in moved.Items)if(String.IsNullOrEmpty(OutstandingText(item.Html)))throw new Exception("Image-only outstanding title missing");
             tasks.Nodes[0].Expand();using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-interactions-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, priorities 0-9 + default 9, persisted sort setting, inline priority click saves clicked task in full/simple mode, manual drag restores manual order, shared full/simple task and direct outstanding drop targets, before/after reorder + cross-task append, copied image survives deleting source, image links + scoped/task galleries + image editor in both layouts, external URLs rejected.");
+            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, task and outstanding priorities 0-9 + default 9, persisted sort setting, inline priority links in full/simple mode, manual drag restores manual order, shared full/simple task and direct outstanding drop targets, before/after reorder + cross-task append preserving outstanding completion and priority, copied image survives deleting source, image links + scoped/task galleries + image editor in both layouts, external URLs rejected.");
         }
         {
             foreach(long id in created.AsEnumerable().Reverse())try{await Api("DELETE","/tasks/"+id,null);}catch{}

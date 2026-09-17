@@ -49,8 +49,11 @@ internal sealed partial class FloatingWindow : Form {
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
-    sealed class OutstandingLeaf { public long TaskId; public string Id, Html; }
-    sealed class PendingItem { public string Id, Html; public int Number; public override string ToString() { return Number + ". " + OutstandingText(Html); } }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html; public bool Done; public int Priority=9; }
+    sealed class PendingItem {
+        public string Id, Html; public int Number; public bool Done; public int Priority=9;
+        public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
+    }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
     const string SharedHeading = "TaskTrace 遗留事项清单";
 
@@ -138,10 +141,14 @@ internal sealed partial class FloatingWindow : Form {
         search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await Reload(); } };
         KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.F5) { e.Handled = true; projectsDirty = true; await Reload(); } };
         tasks.CompletionClicked = delegate(TreeNode node) {
-            if(rendering || busy || closing || completionPending || node==null || !(node.Tag is long) || node.TreeView!=tasks)return;
-            long id=Convert.ToInt64(node.Tag);bool done=!node.Checked;
+            if(rendering || busy || closing || completionPending || node==null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)) || node.TreeView!=tasks)return;
             completionPending=true;
-            BeginInvoke(new Action(async delegate {try{await Complete(id,done);}finally{completionPending=false;}}));
+            BeginInvoke(new Action(async delegate {
+                try {
+                    var leaf=node.Tag as OutstandingLeaf;
+                    if(leaf!=null)await CompleteOutstanding(leaf,!leaf.Done);else await Complete(Convert.ToInt64(node.Tag),!node.Checked);
+                } finally {completionPending=false;}
+            }));
         };
         tasks.NodeDoubleClicked = delegate(TreeNode node) {
             if(node.Tag is OutstandingLeaf) ShowOutstanding(((OutstandingLeaf)node.Tag).TaskId);
@@ -219,7 +226,15 @@ internal sealed partial class FloatingWindow : Form {
         var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => ((string)note["comment"]).Contains("<h3>"+SharedHeading+"</h3>"));
         if(record != null) {
             list.CommentId = Convert.ToInt64(record["id"]);
-            foreach(Match match in Regex.Matches((string)record["comment"], "<li data-id=\"([^\"]+)\">(.*?)</li>", RegexOptions.Singleline)) list.Items.Add(new PendingItem {Id=match.Groups[1].Value,Html=match.Groups[2].Value});
+            foreach(Match match in Regex.Matches((string)record["comment"], @"<li\b(?<attrs>[^>]*)>(?<body>.*?)</li>", RegexOptions.Singleline|RegexOptions.IgnoreCase)) {
+                string attrs=match.Groups["attrs"].Value;
+                var id=Regex.Match(attrs,"\\bdata-id\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
+                if(!id.Success)continue;
+                var done=Regex.Match(attrs,"\\bdata-done\\s*=\\s*\"(?<value>true|false)\"",RegexOptions.IgnoreCase);
+                var priority=Regex.Match(attrs,"\\bdata-priority\\s*=\\s*\"(?<value>[0-9])\"",RegexOptions.IgnoreCase);
+                int value=9;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
+                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=match.Groups["body"].Value,Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),Priority=Math.Max(0,Math.Min(9,value))});
+            }
         } else {
             var latest = DailyHistory(notes).FirstOrDefault();
             if(latest != null) {
@@ -231,7 +246,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+item.Id+"\">"+item.Html+"</li>"))+"</ul>";
+        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\">"+item.Html+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }
@@ -601,6 +616,11 @@ internal sealed partial class FloatingWindow : Form {
         try { await Api("PATCH", "/tasks/" + id, new { done = done }); await LoadTasks(); }
         catch(Exception e) { Error(e); } finally { SetBusy(false); }
     }
+    async Task CompleteOutstanding(OutstandingLeaf leaf,bool done) {
+        if(busy || closing || leaf==null)return;SetBusy(true);timer.Stop();
+        try {await UpdateOutstandingState(leaf.TaskId,leaf.Id,done,null);await LoadTasks();}
+        catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
+    }
     async Task OpenFull() {
         if(busy || closing) return; SetBusy(true);
         string step = "准备浏览器工作区";
@@ -758,13 +778,14 @@ internal sealed partial class FloatingWindow : Form {
             await Api("PATCH", "/tasks/" + childId, new { done = true });
             if(Convert.ToBoolean((await Api("GET", "/tasks/" + id, null))["done"])) throw new Exception("Child completion incorrectly completed parent");
             await Api("PATCH", "/tasks/" + childId, new { done = false });
-            var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二"});
+            var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二",Done=true,Priority=2});
             await WriteShared(childId,sharedTest);
             long oldDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第一条", "");
             long sameDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第二条", "");
             await SaveProgress(childId,DateTime.Today.AddDays(-2),"合并编辑", "",null,sameDay,"<p>合并编辑</p>",new List<long>{oldDay});
             var sharedHistory=await ReadHistory(childId);
-            if(ReadShared(sharedHistory).Items.Count!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding or merged history failed");
+            var parsedShared=ReadShared(sharedHistory);
+            if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=9 || !parsedShared.Items[1].Done || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding status, priority or merged history failed");
             sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
             TestSimpleModeRecovery();
@@ -778,7 +799,17 @@ internal sealed partial class FloatingWindow : Form {
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-tree-test.png")); }
             var sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();
             var sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
-            if(sharedLeaf.Text!="1. 跨日期待办二")throw new Exception("Full mode direct outstanding list failed");
+            var leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2)throw new Exception("Full mode direct outstanding status or priority failed");
+            sharedLeaf.EnsureVisible();tasks.Refresh();var outstandingCheck=tasks.CompletionBounds(sharedLeaf);if(outstandingCheck.IsEmpty)throw new Exception("Outstanding completion box is not visible");
+            int outstandingPoint=((outstandingCheck.Top+outstandingCheck.Height/2)<<16)|((outstandingCheck.Left+outstandingCheck.Width/2)&0xffff);
+            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(outstandingPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(outstandingPoint));
+            bool outstandingReopened=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);var state=ReadShared(await ReadHistory(childId));if(state.Items.Count==1 && !state.Items[0].Done){outstandingReopened=true;break;}}
+            if(!outstandingReopened)throw new Exception("Outstanding completion box click did not persist");while(busy)await Task.Delay(20);
+            await UpdateOutstandingState(childId,"test-two",null,4);var updatedShared=ReadShared(await ReadHistory(childId));
+            if(updatedShared.Items.Count!=1 || updatedShared.Items[0].Done || updatedShared.Items[0].Priority!=4)throw new Exception("Outstanding completion or priority update failed");
+            await LoadTasks();sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            if(sharedLeaf.Text!="1. [P4] 跨日期待办二" || leafState.Done || sharedLeaf.StateImageIndex!=1)throw new Exception("Outstanding completion or priority refresh failed");
             tasks.SelectedNode=sharedLeaf;int beforeModeLoad=taskLoadVersion;
             SetSimpleMode(true);Size=new Size(330,260);
             if(tasks.Nodes.Find(childId.ToString(),true).Single()!=sharedChild || sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");

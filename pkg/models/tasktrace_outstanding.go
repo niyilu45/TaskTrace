@@ -91,7 +91,7 @@ func (m *TaskTraceOutstandingMove) CanCreate(s *xorm.Session, a web.Auth) (bool,
 	return true, nil
 }
 
-type taskTraceOutstandingItem struct{ id, content string }
+type taskTraceOutstandingItem struct{ id, content, metadata string }
 type taskTraceOutstandingList struct {
 	comment  *TaskComment
 	original string
@@ -127,6 +127,15 @@ func taskTraceAttribute(n *html.Node, key string) string {
 		}
 	}
 	return ""
+}
+func taskTraceOutstandingMetadata(n *html.Node) string {
+	var out strings.Builder
+	for _, attr := range n.Attr {
+		if attr.Key == "data-done" || attr.Key == "data-priority" {
+			out.WriteString(` ` + attr.Key + `="` + html.EscapeString(attr.Val) + `"`)
+		}
+	}
+	return out.String()
 }
 func taskTraceFirstHeading(doc *html.Node) *html.Node {
 	var heading *html.Node
@@ -179,7 +188,7 @@ func taskTraceParseOutstanding(comments []*TaskComment) (*taskTraceOutstandingLi
 				if id == "" {
 					id = fmt.Sprintf("item-%d", len(result.items))
 				}
-				result.items = append(result.items, taskTraceOutstandingItem{id, taskTraceInnerHTML(n)})
+				result.items = append(result.items, taskTraceOutstandingItem{id, taskTraceInnerHTML(n), taskTraceOutstandingMetadata(n)})
 			})
 			return result, nil
 		}
@@ -241,7 +250,7 @@ func taskTraceParseOutstanding(comments []*TaskComment) (*taskTraceOutstandingLi
 			if strings.TrimSpace(content) == "" {
 				continue
 			}
-			result.items = append(result.items, taskTraceOutstandingItem{fmt.Sprintf("legacy-%d-%d", note.comment.ID, index), content})
+			result.items = append(result.items, taskTraceOutstandingItem{fmt.Sprintf("legacy-%d-%d", note.comment.ID, index), content, ""})
 			index++
 		}
 		break // The latest daily note's empty list is authoritative too.
@@ -356,7 +365,7 @@ func taskTraceWriteOutstanding(s *xorm.Session, a web.Auth, doer *user.User, tas
 	var out strings.Builder
 	out.WriteString("<h3>" + taskTraceOutstandingHeading + "</h3><ul>")
 	for _, item := range list.items {
-		out.WriteString(`<li data-id="` + html.EscapeString(item.id) + `">` + item.content + "</li>")
+		out.WriteString(`<li data-id="` + html.EscapeString(item.id) + `"` + item.metadata + `>` + item.content + "</li>")
 	}
 	out.WriteString("</ul>")
 	if list.comment == nil {
