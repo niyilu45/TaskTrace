@@ -387,7 +387,12 @@ internal sealed class FloatingWindow : Form {
                 var row = new TableLayoutPanel { Dock = DockStyle.Top, Height = 38, ColumnCount = 2 };
                 row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
                 var add = new Button { Text = "添加子任务", Dock = DockStyle.Fill }; row.Controls.Add(title); row.Controls.Add(add);
-                dialog.Controls.Add(list); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
+                var renameTitle = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "修改子任务名称" };
+                var rename = new Button { Text = "保存名称", Dock = DockStyle.Fill, Enabled = false };
+                var renameRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 38, ColumnCount = 2 };
+                renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
+                renameRow.Controls.Add(renameTitle); renameRow.Controls.Add(rename);
+                dialog.Controls.Add(list); dialog.Controls.Add(renameRow); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
                 bool loading = false, writing = false; long pendingId = 0;
                 Func<Task> reload = async delegate {
                     loading = true;
@@ -398,6 +403,22 @@ internal sealed class FloatingWindow : Form {
                         if(relations != null && relations.ContainsKey("subtask")) foreach(Dictionary<string, object> child in (IEnumerable)relations["subtask"]) list.Items.Add(new ListViewItem((string)child["title"]) { Tag = Convert.ToInt64(child["id"]), Checked = Convert.ToBoolean(child["done"]) });
                     } finally { loading = false; }
                 };
+                list.SelectedIndexChanged += delegate {
+                    if(writing) return;
+                    rename.Enabled = list.SelectedItems.Count > 0;
+                    renameTitle.Text = rename.Enabled ? list.SelectedItems[0].Text : "";
+                };
+                rename.Click += async delegate {
+                    if(writing || list.SelectedItems.Count == 0 || String.IsNullOrWhiteSpace(renameTitle.Text)) return;
+                    long childId = Convert.ToInt64(list.SelectedItems[0].Tag);
+                    writing = true; rename.Enabled = false; renameTitle.Enabled = false; list.Enabled = false;
+                    try {
+                        await Api("PATCH", "/tasks/" + childId, new { title = renameTitle.Text.Trim() });
+                        await reload(); renameTitle.Clear(); feedback.Text = "子任务名称已保存。";
+                    } catch { feedback.Text = "名称保存失败，输入已保留，请重试。"; }
+                    finally { writing = false; renameTitle.Enabled = true; list.Enabled = true; rename.Enabled = list.SelectedItems.Count > 0; }
+                };
+                renameTitle.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; rename.PerformClick(); } };
                 add.Click += async delegate {
                     if(writing || string.IsNullOrWhiteSpace(title.Text)) return;
                     writing = true; add.Enabled = false; title.Enabled = false;
@@ -541,6 +562,9 @@ internal sealed class FloatingWindow : Form {
             var history = await Api("GET", "/tasks/" + id + "/comments?order_by=desc", null);
             if(Convert.ToInt32(history["total"]) != 2 || !json.Serialize(history).Contains("每日进展")) throw new Exception("Daily progress history failed");
             long childId = await CreateSubtask(id, Convert.ToInt64((await Api("GET", "/tasks/" + id, null))["project_id"]), "子任务验收");
+            await Api("PATCH", "/tasks/" + childId, new { title = "子任务验收改名" });
+            var renamedChild = await Api("GET", "/tasks/" + childId, null);
+            if((string)renamedChild["title"] != "子任务验收改名") throw new Exception("Subtask rename not persisted");
             var parentWithChild = await Api("GET", "/tasks/" + id, null);
             if(!json.Serialize(parentWithChild["related_tasks"]).Contains("子任务验收")) throw new Exception("Subtask relationship missing");
             await Api("PATCH", "/tasks/" + childId, new { done = true });

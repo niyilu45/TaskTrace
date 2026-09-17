@@ -168,3 +168,9 @@
 - 工作区初始化和后台服务均使用 ProcessStartInfo，UseShellExecute=false、CreateNoWindow=true；标准输出及错误异步写日志，退出后回收流。
 - 新 EXE 入口完整原生自检通过；50ms 采样未检测到新 PowerShell/conhost/server 可见主窗口，后台日志保留。
 - 日志：.local-build/no-console-verified.log、.local-build/no-console-build.log。
+
+## 2026-09-17 子任务名称编辑
+- 完整界面子任务列表支持改名、取消、空名称校验与失败保留输入；使用 API v2 JSON Patch 只更新 title。
+- 悬浮窗子任务窗口支持选中后改名、回车保存与失败保留输入。
+- 原生自检验证改名持久化及关系保留；成品浏览器验收通过空名称、取消、保存、刷新后名称和上级关系。
+- ESLint 0 错误（19 项已有警告）；日志 .local-build/rename-e2e.log、.local-build/rename-lint.log。

@@ -35,3 +35,7 @@ Invoke with the `Skill` tool before writing code in these areas:
 - [Git, plans, worktrees](.agents/docs/git-workflow.md)
 - [Dev commands and configuration](.agents/docs/dev-commands.md)
 - [License system](.agents/docs/license.md)
+
+## TaskTrace test releases
+- The user wants testing updates to replace the existing v0.1.0-beta.10 release assets, not create new tags or release versions, unless explicitly requested.
+- Push source to main; replace the ZIP and SHA256SUMS.txt assets after validation. Record the built source commit in the release notes and SOURCE-COMMIT.txt. Never package local user/test data.

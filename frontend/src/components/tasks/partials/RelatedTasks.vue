@@ -162,6 +162,7 @@
 							@update:modelValue="toggleTaskDone(task)"
 						/>
 						<RouterLink
+							v-if="renamingId !== task.id"
 							:to="{ name: route.name as string, params: { id: task.id }, state: { backdropView: route.fullPath } }"
 							:class="{ 'is-strikethrough': task.done}"
 						>
@@ -179,6 +180,46 @@
 							<span class="task-identifier">{{ getTaskIdentifier(task) }}</span>
 							{{ task.title }}
 						</RouterLink>
+						<form
+							v-if="renamingId === task.id"
+							class="field has-addons"
+							@submit.prevent="saveSubtaskName"
+						>
+							<input
+								v-model="renameTitle"
+								v-focus
+								class="input"
+								aria-label="修改子任务名称"
+								:disabled="renameSaving"
+								maxlength="250"
+								@keydown.esc.prevent="cancelRename"
+							>
+							<button
+								type="submit"
+								class="button is-primary"
+								:disabled="renameSaving || !renameTitle.trim()"
+							>
+								保存名称
+							</button>
+							<button
+								type="button"
+								class="button"
+								:disabled="renameSaving"
+								@click="cancelRename"
+							>
+								取消
+							</button>
+						</form>
+						<button
+							v-else-if="editEnabled && rts.kind === 'subtask'"
+							type="button"
+							class="button is-small"
+							:disabled="renameSaving"
+							:aria-label="`修改子任务名称：${task.title}`"
+							@click="startRename(task)"
+						>
+							改名
+						</button>
 					</div>
 					<BaseButton
 						v-if="editEnabled"
@@ -225,7 +266,7 @@ import {ref, reactive, shallowReactive, watch, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {useRoute} from 'vue-router'
 
-import {tasksCreate, tasksRelationsCreate} from '@/client/generated'
+import {patchTasksRead, tasksCreate, tasksRelationsCreate} from '@/client/generated'
 import TaskService from '@/services/task'
 import TaskModel, {getTaskIdentifier} from '@/models/task'
 import type {ITask} from '@/modelTypes/ITask'
@@ -313,6 +354,35 @@ async function addSubtask() {
 	} catch {
 		if (props.taskId === parentId) subtaskMessage.value = pendingSubtask.value ? '事项已创建，但关联失败。点击“重试关联”，不会重复创建。' : '添加失败，名称已保留，请重试。'
 	} finally { subtaskSaving.value = false }
+}
+const renamingId = ref<number | null>(null)
+const renameTitle = ref('')
+const renameSaving = ref(false)
+function startRename(task: ITask) {
+	renamingId.value = task.id
+	renameTitle.value = task.title
+	subtaskMessage.value = ''
+}
+function cancelRename() {
+	if (!renameSaving.value) renamingId.value = null
+}
+watch(() => props.taskId, () => { renamingId.value = null })
+async function saveSubtaskName() {
+	if (!props.editEnabled || renameSaving.value || renamingId.value === null || !renameTitle.value.trim()) return
+	const id = renamingId.value
+	const parentId = props.taskId
+	const title = renameTitle.value.trim()
+	renameSaving.value = true
+	try {
+		await patchTasksRead({path: {task: id}, body: [{op: 'replace', path: '/title', value: title}]})
+		if (props.taskId !== parentId) return
+		const child = relatedTasks.value.subtask?.find(task => task.id === id)
+		if (child) child.title = title
+		renamingId.value = null
+		subtaskMessage.value = '子任务名称已保存。'
+	} catch {
+		if (props.taskId === parentId) subtaskMessage.value = '名称保存失败，输入已保留，请重试。'
+	} finally { renameSaving.value = false }
 }
 const query = ref('')
 const foundTasks = ref<ITask[]>([])
