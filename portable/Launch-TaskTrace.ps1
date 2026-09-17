@@ -6,6 +6,7 @@ $server = $null
 $sessionLock = $null
 $processJob = $null
 $exitCode = 0
+$stage = 'Read settings and data directory'
 try {
     $settingsFile = Join-Path $packageRoot 'tasktrace-settings.json'
     if (!(Test-Path -LiteralPath $settingsFile)) {
@@ -72,6 +73,7 @@ log:
     if (Test-Path -LiteralPath $ownerFile) {
         $sessionArgs += @('--user-id', ([IO.File]::ReadAllText($ownerFile).Trim()))
     }
+    $stage = 'Prepare local workspace'
     & $binary @sessionArgs *> (Join-Path $dataRoot 'workspace-setup.log')
     if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare local workspace. See data/workspace-setup.log.' }
     $localSession = [IO.File]::ReadAllText($sessionFile) | ConvertFrom-Json
@@ -125,8 +127,10 @@ public sealed class TaskTraceProcessJob : IDisposable {
     }
 }
 '@
+    $stage = 'Create Windows process job'
     $processJob = New-Object TaskTraceProcessJob
 
+    $stage = 'Start local server'
     $server = Start-Process -FilePath $binary -ArgumentList @('--config', ('"' + $configFile + '"')) -WorkingDirectory $packageRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $dataRoot 'server.log') -RedirectStandardError (Join-Path $dataRoot 'server-error.log')
     $processJob.Attach($server.Handle)
     Write-Host 'Starting TaskTrace...'
@@ -150,6 +154,7 @@ public sealed class TaskTraceProcessJob : IDisposable {
         $floatingArgs = @(('"' + $url + '"'), ('"' + $packageRoot + '"'), ('"' + ($dataRoot.TrimEnd('\') + '\.') + '"'))
         if ($FloatingSelfTest) { $floatingArgs += '--self-test' }
         elseif ($OpenBrowser -and !$NoBrowser) { $floatingArgs += '--open-browser' }
+    $stage = 'Start floating window'
         $window = Start-Process -FilePath (Join-Path $packageRoot 'TaskTrace-floating.exe') -ArgumentList $floatingArgs -PassThru
         $processJob.Attach($window.Handle)
         $window.WaitForExit()
@@ -160,11 +165,41 @@ public sealed class TaskTraceProcessJob : IDisposable {
     elseif ($RunSeconds -gt 0) { Start-Sleep -Seconds $RunSeconds }
     else { [void](Read-Host 'Keep this window open while using TaskTrace. Press Enter to stop') }
 } catch {
-    Write-Host ('ERROR: ' + $_.Exception.Message) -ForegroundColor Red
+    $failure = $_
+    $details = 'Step: ' + $stage + "`r`nWindows: " + [Environment]::OSVersion + "`r`n" + $failure.Exception.ToString()
+    $inner = $failure.Exception
+    while ($null -ne $inner) {
+        if ($inner -is [ComponentModel.Win32Exception]) { $details += "`r`nWindows error code: " + $inner.NativeErrorCode }
+        $inner = $inner.InnerException
+    }
+    $details += "`r`n" + $failure.ScriptStackTrace
+    $details = $details -replace '#tasktrace-local=\S+', '#tasktrace-local=[redacted]'
+    foreach ($folder in @($dataRoot, $packageRoot, [IO.Path]::GetTempPath())) {
+        if (!$folder) { continue }
+        try {
+            $log = Join-Path $folder 'TaskTrace-startup-error.log'
+            [IO.File]::WriteAllText($log, $details, [Text.UTF8Encoding]::new($true))
+            $details += "`r`n`r`nError log: " + $log
+            break
+        } catch {}
+    }
+    Write-Host $details -ForegroundColor Red
     $exitCode = 1
     if ($Floating -and !$FloatingSelfTest) {
-        Add-Type -AssemblyName System.Windows.Forms
-        [void][Windows.Forms.MessageBox]::Show($_.Exception.Message, 'TaskTrace')
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            $dialog = New-Object Windows.Forms.Form
+            $dialog.Text = 'TaskTrace - 启动失败（可复制详情）'
+            $dialog.Width = 760; $dialog.Height = 510; $dialog.StartPosition = 'CenterScreen'
+            $box = New-Object Windows.Forms.TextBox
+            $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Both'
+            $box.WordWrap = $false; $box.Dock = 'Fill'; $box.Text = $details
+            $dialog.Controls.Add($box)
+            [void]$dialog.ShowDialog()
+            $dialog.Dispose()
+        } catch {
+            try { $shell = New-Object -ComObject WScript.Shell; [void]$shell.Popup($details, 0, 'TaskTrace startup error', 16) } catch {}
+        }
     }
     elseif ($RunSeconds -eq 0 -and !$FloatingSelfTest) { [void](Read-Host 'Press Enter to close') }
 } finally {

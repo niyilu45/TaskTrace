@@ -63,7 +63,7 @@ internal sealed class FloatingWindow : Form {
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
-        LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); KeyPreview = true;
+        LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var reload = new Button { Text = "刷新", AutoSize = true };
@@ -432,10 +432,12 @@ internal sealed class FloatingWindow : Form {
     }
     async Task OpenFull() {
         if(busy || closing) return; SetBusy(true);
+        string step = "准备浏览器工作区";
         try {
             string browserSession = await PrepareBrowserSession();
+            step = "打开系统默认浏览器，请检查 Windows 默认浏览器设置";
             Process.Start(new ProcessStartInfo(url + "/#tasktrace-local=" + Uri.EscapeDataString(browserSession)) { UseShellExecute = true });
-        } catch(Exception e) { Error(e); } finally { SetBusy(false); }
+        } catch(Exception e) { Error(new Exception(step + "失败。悬浮窗仍可继续使用。", e)); ShowErrorDetails(); } finally { SetBusy(false); }
     }
     async Task<string> PrepareBrowserSession() {
             // Each browser launch gets its own refresh family, independent of this window.
@@ -448,7 +450,30 @@ internal sealed class FloatingWindow : Form {
             }
             return File.ReadAllText(file);
     }
-    void Error(Exception e) { if(closing) return; status.ForeColor = Color.FromArgb(170, 35, 35); status.Text = e is HttpRequestException || e is TaskCanceledException ? "连接失败，请确认服务运行后点击刷新。" : e.Message; }
+    string lastError = "";
+    void ShowErrorDetails() {
+        if(String.IsNullOrEmpty(lastError)) return;
+        using(var dialog = new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, StartPosition = FormStartPosition.CenterParent }) {
+            dialog.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = lastError });
+            dialog.ShowDialog(this);
+        }
+    }
+    void Error(Exception e) {
+        if(closing) return;
+        lastError = System.Text.RegularExpressions.Regex.Replace(e.ToString(), "#tasktrace-local=\\S+", "#tasktrace-local=[redacted]");
+        for(Exception inner = e; inner != null; inner = inner.InnerException) {
+            var windowsError = inner as System.ComponentModel.Win32Exception;
+            if(windowsError != null) lastError += "\r\nWindows error code: " + windowsError.NativeErrorCode;
+        }
+        lastError = "Windows: " + Environment.OSVersion + "\r\n" + lastError;
+        try {
+            string file = Path.Combine(data, "TaskTrace-window-error.log");
+            File.WriteAllText(file, DateTime.Now.ToString("o") + "\r\n" + lastError);
+            lastError += "\r\n\r\n错误日志：" + file;
+        } catch { }
+        status.ForeColor = Color.FromArgb(170, 35, 35);
+        status.Text = "操作失败，点击此处查看完整错误详情。";
+    }
     void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 300); Height = expandedHeight; fold.Text = "收起"; } }
     void LoadAutoSaveSettings() {
@@ -495,6 +520,10 @@ internal sealed class FloatingWindow : Form {
     }
     async Task TestFlow() {
         try {
+            Error(new Exception("Diagnostic test", new System.ComponentModel.Win32Exception(1155, "No default browser #tasktrace-local=TEST_PRIVATE_SESSION")));
+            string diagnostic = File.ReadAllText(Path.Combine(data, "TaskTrace-window-error.log"));
+            if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
+            await Reload();
             if(projects.Items.Count == 0 || !TopMost) throw new Exception("Workspace or TopMost missing");
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(tasks.Nodes.Count == 0 || tasks.Nodes[0].Text != createdTitle) throw new Exception("Task creation failed");
@@ -574,7 +603,7 @@ internal sealed class FloatingWindow : Form {
             RestoreWindow();
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

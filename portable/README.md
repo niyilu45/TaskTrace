@@ -115,3 +115,10 @@ Vikunja：https://github.com/go-vikunja/vikunja
 - 编辑完成点击“返回展示模式”，重新读取最新进展。再次从项目入口打开时，默认恢复展示模式。
 
 项目列表编辑模式提供“显示已完成任务”开关，选择会自动记住。
+
+## 启动或打开完整界面报错
+- 悬浮窗底部显示错误时，点击提示即可查看可选中、复制的完整详情；打开完整界面失败会自动弹出详情。
+- 悬浮窗错误保存到配置的数据目录内 TaskTrace-window-error.log；启动脚本失败保存为 TaskTrace-startup-error.log。
+- 若数据目录不能写入，启动错误日志会尝试保存到程序目录，再尝试系统临时目录；错误弹窗显示实际路径。
+- 提供错误详情或以上错误日志即可排查，不要发送 local-session.json、browser-session.json、local-config.yml 或 secret.txt。
+- 打开系统默认浏览器这一步失败时，可先检查 Windows 默认应用中的浏览器设置；具体原因以错误详情内的系统错误码为准。

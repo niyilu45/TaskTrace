@@ -140,3 +140,11 @@
 - 9 项单元测试通过；成品浏览器验收通过，包括真实多级缩进、持久化、搜索、完成筛选、原有图片/进展与编辑切换；已查看桌面与窄屏截图。
 - ESLint 无错误（19 项已有警告），Stylelint 通过；全库类型检查仍有已有错误，本次修改文件无类型错误。
 - 日志：.local-build/overview-tree-test.log、.local-build/overview-tree-e2e-final.log、.local-build/overview-tree-build.log。
+
+## 2026-09-17 跨电脑错误诊断
+- 悬浮窗提供完整可复制异常、内层异常、Windows 错误码和本地诊断日志；浏览器打开失败单独标明阶段并弹出详情。
+- 启动脚本提供可滚动、可复制错误详情、阶段和日志路径，数据目录不可写时回退到程序/临时目录。
+- 注入 Windows 1155 错误验证完整诊断和会话 URL 脱敏；原生完整自检通过。
+- 无效配置模拟启动失败，验证退出码 1 和包含异常栈的日志；PowerShell 语法与成品构建通过。
+- 日志：.local-build/startup-native.log、.local-build/startup-error-verified.log、.local-build/startup-build.log。
+- 此版本修复错误不可见问题；用户另一台 Win11 的实际启动错误原因需要该机详情确认。
