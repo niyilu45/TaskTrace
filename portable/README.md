@@ -4,7 +4,7 @@
 
 ## 启动与退出
 1. 将整个 ZIP 解压到可写目录，不要直接在压缩包中运行。
-2. 双击带小羊驼图标的 TaskTrace.exe（原 Start-TaskTrace.cmd 仍可使用）。
+2. 双击带小羊驼图标的 TaskTrace.exe。
 3. 同时打开置顶悬浮窗和浏览器完整界面，无需注册、账号或密码，共用同一份数据。
 4. 关闭浏览器不影响悬浮窗；点击悬浮窗关闭或最小化按钮只会缩小到任务栏；停止服务请在托盘菜单选择“退出 TaskTrace”。
 5. 下次仍使用同一目录启动，账号、事项、附件会保留。
@@ -125,3 +125,6 @@ Vikunja：https://github.com/go-vikunja/vikunja
 
 ## 程序图标
 TaskTrace.exe、悬浮窗、任务栏和托盘使用项目自带的 Vikunja 小羊驼图标。可为 TaskTrace.exe 创建桌面快捷方式；请保留同目录的其余程序文件。启动入口仍调用统一的 Launch-TaskTrace.ps1，无需额外安装运行环境。
+
+## 无终端启动
+双击 TaskTrace.exe 启动。工作区准备、后台服务和启动脚本均不创建终端窗口；启动失败仍显示错误详情，运行日志继续保存在数据目录。发布包不再包含 Start-TaskTrace.cmd，旧的桌面快捷方式请改为指向 TaskTrace.exe。

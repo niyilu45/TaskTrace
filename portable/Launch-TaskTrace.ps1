@@ -5,6 +5,10 @@ $dataRoot = $null
 $server = $null
 $sessionLock = $null
 $processJob = $null
+$serverOutput = $null
+$serverError = $null
+$serverOutputCopy = $null
+$serverErrorCopy = $null
 $exitCode = 0
 $stage = 'Read settings and data directory'
 try {
@@ -74,8 +78,22 @@ log:
         $sessionArgs += @('--user-id', ([IO.File]::ReadAllText($ownerFile).Trim()))
     }
     $stage = 'Prepare local workspace'
-    & $binary @sessionArgs *> (Join-Path $dataRoot 'workspace-setup.log')
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot prepare local workspace. See data/workspace-setup.log.' }
+    $setupStart = New-Object Diagnostics.ProcessStartInfo
+    $setupStart.FileName = $binary
+    $setupStart.Arguments = ($sessionArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
+    $setupStart.WorkingDirectory = $packageRoot
+    $setupStart.UseShellExecute = $false
+    $setupStart.CreateNoWindow = $true
+    $setupStart.RedirectStandardOutput = $true
+    $setupStart.RedirectStandardError = $true
+    $setupProcess = [Diagnostics.Process]::Start($setupStart)
+    try {
+        $setupOutput = $setupProcess.StandardOutput.ReadToEndAsync()
+        $setupError = $setupProcess.StandardError.ReadToEndAsync()
+        $setupProcess.WaitForExit()
+        [IO.File]::WriteAllText((Join-Path $dataRoot 'workspace-setup.log'), ($setupOutput.Result + $setupError.Result))
+        if ($setupProcess.ExitCode -ne 0) { throw 'Cannot prepare local workspace. See data/workspace-setup.log.' }
+    } finally { $setupProcess.Dispose() }
     $localSession = [IO.File]::ReadAllText($sessionFile) | ConvertFrom-Json
     [IO.File]::WriteAllText($ownerFile, [string]$localSession.user_id)
     $launchUrl = $url + '/#tasktrace-local=' + [Uri]::EscapeDataString(([IO.File]::ReadAllText($sessionFile)))
@@ -131,7 +149,19 @@ public sealed class TaskTraceProcessJob : IDisposable {
     $processJob = New-Object TaskTraceProcessJob
 
     $stage = 'Start local server'
-    $server = Start-Process -FilePath $binary -ArgumentList @('--config', ('"' + $configFile + '"')) -WorkingDirectory $packageRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $dataRoot 'server.log') -RedirectStandardError (Join-Path $dataRoot 'server-error.log')
+    $serverStart = New-Object Diagnostics.ProcessStartInfo
+    $serverStart.FileName = $binary
+    $serverStart.Arguments = '--config "' + $configFile + '"'
+    $serverStart.WorkingDirectory = $packageRoot
+    $serverStart.UseShellExecute = $false
+    $serverStart.CreateNoWindow = $true
+    $serverStart.RedirectStandardOutput = $true
+    $serverStart.RedirectStandardError = $true
+    $serverOutput = [IO.File]::Create((Join-Path $dataRoot 'server.log'))
+    $serverError = [IO.File]::Create((Join-Path $dataRoot 'server-error.log'))
+    $server = [Diagnostics.Process]::Start($serverStart)
+    $serverOutputCopy = $server.StandardOutput.BaseStream.CopyToAsync($serverOutput)
+    $serverErrorCopy = $server.StandardError.BaseStream.CopyToAsync($serverError)
     $processJob.Attach($server.Handle)
     Write-Host 'Starting TaskTrace...'
     $ready = $false
@@ -235,6 +265,10 @@ public sealed class TaskTraceProcessJob : IDisposable {
         Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
         $server.WaitForExit()
     }
+    foreach ($copy in @($serverOutputCopy, $serverErrorCopy)) { if ($null -ne $copy) { try { $copy.GetAwaiter().GetResult() } catch {} } }
+    if ($null -ne $serverOutput) { $serverOutput.Dispose() }
+    if ($null -ne $serverError) { $serverError.Dispose() }
+    if ($null -ne $server) { $server.Dispose() }
     if ($null -ne $processJob) { $processJob.Dispose() }
     if ($null -ne $sessionLock) { $sessionLock.Dispose() }
 }

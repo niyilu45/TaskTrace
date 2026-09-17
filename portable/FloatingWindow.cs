@@ -47,7 +47,7 @@ internal sealed class FloatingWindow : Form {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         try {
-            if (args.Length < 2) throw new Exception("请通过 Start-TaskTrace.cmd 启动 TaskTrace。");
+            if (args.Length < 2) throw new Exception("请通过 TaskTrace.exe 启动 TaskTrace。");
             Uri address;
             if (!Uri.TryCreate(args[0], UriKind.Absolute, out address) || address.Scheme != "http" || address.Host != "127.0.0.1") throw new Exception("悬浮窗仅支持本机工作区。");
             using (var window = new FloatingWindow(args[0], args[1], args.Length > 2 ? args[2] : Path.Combine(args[1], "data"), args.Length > 3 && args[3] == "--self-test", args.Length > 3 && args[3] == "--open-browser")) Application.Run(window);

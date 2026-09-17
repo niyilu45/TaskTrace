@@ -7,7 +7,7 @@
 ## 使用软件
 
 1. 在 Releases 页面下载 `TaskTrace-local-windows-x64.zip`，不要选择 Source code。
-2. 解压到可写目录，双击 `Start-TaskTrace.cmd`。
+2. 解压到可写目录，双击 `TaskTrace.exe`。
 3. 同时打开悬浮窗和完整界面，无需安装 Node.js、Go、Docker 或数据库，无需注册登录。
 4. 关闭浏览器后悬浮窗继续运行；点击悬浮窗关闭按钮或最小化按钮会缩小到任务栏，完整界面仍可使用；真正退出请在托盘菜单选择“退出 TaskTrace”。
 

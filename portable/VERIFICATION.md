@@ -162,3 +162,9 @@
 - 新增轻量原生启动入口，直接调用统一 PowerShell 启动脚本，保留原 CMD 入口。
 - 通过 TaskTrace.exe --self-test 运行完整原生验收通过；从两个成品 EXE 提取图标并确认均为小羊驼。
 - 发布白名单增加 TaskTrace.exe，仍不打包任何运行数据或本机配置。
+
+## 2026-09-17 EXE 无终端启动
+- TaskTrace.exe 作为启动入口，删除旧 Start-TaskTrace.cmd，构建时清理旧入口。
+- 工作区初始化和后台服务均使用 ProcessStartInfo，UseShellExecute=false、CreateNoWindow=true；标准输出及错误异步写日志，退出后回收流。
+- 新 EXE 入口完整原生自检通过；50ms 采样未检测到新 PowerShell/conhost/server 可见主窗口，后台日志保留。
+- 日志：.local-build/no-console-verified.log、.local-build/no-console-build.log。
