@@ -39,7 +39,7 @@ test('project opens read-only with grouped progress and explicit editing', async
  await expect(secondRow.locator('.history-entry time')).toHaveText(['2026-09-19：', '2026-09-18：', '2026-09-16：'])
  await expect(secondRow.locator('.outstanding-cell')).toHaveText('等待验收')
  await expect(secondRow.locator('.progress-cell')).not.toContainText('旧遗留事项')
- await expect(overview.locator('.subtask-table').first().getByRole('columnheader')).toHaveText(['子任务名', '子任务描述', '遗留事项', '进展'])
+ await expect(overview.locator('.progress-group > .subtask-scroll .subtask-table').first().getByRole('columnheader')).toHaveText(['子任务名', '子任务描述', '遗留事项', '进展'])
  await expect(overview.getByText('完成界面方案并核对需求').first()).toBeVisible()
  await expect.poll(() => overview.locator('.task-description img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
  await overview.getByRole('combobox').selectOption('done')

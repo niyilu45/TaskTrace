@@ -76,6 +76,19 @@
 					class="task-description"
 					:html="group.root.description"
 				/>
+				<details class="task-own-progress">
+					<summary>任务自身进展</summary>
+					<div class="subtask-scroll">
+						<table class="subtask-table">
+							<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
+								<ProjectProgressRow
+									:task="group.root"
+									:depth="0"
+								/>
+							</tbody>
+						</table>
+					</div>
+				</details>
 				<div
 					v-if="group.visibleRows.length"
 					class="subtask-scroll"
@@ -116,19 +129,6 @@
 				>
 					{{ group.rows.length === 1 ? '暂无子任务，可进入编辑模式添加。' : '没有符合筛选条件的子任务。' }}
 				</p>
-				<details class="task-own-progress">
-					<summary>任务自身进展</summary>
-					<div class="subtask-scroll">
-						<table class="subtask-table">
-							<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
-								<ProjectProgressRow
-									:task="group.root"
-									:depth="0"
-								/>
-							</tbody>
-						</table>
-					</div>
-				</details>
 			</template>
 		</section>
 		<nav
