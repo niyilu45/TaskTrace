@@ -1,5 +1,6 @@
 <template>
 	<section
+		ref="overview"
 		class="project-progress"
 		aria-label="项目展示模式"
 	>
@@ -26,9 +27,22 @@
 			>
 				刷新进展
 			</XButton>
+			<XButton
+				variant="secondary"
+				:disabled="!customWidths"
+				@click="resetColumns"
+			>
+				恢复默认列宽
+			</XButton>
 		</div>
+		<p
+			v-if="columnsStorageError"
+			role="status"
+		>
+			{{ columnsStorageError }}
+		</p>
 		<p class="browse-hint">
-			按任务、子任务逐级显示，点击名称旁的按钮可展开或收起。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。
+			按任务、子任务逐级显示，点击名称旁的按钮可展开或收起。进展按记录日期倒序显示；遗留事项取最新一条每日进展的填写内容。拖动表头右侧分隔线可调整列宽，自动记住本项目的设置。
 		</p>
 		<p
 			v-if="loading"
@@ -78,52 +92,38 @@
 				/>
 				<details class="task-own-progress">
 					<summary>任务自身进展</summary>
-					<div class="subtask-scroll">
-						<table class="subtask-table">
-							<thead><tr><th>任务名</th><th>任务描述</th><th>遗留事项</th><th>进展</th></tr></thead><tbody>
-								<ProjectProgressRow
-									:task="group.root"
-									:descendants="group.rows.slice(1).map(row => row.task)"
-									:depth="0"
-								/>
-							</tbody>
-						</table>
-					</div>
+					<ProjectProgressTable
+						:labels="['任务名', '任务描述', '遗留事项', '进展']"
+						:widths="columnWidths"
+						:label="`${group.root.title}任务自身进展`"
+						@resize="customWidths = $event"
+						@resized="saveColumns"
+					>
+						<ProjectProgressRow
+							:task="group.root"
+							:descendants="group.rows.slice(1).map(row => row.task)"
+							:depth="0"
+						/>
+					</ProjectProgressTable>
 				</details>
-				<div
+				<ProjectProgressTable
 					v-if="group.visibleRows.length"
-					class="subtask-scroll"
-					tabindex="0"
-					:aria-label="`${group.root.title}子任务表格，可横向滚动`"
+					:labels="['子任务名', '子任务描述', '遗留事项', '进展']"
+					:widths="columnWidths"
+					:label="`${group.root.title}子任务表格`"
+					@resize="customWidths = $event"
+					@resized="saveColumns"
 				>
-					<table class="subtask-table">
-						<colgroup><col style="width: 18%"><col style="width: 27%"><col style="width: 20%"><col style="width: 35%"></colgroup>
-						<thead>
-							<tr>
-								<th scope="col">
-									子任务名
-								</th><th scope="col">
-									子任务描述
-								</th><th scope="col">
-									遗留事项
-								</th><th scope="col">
-									进展
-								</th>
-							</tr>
-						</thead>
-						<tbody>
-							<ProjectProgressRow
-								v-for="row in group.visibleRows"
-								:key="row.task.id"
-								:task="row.task"
-								:depth="row.depth"
-								:has-children="parents.has(row.task.id)"
-								:expanded="isExpanded(row.task.id)"
-								@toggle="toggle(row.task.id)"
-							/>
-						</tbody>
-					</table>
-				</div>
+					<ProjectProgressRow
+						v-for="row in group.visibleRows"
+						:key="row.task.id"
+						:task="row.task"
+						:depth="row.depth"
+						:has-children="parents.has(row.task.id)"
+						:expanded="isExpanded(row.task.id)"
+						@toggle="toggle(row.task.id)"
+					/>
+				</ProjectProgressTable>
 				<p
 					v-else
 					class="task-description"
@@ -159,11 +159,39 @@
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount} from 'vue'
 import {projectTasksList} from '@/client/generated'
-import {useStorage} from '@vueuse/core'
+import {useElementSize, useStorage} from '@vueuse/core'
 import {visibleProgressRows, groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
 import ProjectProgressRow from './ProjectProgressRow.vue'
+import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 const props = defineProps<{projectId: number}>()
+const overview = ref<HTMLElement>()
+const {width: overviewWidth} = useElementSize(overview)
+const customWidths = ref<number[] | null>(null)
+const columnsStorageError = ref('')
+const columnsStorageKey = computed(() => `tasktrace:progress-columns:${props.projectId}`)
+const columnWidths = computed(() => customWidths.value || [0.18, 0.27, 0.20, 0.35].map(ratio => Math.round(Math.max(800, overviewWidth.value - 2) * ratio)))
+watch(columnsStorageKey, key => {
+	customWidths.value = null
+	columnsStorageError.value = ''
+	try {
+		const saved: unknown = JSON.parse(localStorage.getItem(key) || 'null')
+		if (Array.isArray(saved) && saved.length === 4 && saved.every((width, index) => typeof width === 'number' && Number.isFinite(width) && width >= (index === 0 ? 144 : 96) && width <= 1600)) {
+			customWidths.value = saved.map(Math.round)
+		}
+	} catch { /* Invalid or unavailable storage falls back to responsive defaults. */ }
+}, {immediate: true})
+function saveColumns() {
+	try {
+		if (customWidths.value) localStorage.setItem(columnsStorageKey.value, JSON.stringify(customWidths.value))
+		else localStorage.removeItem(columnsStorageKey.value)
+		columnsStorageError.value = ''
+	} catch { columnsStorageError.value = '列宽已调整，但当前浏览器无法保存设置。' }
+}
+function resetColumns() {
+	customWidths.value = null
+	saveColumns()
+}
 const tasks = ref<ProgressTask[]>([])
 const loading = ref(false)
 const error = ref('')
@@ -315,28 +343,18 @@ onBeforeUnmount(() => requestId++)
 	flex-wrap: wrap;
 	}
 }
-.subtask-scroll {
- overflow-x: auto;
-}
-.subtask-table {
- inline-size: 100%;
- min-inline-size: 760px;
- table-layout: fixed;
- border-collapse: collapse;
- thead th {
-  padding: .6rem .75rem;
-  text-align: start;
-  font-size: .8125rem;
-  border-block-start: 1px solid var(--grey-200);
-  background: var(--grey-100);
- }
+.project-progress {
+ min-inline-size: 0;
+ max-inline-size: 100%;
 }
 .task-description { padding: .5rem .8rem;
  }
 .task-own-progress {
- padding: .5rem .8rem;
+ padding-block: .5rem;
  font-size: .8125rem;
  summary { cursor: pointer;
+ padding-inline: .8rem;
+ padding-block-end: .5rem;
  }
 }
 </style>
