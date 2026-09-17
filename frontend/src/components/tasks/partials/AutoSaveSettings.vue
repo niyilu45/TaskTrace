@@ -16,7 +16,7 @@
 				@change="apply"
 			>
 		</label>
-		<p>每 {{ autoSaveSettings.seconds }} 秒检查事项描述和当前进展，有变化才保存。进展会更新同一条记录，点击“保存进展”后结束本次编辑。设置自动保存在当前浏览器。</p>
+		<p>每 {{ autoSaveSettings.seconds }} 秒检查事项描述和当前进展，有变化才保存。进展会更新当天内容，切换日期可编辑其他日期。设置自动保存在当前浏览器。</p>
 		<p
 			v-if="error"
 			role="alert"

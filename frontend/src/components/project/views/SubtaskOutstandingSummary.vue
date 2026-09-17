@@ -46,7 +46,7 @@ import {ref, onBeforeUnmount} from 'vue'
 import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
-import {sortProgressNotes} from '@/helpers/progressNotes'
+import {outstandingHtml} from '@/helpers/sharedOutstanding'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 const props = defineProps<{tasks: ProgressTask[]}>()
 const element = ref<HTMLElement>()
@@ -70,7 +70,7 @@ async function load() {
 					if (page >= (result.data.total_pages || 1) || !items.length) break
 				}
 			}
-			const html = sortProgressNotes(history).find(note => note.daily)?.outstanding || ''
+			const html = outstandingHtml(history)
 			const doc = new DOMParser().parseFromString(html, 'text/html')
 			const hasContent = !!doc.body.textContent?.trim() || !!doc.body.querySelector('img')
 			return {task, html: hasContent ? html : '', failed: false}

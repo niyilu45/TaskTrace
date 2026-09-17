@@ -1,12 +1,18 @@
 import {test, expect} from '@playwright/test'
 import {readFileSync} from 'node:fs'
 import path from 'node:path'
+import {execFileSync} from 'node:child_process'
+
+test.use({serviceWorkers: 'block'})
 
 test('portable launch enters workspace without login and renews the session', async ({page}) => {
  test.setTimeout(90000)
  const root = process.env.TASKTRACE_LOCAL_TEST_DIR
  test.skip(!root, 'Requires a running isolated portable test instance')
- const session = JSON.parse(readFileSync(path.join(root!, 'data/local-session.json'), 'utf8').replace(/^\uFEFF/, ''))
+ // Match the launcher: the browser receives its own refresh family.
+ const browserSession = path.join(root!, 'data/e2e-browser-session.json')
+ execFileSync(path.join(root!, 'TaskTrace-server.exe'), ['--config', path.join(root!, 'data/local-config.yml'), 'tasktrace-local-session', '--output', browserSession, '--user-id', readFileSync(path.join(root!, 'data/local-user-id.txt'), 'utf8').trim()], {windowsHide: true, stdio: 'pipe'})
+ const session = JSON.parse(readFileSync(browserSession, 'utf8').replace(/^\uFEFF/, ''))
  const config = readFileSync(path.join(root!, 'data/local-config.yml'), 'utf8')
  const base = config.match(/publicurl: "(http:\/\/127\.0\.0\.1:\d+)\/"/)![1]
  await page.goto(base + '/#tasktrace-local=' + encodeURIComponent(JSON.stringify(session)))
@@ -41,7 +47,8 @@ test('portable launch enters workspace without login and renews the session', as
  await daily.getByLabel('检查间隔（秒）').fill('5')
  await daily.getByLabel('检查间隔（秒）').press('Tab')
  await daily.getByLabel('今日进展', {exact: true}).fill('完成每日进展验收 <保留文本>')
- await daily.getByLabel('遗留问题 / 下一步（选填）', {exact: true}).fill('明天继续测试图片')
+ await daily.getByRole('textbox', {name: '新增遗留事项'}).fill('明天继续测试图片')
+ await daily.getByRole('button', {name: '添加遗留事项'}).click()
  await daily.getByLabel('今日进展', {exact: true}).evaluate(element => {
   const canvas = document.createElement('canvas'); canvas.width = 20; canvas.height = 20
   canvas.getContext('2d')!.fillRect(0, 0, 20, 20)
@@ -53,32 +60,33 @@ test('portable launch enters workspace without login and renews the session', as
  })
  await expect(daily.locator('.progress-images img')).toHaveCount(2)
  await expect(daily.getByRole('status')).toContainText('已自动保存', {timeout: 15000})
- expect(progressWrites).toBe(1)
+ expect(progressWrites).toBe(2)
  await daily.getByLabel('今日进展', {exact: true}).fill('完成每日进展验收 <保留文本>，自动更新')
  await expect(page.locator('.comment').filter({hasText: '自动更新'})).toBeVisible({timeout: 15000})
- expect(progressWrites).toBe(2)
+ expect(progressWrites).toBe(3)
  await page.waitForTimeout(5500)
- expect(progressWrites).toBe(2)
+ expect(progressWrites).toBe(3)
  await page.reload()
- await expect(daily.locator('.progress-images img')).toHaveCount(2)
+ await expect(daily.locator('.readonly-rich-text img')).toHaveCount(2)
  await page.waitForTimeout(5500)
- expect(progressWrites).toBe(2)
+ expect(progressWrites).toBe(3)
  await daily.locator('summary').click()
  await expect(daily.getByLabel('检查间隔（秒）')).toHaveValue('5')
  await daily.getByLabel('启用自动保存').uncheck()
- await daily.getByLabel('遗留问题 / 下一步（选填）').fill('关闭自动保存后手动提交')
+ await daily.getByLabel('今日进展', {exact: true}).fill('完成每日进展验收 <保留文本>，关闭自动保存后手动提交')
  await page.waitForTimeout(5500)
- expect(progressWrites).toBe(2)
+ expect(progressWrites).toBe(3)
  await daily.getByRole('button', {name: '保存进展', exact: true}).click()
  await expect(daily.getByRole('status')).toContainText('进展已保存')
- expect(progressWrites).toBe(3)
+ expect(progressWrites).toBe(4)
  await expect(page.locator('.comment').filter({hasText: '完成每日进展验收 <保留文本>'})).toBeVisible()
- await daily.getByLabel('今日进展', {exact: true}).fill('同一天补充第二条进展')
+ await daily.getByLabel('今日进展', {exact: true}).fill('完成每日进展验收 <保留文本>，同一天补充第二条进展')
  await daily.getByLabel('今日进展', {exact: true}).press('Control+Enter')
  await expect(page.locator('.comment').filter({hasText: '同一天补充第二条进展'})).toBeVisible()
  await page.reload()
  await expect(page.locator('.comment').filter({hasText: '完成每日进展验收 <保留文本>'})).toBeVisible()
  await expect(page.locator('.comment').filter({hasText: '同一天补充第二条进展'})).toBeVisible()
+ await expect(page.locator('.comment').filter({hasText: '每日进展'})).toHaveCount(1)
  const pictures = page.locator('.comment').filter({hasText: '完成每日进展验收 <保留文本>'}).locator('img[data-src]')
  await expect.poll(async () => pictures.evaluateAll(nodes => nodes.filter(node => (node as HTMLImageElement).naturalWidth === 20).length)).toBe(2)
  await page.screenshot({path: path.join(root!, 'workspace.png')})

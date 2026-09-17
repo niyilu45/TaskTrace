@@ -101,6 +101,7 @@ import {ref, computed, onBeforeUnmount} from 'vue'
 import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
+import {outstandingHtml} from '@/helpers/sharedOutstanding'
 import {sortProgressNotes} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
@@ -110,7 +111,7 @@ const element = ref<HTMLElement>()
 const history = ref<TaskComment[]>([])
 const notes = computed(() => sortProgressNotes(history.value))
 // The latest daily record replaces earlier outstanding items, including clearing them.
-const outstanding = computed(() => notes.value.find(note => note.daily)?.outstanding || '')
+const outstanding = computed(() => outstandingHtml(history.value))
 const loading = ref(false)
 const error = ref('')
 let disposed = false

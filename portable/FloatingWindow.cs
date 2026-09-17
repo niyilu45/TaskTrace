@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -9,6 +9,8 @@ using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
@@ -37,7 +39,20 @@ internal sealed class FloatingWindow : Form {
     int autoSaveSeconds = 30;
     int page = 1, total, expandedHeight = 560;
     readonly bool selfTest;
-    bool allowExit;
+    bool allowExit, simpleMode;
+    FlowLayoutPanel toolbar;
+    Rectangle fullBounds;
+    Size simpleSize = new Size(300, 380);
+    readonly Button restoreSimple = new Button { Text = "回到完整悬浮窗", AutoSize = true, Visible = false };
+    readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
+    readonly Timer hoverTimer = new Timer { Interval = 400 };
+    TreeNode hoverNode;
+    sealed class OutstandingBranch { public long TaskId; public bool Loaded; }
+    sealed class OutstandingLeaf { public long TaskId; public string Id, Html; }
+    sealed class PendingItem { public string Id, Html; public override string ToString() { return Plain(Html); } }
+    sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
+    const string SharedHeading = "TaskTrace 遗留事项清单";
+
     sealed class Project { public long Id; public string Title { get; set; } }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, string text);
     static void Hint(TextBox input, string text) { input.HandleCreated += delegate { SendMessage(input.Handle, 0x1501, new IntPtr(1), text); }; }
@@ -66,12 +81,35 @@ internal sealed class FloatingWindow : Form {
         Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
         LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
+        toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var reload = new Button { Text = "刷新", AutoSize = true };
         var settingsButton = new Button { Text = "设置", AutoSize = true };
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
-        toolbar.Controls.AddRange(new Control[] { full, reload, pin, fold, settingsButton });
+        toolbar.Height = 76; toolbar.WrapContents = true;
+        var simple = new Button { Text = "简洁模式", AutoSize = true };
+        simple.Click += delegate { SetSimpleMode(true); };
+        toolbar.Controls.AddRange(new Control[] { full, reload, pin, fold, settingsButton, simple });
+        restoreSimple.Click += delegate { SetSimpleMode(false); };
+        Controls.Add(restoreSimple);
+        Resize += delegate { restoreSimple.Location = new Point(Math.Max(6, ClientSize.Width - restoreSimple.Width - 10), 8); };
+        Deactivate += delegate { if(simpleMode) restoreSimple.Visible = false; };
+        tasks.NodeMouseClick += delegate { if(simpleMode) { restoreSimple.Visible = true; restoreSimple.BringToFront(); } };
+        tasks.MouseDown += delegate(object sender, MouseEventArgs e) { if(simpleMode && e.Button == MouseButtons.Left && tasks.GetNodeAt(e.Location) == null) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), null); } };
+        tasks.ShowNodeToolTips = false;
+        tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
+        tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
+        hoverTimer.Tick += async delegate {
+            hoverTimer.Stop(); var node = hoverNode;
+            if(node == null || !(node.Tag is long)) return;
+            try {
+                var history = DailyHistory(await ReadHistory((long)node.Tag));
+                var latest = history.FirstOrDefault();
+                string text = latest == null ? "暂无每日进展" : DayOf(latest) + "：" + String.Join("\r\n",history.Where(note=>DayOf(note)==DayOf(latest)).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>Plain(ProgressBody((string)note["comment"]))));
+                if(text.Length > 1500) text = text.Substring(0, 1500) + "…";
+                if(!closing && node == hoverNode && node.TreeView == tasks) progressTip.Show(text, tasks, tasks.PointToClient(Cursor.Position).X + 12, tasks.PointToClient(Cursor.Position).Y + 18, 20000);
+            } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }
+        };
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
@@ -110,6 +148,7 @@ internal sealed class FloatingWindow : Form {
         tasks.BeforeCheck += delegate(object sender, TreeViewCancelEventArgs e) {
             if(rendering) return;
             e.Cancel = true;
+            if(!(e.Node.Tag is long)) return;
             if(!busy) {
                 long id = Convert.ToInt64(e.Node.Tag);
                 bool done = !e.Node.Checked;
@@ -117,13 +156,27 @@ internal sealed class FloatingWindow : Form {
             }
         };
         tasks.NodeMouseDoubleClick += delegate(object sender, TreeNodeMouseClickEventArgs e) {
-            if(e.Node.Nodes.Count == 0) { tasks.SelectedNode = e.Node; ShowProgress(); }
+            if(e.Node.Tag is OutstandingBranch || e.Node.Tag is OutstandingLeaf) { var branch = e.Node.Tag as OutstandingBranch; var leaf = e.Node.Tag as OutstandingLeaf; ShowOutstanding(branch != null ? branch.TaskId : leaf.TaskId); }
+            else if(e.Node.Tag is long) { tasks.SelectedNode = e.Node; ShowProgress(); }
         };
         tasks.AfterCollapse += delegate(object sender, TreeViewEventArgs e) {
-            if(!rendering && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+            if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+        };
+        tasks.BeforeExpand += async delegate(object sender, TreeViewCancelEventArgs e) {
+            var branch = e.Node.Tag as OutstandingBranch;
+            if(branch == null || branch.Loaded || rendering) return;
+            e.Cancel = true;
+            try {
+                var shared = ReadShared(await ReadHistory(branch.TaskId));
+                if(e.Node.TreeView != tasks) return;
+                e.Node.Nodes.Clear();
+                foreach(var item in shared.Items) e.Node.Nodes.Add(new TreeNode(Plain(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } });
+                if(shared.Items.Count == 0) e.Node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加") { Tag = new OutstandingBranch { TaskId = branch.TaskId, Loaded = true } });
+                branch.Loaded = true; e.Node.Expand();
+            } catch { if(!closing) { Error(new Exception("遗留事项读取失败，请重新展开重试。")); } }
         };
         tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
-            if(!rendering && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+            if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
         };
         // Minimize keeps the application visible on the Windows taskbar.
         tray.DoubleClick += delegate { RestoreWindow(); };
@@ -132,15 +185,127 @@ internal sealed class FloatingWindow : Form {
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         timer.Tick += async delegate { if(Visible && !collapsed && !busy) { projectsDirty = true; await Reload(); } };
-        Shown += async delegate { await Reload(); timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
+        Shown += async delegate { await Reload();
+            if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
+            timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
             if(e.CloseReason == CloseReason.UserClosing && !allowExit) {
                 e.Cancel = true; SaveBounds(); ShowInTaskbar = true;
                 WindowState = FormWindowState.Minimized;
                 return;
             }
-            closing = true; timer.Stop(); SaveBounds(); tray.Visible = false;
+            closing = true; timer.Stop(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
         };
+    }
+    [DllImport("user32.dll")] static extern bool ReleaseCapture();
+    protected override void WndProc(ref Message message) {
+        base.WndProc(ref message);
+        if(simpleMode && message.Msg == 0x84) {
+            var point = PointToClient(Cursor.Position);
+            bool left = point.X < 7, right = point.X >= ClientSize.Width - 7, top = point.Y < 7, bottom = point.Y >= ClientSize.Height - 7;
+            if(top) message.Result = new IntPtr(left ? 13 : right ? 14 : 12);
+            else if(bottom) message.Result = new IntPtr(left ? 16 : right ? 17 : 15);
+            else if(left || right) message.Result = new IntPtr(left ? 10 : 11);
+        }
+    }
+    void SetSimpleMode(bool enabled) {
+        if(enabled == simpleMode) return;
+        if(enabled) {
+            if(collapsed) ToggleFold(); fullBounds = Bounds; simpleMode = true;
+            content.Controls.Remove(tasks); content.Visible = false; toolbar.Visible = false;
+            FormBorderStyle = FormBorderStyle.None; MinimumSize = new Size(160,120); Padding = new Padding(7);
+            Controls.Add(tasks); tasks.Dock = DockStyle.Fill; Size = simpleSize;
+            restoreSimple.Visible = false;
+        } else {
+            simpleSize = Size; simpleMode = false; Controls.Remove(tasks); Padding = Padding.Empty;
+            FormBorderStyle = FormBorderStyle.Sizable; MinimumSize = new Size(350,300);
+            content.Controls.Add(tasks, 0, 3); content.Visible = true; toolbar.Visible = true; restoreSimple.Visible = false; Bounds = fullBounds;
+        }
+        SaveSimpleMode();
+    }
+    void SaveSimpleMode() {
+        try { if(simpleMode && WindowState == FormWindowState.Normal) simpleSize = Size; File.WriteAllText(Path.Combine(data,"simple-window.json"), json.Serialize(new {enabled=simpleMode,width=simpleSize.Width,height=simpleSize.Height})); } catch { }
+    }
+    static string Plain(string html) {
+        string value = Regex.Replace(html ?? "", @"<br\s*/?>|</p>|</div>|</li>", "\r\n", RegexOptions.IgnoreCase);
+        return WebUtility.HtmlDecode(Regex.Replace(value, "<[^>]+>", "")).Trim();
+    }
+    async Task<List<Dictionary<string,object>>> ReadHistory(long id) {
+        var notes = new List<Dictionary<string,object>>();
+        for(int pageIndex=1; ;pageIndex++) {
+            var result = await Api("GET", "/tasks/"+id+"/comments?per_page=100&page="+pageIndex+"&order_by=desc", null);
+            int count=0; foreach(Dictionary<string,object> note in (IEnumerable)result["items"]) { notes.Add(note); count++; }
+            if(count==0 || pageIndex>=Convert.ToInt32(result["total_pages"])) break;
+        }
+        return notes;
+    }
+    static string DayOf(Dictionary<string,object> note) {
+        var match = Regex.Match((string)note["comment"], @"<h3[^>]*>每日进展\s*[·:：]\s*(\d{4}-\d{2}-\d{2})</h3>");
+        return match.Success ? match.Groups[1].Value : "";
+    }
+    static List<long> MergedIds(string html) {
+        var match = Regex.Match(html, "data-tasktrace-merged=\"([0-9,]*)\"");
+        var result = new List<long>(); long id;
+        foreach(string value in match.Groups[1].Value.Split(',')) if(long.TryParse(value,out id) && id>0) result.Add(id);
+        return result;
+    }
+    static List<Dictionary<string,object>> DailyHistory(List<Dictionary<string,object>> notes) {
+        var hidden = new HashSet<long>(notes.SelectMany(note => MergedIds((string)note["comment"])));
+        return notes.Where(note => DayOf(note)!="" && !hidden.Contains(Convert.ToInt64(note["id"]))).OrderByDescending(note => DayOf(note)).ThenByDescending(note => Convert.ToInt64(note["id"])).ToList();
+    }
+    static string ProgressBody(string html) {
+        html = Regex.Replace(html, @"<h3[^>]*>.*?</h3>", "", RegexOptions.Singleline);
+        return Regex.Replace(html, @"<p>\s*<strong>遗留问题 / 下一步</strong>\s*</p>\s*<p>.*?</p>", "", RegexOptions.Singleline);
+    }
+    static SharedList ReadShared(List<Dictionary<string,object>> notes) {
+        var list = new SharedList();
+        var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => ((string)note["comment"]).Contains("<h3>"+SharedHeading+"</h3>"));
+        if(record != null) {
+            list.CommentId = Convert.ToInt64(record["id"]);
+            foreach(Match match in Regex.Matches((string)record["comment"], "<li data-id=\"([^\"]+)\">(.*?)</li>", RegexOptions.Singleline)) list.Items.Add(new PendingItem {Id=match.Groups[1].Value,Html=match.Groups[2].Value});
+        } else {
+            var latest = DailyHistory(notes).FirstOrDefault();
+            if(latest != null) {
+                var match = Regex.Match((string)latest["comment"], @"<p>\s*<strong>遗留问题 / 下一步</strong>\s*</p>\s*<p>(.*?)</p>", RegexOptions.Singleline);
+                int index=0;
+                foreach(string value in Regex.Split(match.Groups[1].Value, @"<br\s*/?>")) if(value.Trim()!="") list.Items.Add(new PendingItem {Id="legacy-"+latest["id"]+"-"+(index++),Html=value});
+            }
+        }
+        return list;
+    }
+    async Task WriteShared(long id, SharedList list) {
+        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+item.Id+"\">"+item.Html+"</li>"))+"</ul>";
+        var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
+        list.CommentId = Convert.ToInt64(saved["id"]);
+    }
+    async void ShowOutstanding(long id, bool nested = false) {
+        if(busy && !nested) return;
+        var owner = Form.ActiveForm ?? this;
+        SetBusy(true); timer.Stop();
+        try {
+            var shared = ReadShared(await ReadHistory(id));
+            using(var dialog = new Form {Text="遗留事项 · 所有日期共享",Size=new Size(480,380),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent}) {
+                var list = new ListBox {Dock=DockStyle.Fill};
+                var input = new TextBox {Dock=DockStyle.Top,AccessibleName="新增遗留事项"};
+                var buttons = new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=40};
+                var add = new Button {Text="添加一条",AutoSize=true}; var remove = new Button {Text="移除选中",AutoSize=true};
+                var feedback = new Label {Dock=DockStyle.Bottom,Height=32,Text="逐条添加，切换进展日期不会改变此清单。"};
+                Action render = delegate {list.Items.Clear();foreach(var item in shared.Items) list.Items.Add(item);};render();
+                bool writing=false;
+                Func<bool,Task> save = async delegate(bool adding) {
+                    if(writing || (adding && String.IsNullOrWhiteSpace(input.Text)) || (!adding && list.SelectedItem==null)) return;
+                    var selected = list.SelectedItem as PendingItem; writing=true; buttons.Enabled=false;input.Enabled=false;list.Enabled=false;
+                    try { var current = ReadShared(await ReadHistory(id)); if(adding) current.Items.Add(new PendingItem {Id=Guid.NewGuid().ToString(),Html=WebUtility.HtmlEncode(input.Text.Trim())}); else current.Items.RemoveAll(item=>item.Id==selected.Id); await WriteShared(id,current); shared=current;render();if(adding)input.Clear();feedback.Text="已保存。"; }
+                    catch {feedback.Text="保存失败，输入已保留，请重试。";}
+                    finally {writing=false;buttons.Enabled=true;input.Enabled=true;list.Enabled=true;}
+                };
+                add.Click+=async delegate {await save(true);};remove.Click+=async delegate {await save(false);};
+                input.KeyDown+=async delegate(object sender,KeyEventArgs e){if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;await save(true);}};
+                buttons.Controls.AddRange(new Control[]{add,remove});dialog.Controls.Add(list);dialog.Controls.Add(input);dialog.Controls.Add(feedback);dialog.Controls.Add(buttons);
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(owner);
+            }
+            await LoadTasks();
+        } catch(Exception e){Error(e);}finally {if(!nested){SetBusy(false);timer.Start();}}
     }
     TableLayoutPanel Row(TextBox input, string title, EventHandler action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
@@ -233,7 +398,7 @@ internal sealed class FloatingWindow : Form {
             matches.Add(id); long cursor = id;
             while(included.Add(cursor) && parents.ContainsKey(cursor)) cursor = parents[cursor];
         }
-        long selectedId = tasks.SelectedNode == null ? 0 : Convert.ToInt64(tasks.SelectedNode.Tag);
+        long selectedId = tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long) ? 0 : (long)tasks.SelectedNode.Tag;
         rendering = true; tasks.BeginUpdate();
         try {
             tasks.Nodes.Clear(); var nodes = new Dictionary<long, TreeNode>(); var roots = new List<TreeNode>();
@@ -256,6 +421,11 @@ internal sealed class FloatingWindow : Form {
             tasks.ExpandAll();
             if(query.Length == 0) foreach(var pair in nodes) if(collapsedTasks.Contains(pair.Key)) pair.Value.Collapse();
             if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView == tasks) tasks.SelectedNode = nodes[selectedId];
+            if(!selfTest) foreach(var pair in nodes) {
+                if(!parents.ContainsKey(pair.Key)) continue;
+                var branch = new TreeNode("遗留事项（展开查看，双击管理）") { Tag = new OutstandingBranch { TaskId = pair.Key } };
+                branch.Nodes.Add(new TreeNode("读取中…")); pair.Value.Nodes.Add(branch);
+            }
             previous.Enabled = page > 1; next.Enabled = page * 50 < total;
             status.ForeColor = ForeColor;
             status.Text = matches.Count == 0 ? "没有匹配事项，可清空搜索或显示已完成。" : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
@@ -276,8 +446,9 @@ internal sealed class FloatingWindow : Form {
         catch(Exception e) { Error(e); } finally { SetBusy(false); }
     }
     sealed class PastedImage { public byte[] Bytes; public long Id; }
-    async Task<long> SaveProgress(long id, DateTime day, string progress, string nextStep, List<PastedImage> pictures = null, long commentId = 0) {
+    async Task<long> SaveProgress(long id, DateTime day, string progress, string nextStep, List<PastedImage> pictures = null, long commentId = 0, string bodyOverride = null, List<long> mergedIds = null) {
         string note = "<h3>每日进展 · " + day.ToString("yyyy-MM-dd") + "</h3><p>" + WebUtility.HtmlEncode(progress.Trim()).Replace("\r\n", "<br>").Replace("\n", "<br>") + "</p>";
+        if(bodyOverride != null) note = "<h3 data-tasktrace-merged=\"" + String.Join(",", mergedIds ?? new List<long>()) + "\">每日进展 · " + day.ToString("yyyy-MM-dd") + "</h3>" + bodyOverride;
         if(!string.IsNullOrWhiteSpace(nextStep)) note += "<p><strong>遗留问题 / 下一步</strong></p><p>" + WebUtility.HtmlEncode(nextStep.Trim()).Replace("\r\n", "<br>").Replace("\n", "<br>") + "</p>";
         if(pictures != null) foreach(var picture in pictures) {
             if(picture.Id == 0) {
@@ -302,68 +473,65 @@ internal sealed class FloatingWindow : Form {
         var resultNote = await Api(commentId == 0 ? "POST" : "PUT", "/tasks/" + id + "/comments" + (commentId == 0 ? "" : "/" + commentId), new { comment = note });
         return Convert.ToInt64(resultNote["id"]);
     }
-    void ShowProgress() {
+    sealed class ProgressDraft { public string Text; public List<PastedImage> Pictures; }
+    async void ShowProgress() {
         if(busy || closing) return;
-        if(tasks.SelectedNode == null) { status.Text = "请先选中要记录进展的事项。"; return; }
-        long id = Convert.ToInt64(tasks.SelectedNode.Tag);
-        using(var dialog = new Form { Text = "每日进展 · " + tasks.SelectedNode.Text, Size = new Size(430, 450), MinimumSize = new Size(380, 420), StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 1, RowCount = 7 };
-            var day = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy-MM-dd", Dock = DockStyle.Fill, Value = DateTime.Today };
-            var progress = new TextBox { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, AccessibleName = "今日进展" };
-            var nextStep = new TextBox { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill, AccessibleName = "遗留问题 / 下一步" };
-            var save = new Button { Text = "保存进展 (Ctrl+Enter)", Dock = DockStyle.Fill };
-            var feedback = new Label { Text = "保存后追加到事项历史，不覆盖已有内容。", Dock = DockStyle.Fill };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 60)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 40)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-            layout.Controls.Add(day); layout.Controls.Add(new Label { Text = "今日进展", Dock = DockStyle.Fill }); layout.Controls.Add(progress);
-            layout.Controls.Add(new Label { Text = "遗留问题 / 下一步（选填）", Dock = DockStyle.Fill }); layout.Controls.Add(nextStep); layout.Controls.Add(save); layout.Controls.Add(feedback);
-            dialog.Controls.Add(layout);
-            var pictures = new List<PastedImage>();
-            bool submitting = false, saved = false;
-            long commentId = 0;
-            string lastSaved = "";
-            Func<string> snapshot = delegate { return json.Serialize(new { date = day.Value.Date, text = progress.Text, next = nextStep.Text, images = pictures.Count }); };
-            Func<bool, Task> write = async delegate(bool finish) {
-                if(submitting || (string.IsNullOrWhiteSpace(progress.Text) && pictures.Count == 0 && commentId == 0)) return;
-                string current = snapshot();
-                if(current == lastSaved) { if(finish) { saved = true; dialog.Close(); } return; }
-                submitting = true; save.Enabled = false; progress.ReadOnly = true; nextStep.ReadOnly = true; day.Enabled = false;
-                try {
-                    commentId = await SaveProgress(id, day.Value, progress.Text, nextStep.Text, pictures, commentId);
-                    lastSaved = current;
-                    if(finish) { saved = true; dialog.Close(); status.Text = "今日进展已保存。"; }
-                    else feedback.Text = "已自动保存 " + DateTime.Now.ToString("HH:mm:ss") + "，继续编辑更新本条记录。";
-                }
-                catch(Exception) { feedback.Text = "保存失败，内容已保留，将在下次检查时重试。"; }
-                finally { submitting = false; if(!dialog.IsDisposed) { save.Enabled = true; progress.ReadOnly = false; nextStep.ReadOnly = false; day.Enabled = true; } }
-            };
-            save.Click += async delegate { await write(true); };
-            var autoTimer = new Timer { Interval = autoSaveSeconds * 1000 };
-            autoTimer.Tick += async delegate { if(autoSaveEnabled) await write(false); };
-            autoTimer.Start();            dialog.KeyPreview = true;
-            feedback.Text = "支持 Ctrl+V 粘贴截图，可连续粘贴多张。";
-            dialog.KeyDown += delegate(object sender, KeyEventArgs e) {
-                if(e.Control && e.KeyCode == Keys.V && !submitting) {
+        if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text="请先选中事项。";return; }
+        long id=(long)tasks.SelectedNode.Tag; string taskTitle=tasks.SelectedNode.Text;
+        SetBusy(true); timer.Stop();
+        try {
+            var history = await ReadHistory(id);
+            using(var dialog=new Form {Text="每日进展 · "+taskTitle,Size=new Size(480,500),MinimumSize=new Size(380,420),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
+                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=6};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+                var day=new DateTimePicker {Format=DateTimePickerFormat.Custom,CustomFormat="yyyy-MM-dd",Value=DateTime.Today,Dock=DockStyle.Fill};
+                var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="今日进展"};
+                var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
+                sharedButton.Click+=delegate {ShowOutstanding(id,true);};
+                var save=new Button {Text="保存当天进展 (Ctrl+Enter)",Dock=DockStyle.Fill};
+                var feedback=new Label {Dock=DockStyle.Fill};
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="同一天的记录合并编辑，历史图片保留",Dock=DockStyle.Fill});layout.Controls.Add(progress);layout.Controls.Add(sharedButton);layout.Controls.Add(save);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();
+                string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false;
+                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count});};
+                Action stash=delegate {if(selectedDay!="" && snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Text=progress.Text,Pictures=new List<PastedImage>(pictures)};};
+                Action loadDay=delegate {
+                    selectedDay=day.Value.ToString("yyyy-MM-dd");
+                    var records=DailyHistory(history).Where(note=>DayOf(note)==selectedDay).OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
+                    commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));
+                    mergedIds=records.Select(note=>Convert.ToInt64(note["id"])).Concat(records.SelectMany(note=>MergedIds((string)note["comment"]))).Where(value=>value!=commentId).Distinct().ToList();
+                    originalBody=String.Join("",records.Select(note=>ProgressBody((string)note["comment"])));originalText=Plain(Regex.Replace(originalBody,"<img[^>]*>","",RegexOptions.IgnoreCase));
+                    progress.Text=originalText;pictures=new List<PastedImage>();lastSaved=snapshot();
+                    if(drafts.ContainsKey(selectedDay)){progress.Text=drafts[selectedDay].Text;pictures=drafts[selectedDay].Pictures;}
+                    feedback.Text=records.Count==0?"此日期尚无进展。支持 Ctrl+V 粘贴图片。":"已载入当天合并内容；保存更新当天记录，原图片保留。";
+                };
+                loadDay();day.ValueChanged+=delegate {if(!submitting){stash();loadDay();}};
+                Func<bool,Task> write=async delegate(bool finish) {
+                    if(submitting || (String.IsNullOrWhiteSpace(progress.Text) && pictures.Count==0 && commentId==0))return;
+                    if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return;}
+                    submitting=true;day.Enabled=false;save.Enabled=false;sharedButton.Enabled=false;progress.ReadOnly=true;
                     try {
-                        if(Clipboard.ContainsImage()) {
-                            e.SuppressKeyPress = true;
-                            using(var image = Clipboard.GetImage()) using(var stream = new MemoryStream()) {
-                                image.Save(stream, System.Drawing.Imaging.ImageFormat.Png); pictures.Add(new PastedImage { Bytes = stream.ToArray() });
-                            }
-                            feedback.Text = "已粘贴 " + pictures.Count + " 张图片，点击保存后上传。";
-                        }
-                    } catch { feedback.Text = "剪贴板暂不可用，请重新复制图片后再试。"; }
-                }
-                if(e.Control && e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; save.PerformClick(); } };
-            dialog.FormClosing += delegate(object sender, FormClosingEventArgs e) {
-                if(saved || snapshot() == lastSaved) return;
-                if(submitting) { e.Cancel = true; return; }
-                if((progress.Text.Length > 0 || nextStep.Text.Length > 0 || pictures.Count > 0) && MessageBox.Show(dialog, "进展尚未保存，确定放弃？", "每日进展", MessageBoxButtons.YesNo) != DialogResult.Yes) e.Cancel = true;
-            };
-            SetBusy(true); timer.Stop();
-            try { dialog.ShowDialog(this); } finally { autoTimer.Stop(); autoTimer.Dispose(); SetBusy(false); timer.Start(); }
-        }
+                        var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
+                        string images=String.Join("",Regex.Matches(originalBody,"<img[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
+                        string body=progress.Text==originalText?originalBody:"<p>"+WebUtility.HtmlEncode(progress.Text.Trim()).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>"+images;
+                        commentId=await SaveProgress(id,day.Value,progress.Text,"",pictures,commentId,body,mergedIds);
+                        // Preserve uploaded images without adding them again on the next edit.
+                        foreach(var picture in pictures) body+="<p><img src=\"/api/v1/tasks/"+id+"/attachments/"+picture.Id+"\"></p>";
+                        originalBody=body;originalText=progress.Text;pictures.Clear();lastSaved=snapshot();drafts.Remove(selectedDay);
+                        history=await ReadHistory(id);feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
+                    } catch {feedback.Text="保存失败，内容已保留，请重试。";}
+                    finally{submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;progress.ReadOnly=false;}
+                };
+                save.Click+=async delegate {await write(true);};
+                var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=async delegate {if(autoSaveEnabled && snapshot()!=lastSaved)await write(false);};autoTimer.Start();
+                dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
+                    if(e.Control && e.KeyCode==Keys.V && !submitting && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}feedback.Text="已粘贴 "+pictures.Count+" 张图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
+                };
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(submitting){e.Cancel=true;return;}stash();if(drafts.Count>0 && MessageBox.Show(dialog,"还有日期的进展未保存，确定放弃这些修改？","每日进展",MessageBoxButtons.YesNo)!=DialogResult.Yes)e.Cancel=true;};
+                try{dialog.ShowDialog(this);}finally{autoTimer.Stop();autoTimer.Dispose();}
+            }
+        }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
     async Task<long> CreateSubtask(long parentId, long projectId, string title, long existingId = 0) {
         long childId = existingId;
@@ -373,7 +541,7 @@ internal sealed class FloatingWindow : Form {
     }
     async Task ShowSubtasks() {
         if(busy || closing) return;
-        if(tasks.SelectedNode == null) { status.Text = "请先选中一个父事项。"; return; }
+        if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text = "请先选中一个父事项。"; return; }
         long parentId = Convert.ToInt64(tasks.SelectedNode.Tag);
         SetBusy(true); timer.Stop();
         try {
@@ -539,7 +707,7 @@ internal sealed class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds; File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked })); } catch { }
+        try { var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -570,11 +738,33 @@ internal sealed class FloatingWindow : Form {
             await Api("PATCH", "/tasks/" + childId, new { done = true });
             if(Convert.ToBoolean((await Api("GET", "/tasks/" + id, null))["done"])) throw new Exception("Child completion incorrectly completed parent");
             await Api("PATCH", "/tasks/" + childId, new { done = false });
+            var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二"});
+            await WriteShared(childId,sharedTest);
+            long oldDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第一条", "");
+            long sameDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第二条", "");
+            await SaveProgress(childId,DateTime.Today.AddDays(-2),"合并编辑", "",null,sameDay,"<p>合并编辑</p>",new List<long>{oldDay});
+            var sharedHistory=await ReadHistory(childId);
+            if(ReadShared(sharedHistory).Items.Count!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding or merged history failed");
+            sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
+            if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
+            var beforeSimple=Bounds;SetSimpleMode(true);Size=new Size(230,220);
+            if(!simpleMode || content.Visible || toolbar.Visible || tasks.Parent!=this || FormBorderStyle!=FormBorderStyle.None || restoreSimple.Visible)throw new Exception("Simple mode layout failed");
+            SetSimpleMode(false);if(Bounds!=beforeSimple || tasks.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
             long grandchildId = await CreateSubtask(childId, Convert.ToInt64(parentWithChild["project_id"]), "下级子任务验收");
             await LoadTasks();
             if(tasks.Nodes.Count != 1 || tasks.Nodes[0].Nodes.Count != 1 || tasks.Nodes[0].Nodes[0].Nodes.Count != 1) throw new Exception("Task hierarchy missing");
             if(tasks.Nodes[0].Nodes[0].Level != 1 || tasks.Nodes[0].Nodes[0].Nodes[0].Level != 2) throw new Exception("Subtask indentation missing");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-tree-test.png")); }
+            var outstandingTest = new TreeNode("遗留事项") {Tag = new OutstandingBranch {TaskId=childId}};
+            outstandingTest.Nodes.Add(new TreeNode("读取中…")); tasks.Nodes[0].Nodes[0].Nodes.Add(outstandingTest); outstandingTest.Expand();
+            for(int attempt=0;attempt<100 && !((OutstandingBranch)outstandingTest.Tag).Loaded;attempt++) await Task.Delay(50);
+            if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="跨日期待办二")throw new Exception("Outstanding dropdown failed");
+            SetSimpleMode(true);Size=new Size(330,260);
+            using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
+            restoreSimple.Visible=true;restoreSimple.BringToFront();
+            using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
+            restoreSimple.PerformClick();if(simpleMode)throw new Exception("Simple mode restore button failed");
+            outstandingTest.Remove();
             tasks.Nodes[0].Collapse(); collapsedTasks.Clear(); LoadTreePreferences(); await LoadTasks();
             if(tasks.Nodes[0].IsExpanded || !collapsedTasks.Contains(id)) throw new Exception("Collapsed state not retained");
             search.Text = "下级子任务验收"; await LoadTasks();
@@ -629,9 +819,9 @@ internal sealed class FloatingWindow : Form {
             RestoreWindow();
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
-    protected override void Dispose(bool disposing) { if(disposing) { timer.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if(disposing) { timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
 }
