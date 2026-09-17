@@ -886,6 +886,7 @@ internal sealed partial class FloatingWindow : Form {
             }
             await TestInteractions();
             await TestPriorityFilter();
+            TestPriorityLinks();
             await TestSimpleOutstandingDetails();
             await TestUndo();
             await TestProgressReferences();

@@ -17,10 +17,10 @@ internal sealed partial class TaskTreeView {
     bool swallowImageUp;
 
     internal void SetSimpleImageLinks(bool enabled) {
-        simpleImageLinks=enabled;pressedImageNode=null;swallowImageUp=false;
+        simpleImageLinks=enabled;pressedImageNode=null;swallowImageUp=false;ResetPriorityLinkPress();
         if(Capture)Capture=false;
         Cursor=Cursors.Default;
-        DrawMode=enabled?TreeViewDrawMode.OwnerDrawText:TreeViewDrawMode.Normal;
+        DrawMode=TreeViewDrawMode.OwnerDrawText;
         Invalidate();
     }
     internal Rectangle SimpleImageBounds(TreeNode node) {
@@ -50,6 +50,7 @@ internal sealed partial class TaskTreeView {
         return null;
     }
     protected override void OnDrawNode(DrawTreeNodeEventArgs e) {
+        if(DrawPriorityLink(e)){base.OnDrawNode(e);return;}
         var link=SimpleImageBounds(e.Node);
         if(link.IsEmpty){e.DrawDefault=true;base.OnDrawNode(e);return;}
         Font font=e.Node.NodeFont??Font;
@@ -72,10 +73,11 @@ internal sealed partial class TaskTreeView {
     }
     protected override void OnMouseMove(MouseEventArgs e) {
         base.OnMouseMove(e);
-        Cursor=simpleImageLinks && ImageNodeAt(e.Location)!=null?Cursors.Hand:Cursors.Default;
+        Cursor=PriorityNodeAt(e.Location)!=null || (simpleImageLinks && ImageNodeAt(e.Location)!=null)?Cursors.Hand:Cursors.Default;
     }
     protected override void OnMouseLeave(EventArgs e) {Cursor=Cursors.Default;base.OnMouseLeave(e);}
     internal bool HandleSimpleImageMessage(ref Message message) {
+        if(HandlePriorityLinkMessage(ref message))return true;
         const int LeftDown=0x201,LeftUp=0x202,LeftDoubleClick=0x203,MouseMove=0x200,CaptureChanged=0x215;
         if(message.Msg==CaptureChanged){pressedImageNode=null;swallowImageUp=false;return false;}
         if(!simpleImageLinks || !Enabled)return false;
@@ -248,7 +250,7 @@ internal sealed partial class FloatingWindow {
             var pending=new TaskCompletionSource<SharedList>();
             Task stale=RefreshSimpleOutstandingWithReader(delegate(long id){return id==900001L?pending.Task:Task.FromResult(new SharedList());});
             SetSimpleMode(false);await RefreshSimpleOutstandingWithReader(read);pending.SetResult(shared);await stale;
-            if(parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf) || !parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingBranch) || tasks.DrawMode!=TreeViewDrawMode.Normal)throw new Exception("Late simple results replaced normal outstanding branches");
+            if(parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf) || !parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingBranch) || tasks.DrawMode!=TreeViewDrawMode.OwnerDrawText || !tasks.SimpleImageBounds(image).IsEmpty)throw new Exception("Late simple results replaced normal outstanding branches");
             SetSimpleMode(true);
             var replaced=new TaskCompletionSource<SharedList>();
             stale=RefreshSimpleOutstandingWithReader(delegate(long id){return replaced.Task;});

@@ -54,11 +54,15 @@ internal sealed partial class FloatingWindow {
         return raw >= 1 && raw <= 10 ? 10-(int)raw : 9;
     }
     void InitializeInteractions() {
-        var priority = new Button {Text="优先级",AutoSize=true};
         var pictures = new Button {Text="查看图片",AutoSize=true};
-        priority.Click += async delegate {await ShowPriority();};
+        tasks.PriorityClicked += async delegate(TreeNode node) {
+            if(busy || closing || dragging || node == null || !(node.Tag is long) || node.TreeView != tasks)return;
+            tasks.SelectedNode=node;hoverTimer.Stop();progressTip.Hide(tasks);
+            await ShowPriority();
+        };
+        tasks.SetSimpleImageLinks(false);
         pictures.Click += async delegate {await ShowSelectedImages();};
-        toolbar.Controls.AddRange(new Control[]{priority,pictures,priorityFilterButton}); toolbar.Height=108;
+        toolbar.Controls.AddRange(new Control[]{pictures,priorityFilterButton}); toolbar.Height=108;
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
         prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
         InitializePriorityFilter();
@@ -357,6 +361,35 @@ internal sealed partial class FloatingWindow {
         }catch(Exception e){if(selfTest){gallery.Close();throw;}if(!gallery.IsDisposed)heading.Text="图片读取失败："+e.Message;}
     }
 
+    async Task TestInlinePriorityEdit(long targetId,long otherId,int priority,bool useSimpleMode) {
+        var otherBefore=await Api("GET","/tasks/"+otherId,null);
+        if(useSimpleMode){SetSimpleMode(true);await RefreshSimpleOutstanding();}
+        var target=tasks.Nodes.Find(targetId.ToString(),true).First();
+        tasks.SelectedNode=tasks.Nodes.Find(otherId.ToString(),true).First();target.EnsureVisible();
+        bool saved=false;Form opened=null;
+        using(var driver=new Timer{Interval=25}) {
+            driver.Tick+=delegate {
+                opened=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text=="优先级 · "+TaskTitle(targetId));
+                if(opened==null || saved)return;
+                var layout=opened.Controls.OfType<TableLayoutPanel>().Single();
+                layout.Controls.OfType<ComboBox>().Single().SelectedIndex=priority;
+                saved=true;driver.Stop();layout.Controls.OfType<Button>().Single(button=>button.Text=="保存优先级").PerformClick();
+            };
+            driver.Start();
+            var link=tasks.PriorityLinkBounds(target);
+            if(link.IsEmpty)throw new Exception("Visible task has no priority link");
+            int coordinates=(link.Top+link.Height/2)<<16 | (link.Left+link.Width/2)&0xffff;
+            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(coordinates));
+            SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(coordinates));
+            for(int attempt=0;attempt<400 && (!saved || busy || (opened!=null && !opened.IsDisposed));attempt++)await Task.Delay(25);
+            if(!saved || busy || (opened!=null && !opened.IsDisposed))throw new Exception("Inline priority editor failed to save and close");
+        }
+        var updated=await Api("GET","/tasks/"+targetId,null);
+        var otherAfter=await Api("GET","/tasks/"+otherId,null);
+        if(PriorityNumber(updated)!=priority || PriorityNumber(otherBefore)!=PriorityNumber(otherAfter))throw new Exception("Priority click edited the wrong task or was not persisted");
+        if(!tasks.Nodes.Find(targetId.ToString(),true).First().Text.Contains("[P"+priority+"]"))throw new Exception("Saved priority did not refresh its task label");
+        if(useSimpleMode)SetSimpleMode(false);
+    }
     async Task TestInteractions(){
         var project=projects.SelectedItem as Project;var created=new List<long>();
         {
@@ -379,6 +412,7 @@ internal sealed partial class FloatingWindow {
             if((long)tasks.Nodes[0].Tag!=b || (long)tasks.Nodes[1].Tag!=a || (long)tasks.Nodes[2].Tag!=c || !node(b).Text.Contains("[P0]"))throw new Exception("Lower displayed priority did not sort first");
             if(node(child).Parent!=node(b))throw new Exception("Priority sorting detached children");
             var preference=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));if(!Convert.ToBoolean(preference["priority"]))throw new Exception("Sort preference not persisted");
+            await TestInlinePriorityEdit(child,b,3,false);await TestInlinePriorityEdit(child,b,9,true);
             await ExecuteDrop(MakeDropPlan(node(c),node(a),-1));if(prioritySort.Checked)throw new Exception("Manual drag did not restore manual ordering");
             var pictures=new List<PastedImage>();using(var bitmap=new Bitmap(80,50)){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.SteelBlue);using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}
             string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});await WriteShared(a,source);
@@ -396,7 +430,7 @@ internal sealed partial class FloatingWindow {
             await EditOutstanding(b,false,true);if(editingOutstanding)throw new Exception("Outstanding editor did not resume auto-save");
             foreach(var item in moved.Items)if(String.IsNullOrEmpty(OutstandingText(item.Html)))throw new Exception("Image-only outstanding title missing");
             tasks.Nodes[0].Expand();using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-interactions-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, priorities 0-9 + default 9, persisted sort setting, manual drag restores manual order, outstanding reorder + cross-task transfer, copied image survives deleting source, gallery downloads, external URLs rejected.");
+            File.WriteAllText(Path.Combine(data,"floating-interactions-test.txt"),"PASS: drop targets, task parent/order persisted, cycle blocked, hierarchical numbering, priorities 0-9 + default 9, persisted sort setting, inline priority click saves clicked task in full/simple mode, manual drag restores manual order, outstanding reorder + cross-task transfer, copied image survives deleting source, gallery downloads, external URLs rejected.");
         }
         {
             foreach(long id in created.AsEnumerable().Reverse())try{await Api("DELETE","/tasks/"+id,null);}catch{}
