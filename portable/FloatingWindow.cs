@@ -33,7 +33,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly CheckBox pin = new CheckBox { Text = "置顶", Checked = true, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
     readonly Button fold = new Button { Text = "收起", AutoSize = true };
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
-    readonly Timer timer = new Timer { Interval = 30000 };
+    readonly Timer timer = new Timer { Interval = 1000 };
     readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Visible = false };
     bool busy, rendering, collapsed, closing, projectsDirty = true;
     bool autoSaveEnabled = true;
@@ -162,12 +162,14 @@ internal sealed partial class FloatingWindow : Form {
             if(branch == null || branch.Loaded || rendering) return;
             e.Cancel = true;
             try {
+                long revision=AutoRefreshRevision;
                 var shared = ReadShared(await ReadHistory(branch.TaskId));
                 if(e.Node.TreeView != tasks) return;
                 e.Node.Nodes.Clear();
                 for(int index=0; index<shared.Items.Count; index++) { var item=shared.Items[index]; e.Node.Nodes.Add(new TreeNode((index+1)+". "+OutstandingText(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } }); }
                 if(shared.Items.Count == 0) e.Node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加") { Tag = new OutstandingBranch { TaskId = branch.TaskId, Loaded = true } });
                 branch.Loaded = true; e.Node.Expand();
+                if(revision!=AutoRefreshRevision)SignalAutoRefreshChange();
             } catch { if(!closing) { Error(new Exception("遗留事项读取失败，请重新展开重试。")); } }
         };
         tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
@@ -181,7 +183,7 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
-        timer.Tick += async delegate { if(Visible && !collapsed && !busy && !dragging) { projectsDirty = true; await Reload(); } };
+        InitializeAutoRefresh();
         Shown += async delegate { await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
@@ -298,108 +300,6 @@ internal sealed partial class FloatingWindow : Form {
         try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); await RefreshUndo(); }
         catch(Exception e) { Error(e); }
         finally { SetBusy(false); }
-    }
-    async Task LoadTasks() {
-        InvalidateSimpleOutstanding();
-        if(projectsDirty) {
-            var previousProject = projects.SelectedItem as Project;
-            long requestedProject = previousProject == null ? preferredProjectId : previousProject.Id;
-            rendering = true;
-            try {
-                projects.Items.Clear();
-                int p = 1;
-                while(true) {
-                    var list = await Api("GET", "/projects?per_page=100&page=" + p, null);
-                    foreach(Dictionary<string, object> item in (IEnumerable)list["items"]) projects.Items.Add(new Project { Id = Convert.ToInt64(item["id"]), Title = (string)item["title"] });
-                    if(projects.Items.Count >= Convert.ToInt32(list["total"])) break; p++;
-                }
-                if(projects.Items.Count > 0) {
-                    projects.SelectedIndex = 0;
-                    if(requestedProject > 0) foreach(Project candidate in projects.Items) if(candidate.Id == requestedProject) { projects.SelectedItem = candidate; break; }
-                }
-                projectsDirty = false;
-            } finally { rendering = false; }
-        }
-        var project = projects.SelectedItem as Project;
-        if(project == null) { tasks.Nodes.Clear(); status.Text = "请先在完整界面建立项目。"; UpdateSimpleModeState(); return; }
-        var all = new Dictionary<long, Dictionary<string, object>>();
-        var ordered = new List<long>();
-        for(int fetchPage = 1; ; fetchPage++) {
-            var result = await Api("GET", "/projects/" + project.Id + "/tasks?per_page=100&page=" + fetchPage + "&sort_by=id&order_by=desc", null);
-            int count = 0;
-            foreach(Dictionary<string, object> item in (IEnumerable)result["items"]) {
-                long id = Convert.ToInt64(item["id"]); count++;
-                if(!all.ContainsKey(id)) ordered.Add(id);
-                all[id] = item;
-            }
-            if(count == 0 || fetchPage >= Convert.ToInt32(result["total_pages"])) break;
-        }
-        await ReadTaskOrder(project.Id, all);
-        ordered = SortTaskIds(ordered, all);
-        taskCache = all;
-        var parents = new Dictionary<long, long>();
-        foreach(long id in ordered) {
-            object relationsValue, parentValue;
-            if(!all[id].TryGetValue("related_tasks", out relationsValue)) continue;
-            var relations = relationsValue as Dictionary<string, object>;
-            if(relations == null || !relations.TryGetValue("parenttask", out parentValue) || parentValue == null) continue;
-            foreach(Dictionary<string, object> parent in (IEnumerable)parentValue) {
-                long parentId = Convert.ToInt64(parent["id"]);
-                if(parentId != id && all.ContainsKey(parentId) && (!parents.ContainsKey(id) || parentId < parents[id])) parents[id] = parentId;
-            }
-        }
-        // Break malformed cycles so every task still has a reachable root.
-        foreach(long id in ordered) {
-            var seen = new HashSet<long>(); long cursor = id;
-            while(parents.ContainsKey(cursor)) {
-                if(!seen.Add(cursor)) { parents.Remove(cursor); break; }
-                cursor = parents[cursor];
-            }
-        }
-        taskParents = parents;
-        var included = new HashSet<long>(); var matches = new HashSet<long>();
-        string query = search.Text.Trim();
-        foreach(long id in ordered) {
-            if(!showCompleted.Checked && Convert.ToBoolean(all[id]["done"])) continue;
-            if(!MatchesPriority(all[id])) continue;
-            if(query.Length > 0 && ((string)all[id]["title"]).IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
-            matches.Add(id); long cursor = id;
-            while(included.Add(cursor) && parents.ContainsKey(cursor)) cursor = parents[cursor];
-        }
-        long selectedId = SelectedTaskId();
-        rendering = true; tasks.BeginUpdate();
-        try {
-            tasks.Nodes.Clear(); var nodes = new Dictionary<long, TreeNode>(); var roots = new List<TreeNode>();
-            foreach(long id in ordered) {
-                if(!included.Contains(id)) continue;
-                bool done = Convert.ToBoolean(all[id]["done"]);
-                nodes[id] = new TreeNode((string)all[id]["title"]) {
-                    Name = id.ToString(), Tag = id, Checked = done,
-                    ForeColor = done ? Color.FromArgb(100, 110, 125) : ForeColor,
-                    ToolTipText = (done ? "已完成 · " : "未完成 · ") + (string)all[id]["title"] + (matches.Contains(id) ? "" : "（为显示匹配子任务保留的父任务）")
-                };
-            }
-            foreach(long id in ordered) {
-                if(!nodes.ContainsKey(id)) continue;
-                if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id])) nodes[parents[id]].Nodes.Add(nodes[id]);
-                else roots.Add(nodes[id]);
-            }
-            NumberTasks(roots, all);
-            total = roots.Count; page = Math.Max(1, Math.Min(page, Math.Max(1, (total + 49) / 50)));
-            for(int index = (page - 1) * 50; index < Math.Min(page * 50, roots.Count); index++) tasks.Nodes.Add(roots[index]);
-            tasks.ExpandAll();
-            if(query.Length == 0) foreach(var pair in nodes) if(collapsedTasks.Contains(pair.Key)) pair.Value.Collapse();
-            if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView == tasks) tasks.SelectedNode = nodes[selectedId];
-            if(!selfTest && !simpleMode) foreach(var pair in nodes) {
-
-                var branch = new TreeNode("遗留事项（展开查看，双击管理）") { Tag = new OutstandingBranch { TaskId = pair.Key } };
-                branch.Nodes.Add(new TreeNode("读取中…")); pair.Value.Nodes.Add(branch);
-            }
-            previous.Enabled = page > 1; next.Enabled = page * 50 < total;
-            status.ForeColor = ForeColor;
-            status.Text = matches.Count == 0 ? (PriorityFilterActive ? PriorityFilterEmptyMessage : "没有匹配事项，可清空搜索或显示已完成。") : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
-        } finally { tasks.EndUpdate(); rendering = false; UpdateSimpleModeState(); }
-        if(simpleMode) await RefreshSimpleOutstanding();
     }
     void LoadTreePreferences() {
         try { var values = json.Deserialize<long[]>(File.ReadAllText(Path.Combine(data, "floating-tree.json"))); foreach(long id in values) collapsedTasks.Add(id); } catch { }
@@ -890,6 +790,7 @@ internal sealed partial class FloatingWindow : Form {
             await TestSimpleOutstandingDetails();
             await TestUndo();
             await TestProgressReferences();
+            await TestAutoRefresh();
             token = "expired"; await Reload();
             if(status.ForeColor != ForeColor) throw new Exception("Session refresh failed");
             ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
@@ -912,5 +813,5 @@ internal sealed partial class FloatingWindow : Form {
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
-    protected override void Dispose(bool disposing) { if(disposing) { timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if(disposing) { DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
 }

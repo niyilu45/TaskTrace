@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -46,11 +46,12 @@ internal sealed partial class FloatingWindow {
         if(undoMenu!=null){undoMenu.Enabled=available;undoMenu.Text=text;}
     }
     async Task RefreshUndo() {
+        long previousId=undoId;string previousLabel=undoLabel;
         try {
             var state=await Api("GET","/tasktrace/undo",null);
             undoId=Convert.ToInt64(state["id"]);undoLabel=Convert.ToString(state["label"]);
         } catch { undoId=0;undoLabel=""; }
-        UpdateUndoControls();
+        if(previousId!=undoId || previousLabel!=undoLabel)UpdateUndoControls();
     }
     async Task PerformUndo() {
         if(busy || closing || undoing)return;

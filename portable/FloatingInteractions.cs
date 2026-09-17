@@ -141,16 +141,27 @@ internal sealed partial class FloatingWindow {
             status.Text="归属和顺序已保存。";
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
-    async Task ReadTaskOrder(long projectId,Dictionary<long,Dictionary<string,object>> all){
+    sealed class TaskOrderState {
+        public long ViewId;
+        public Dictionary<long,double> Positions = new Dictionary<long,double>();
+    }
+    async Task<TaskOrderState> FetchTaskOrder(long projectId,Dictionary<long,Dictionary<string,object>> all) {
+        var result=new TaskOrderState();
         var views=await Api("GET","/projects/"+projectId+"/views",null);
         var options=((IEnumerable)views["items"]).Cast<Dictionary<string,object>>().ToList();
-        var view=options.FirstOrDefault(item=>Convert.ToString(item["view_kind"])=="list")??options.FirstOrDefault();taskViewId=view==null?0:Convert.ToInt64(view["id"]);
-        taskOrder.Clear();foreach(var pair in all){object index;if(pair.Value.TryGetValue("index",out index))taskOrder[pair.Key]=Convert.ToDouble(index)*65536.0;}if(taskViewId==0)return;
+        var view=options.FirstOrDefault(item=>Convert.ToString(item["view_kind"])=="list")??options.FirstOrDefault();
+        result.ViewId=view==null?0:Convert.ToInt64(view["id"]);
+        foreach(var pair in all){object index;if(pair.Value.TryGetValue("index",out index))result.Positions[pair.Key]=Convert.ToDouble(index)*65536.0;}
+        if(result.ViewId==0)return result;
         for(int p=1;;p++){
-            var positions=await Api("GET","/projects/"+projectId+"/views/"+taskViewId+"/tasktrace-positions?per_page=100&page="+p,null);
-            foreach(Dictionary<string,object> item in (IEnumerable)positions["items"])taskOrder[Convert.ToInt64(item["task_id"])]=Convert.ToDouble(item["position"]);
+            var positions=await Api("GET","/projects/"+projectId+"/views/"+result.ViewId+"/tasktrace-positions?per_page=100&page="+p,null);
+            foreach(Dictionary<string,object> item in (IEnumerable)positions["items"])result.Positions[Convert.ToInt64(item["task_id"])]=Convert.ToDouble(item["position"]);
             if(p>=Convert.ToInt32(positions["total_pages"]))break;
         }
+        return result;
+    }
+    async Task ReadTaskOrder(long projectId,Dictionary<long,Dictionary<string,object>> all) {
+        var result=await FetchTaskOrder(projectId,all);taskViewId=result.ViewId;taskOrder=result.Positions;
     }
     List<long> SortTaskIds(List<long> ids,Dictionary<long,Dictionary<string,object>> all){
         if(prioritySort.Checked)return ids.OrderBy(id=>PriorityNumber(all[id])).ThenBy(id=>PositionOf(id)).ThenBy(id=>id).ToList();

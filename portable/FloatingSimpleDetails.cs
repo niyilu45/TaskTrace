@@ -17,6 +17,7 @@ internal sealed partial class TaskTreeView {
     bool swallowImageUp;
 
     internal void SetSimpleImageLinks(bool enabled) {
+        if(simpleImageLinks==enabled && DrawMode==TreeViewDrawMode.OwnerDrawText)return;
         simpleImageLinks=enabled;pressedImageNode=null;swallowImageUp=false;ResetPriorityLinkPress();
         if(Capture)Capture=false;
         Cursor=Cursors.Default;
@@ -138,6 +139,7 @@ internal sealed partial class FloatingWindow {
     }
     void RestoreNormalOutstanding(List<TreeNode> nodes) {
         if(!simpleDetailsActive)return;
+        if(nodes.Count==0){simpleDetailsActive=false;simpleCollapsedDuringRead.Clear();return;}
         bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
         try {
             foreach(var node in nodes) {
@@ -159,10 +161,13 @@ internal sealed partial class FloatingWindow {
         tasks.SetSimpleImageLinks(simpleMode);
         if(!simpleMode){RestoreNormalOutstanding(nodes);return;}
         simpleDetailsActive=true;
-        bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
-        try {
-            foreach(var node in nodes)foreach(var branch in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingBranch).ToArray())node.Nodes.Remove(branch);
-        } finally {tasks.EndUpdate();rendering=wasRendering;}
+        var branches=nodes.SelectMany(node=>node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingBranch)).ToList();
+        bool changed=branches.Count>0;
+        if(changed) {
+            bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
+            try {foreach(var branch in branches)branch.Remove();}
+            finally {tasks.EndUpdate();rendering=wasRendering;}
+        }
         Exception failed=null;
         using(var gate=new SemaphoreSlim(4,4)) {
             await Task.WhenAll(nodes.Select(async delegate(TreeNode node) {
@@ -172,22 +177,89 @@ internal sealed partial class FloatingWindow {
                     var shared=await read((long)node.Tag);
                     while(dragging && SimpleOutstandingCurrent(version,node))await Task.Delay(100);
                     if(!SimpleOutstandingCurrent(version,node))return;
-                    ApplySimpleOutstanding(node,shared);
+                    if(ApplySimpleOutstanding(node,shared))changed=true;
                 } catch(Exception error){if(SimpleOutstandingCurrent(version,node) && failed==null)failed=error;}
                 finally {gate.Release();}
             }));
         }
         if(version==simpleOutstandingVersion && !closing && !IsDisposed) {
-            tasks.Invalidate();UpdateSimpleModeState();
+            if(changed){tasks.Invalidate();UpdateSimpleModeState();}
             if(failed!=null)throw new Exception("遗留事项读取失败，请刷新重试。",failed);
         }
     }
     bool SimpleOutstandingCurrent(int version,TreeNode node) {
         return version==simpleOutstandingVersion && simpleMode && !closing && !IsDisposed && node.TreeView==tasks;
     }
-    void ApplySimpleOutstanding(TreeNode node,SharedList shared) {
+    static bool OutstandingLeavesMatch(IEnumerable<TreeNode> nodes,long taskId,SharedList shared) {
+        var leaves=nodes.Select(node=>node.Tag as OutstandingLeaf).ToList();
+        if(leaves.Count!=shared.Items.Count)return false;
+        for(int index=0;index<leaves.Count;index++) {
+            var leaf=leaves[index];var item=shared.Items[index];
+            if(leaf==null || leaf.TaskId!=taskId || leaf.Id!=item.Id || leaf.Html!=item.Html)return false;
+        }
+        return true;
+    }
+    static bool SimpleOutstandingMatches(TreeNode node,SharedList shared) {
+        if(node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is OutstandingBranch))return false;
+        return OutstandingLeavesMatch(node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf),(long)node.Tag,shared);
+    }
+    static bool NormalOutstandingMatches(TreeNode node,SharedList shared) {
+        var branch=(OutstandingBranch)node.Tag;
+        if(shared.Items.Count==0 && node.Nodes.Count==1) {
+            var placeholder=node.Nodes[0].Tag as OutstandingBranch;
+            return placeholder!=null && placeholder.Loaded && placeholder.TaskId==branch.TaskId;
+        }
+        return OutstandingLeavesMatch(node.Nodes.Cast<TreeNode>(),branch.TaskId,shared);
+    }
+    sealed class OutstandingTreePosition {
+        public TreeNode Node;
+        public long TaskId;
+        public string ItemId;
+        public bool Branch,Placeholder;
+    }
+    static OutstandingTreePosition CaptureOutstandingPosition(TreeNode node) {
+        if(node==null)return null;
+        var position=new OutstandingTreePosition{Node=node};
+        var leaf=node.Tag as OutstandingLeaf;var branch=node.Tag as OutstandingBranch;
+        if(leaf!=null){position.TaskId=leaf.TaskId;position.ItemId=leaf.Id;}
+        else if(branch!=null){position.TaskId=branch.TaskId;position.Branch=true;position.Placeholder=node.Parent!=null && node.Parent.Tag is OutstandingBranch;}
+        else if(node.Tag is long)position.TaskId=(long)node.Tag;
+        return position;
+    }
+    static IEnumerable<TreeNode> OutstandingDescendants(TreeNodeCollection nodes) {
+        foreach(TreeNode node in nodes){yield return node;foreach(var child in OutstandingDescendants(node.Nodes))yield return child;}
+    }
+    TreeNode ResolveOutstandingPosition(OutstandingTreePosition position) {
+        if(position==null)return null;
+        if(position.Node.TreeView==tasks)return position.Node;
+        var nodes=OutstandingDescendants(tasks.Nodes).ToList();
+        var task=nodes.FirstOrDefault(node=>node.Tag is long && (long)node.Tag==position.TaskId);
+        if(position.ItemId!=null) {
+            var candidates=nodes.Where(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Id==position.ItemId).ToList();
+            var exact=candidates.FirstOrDefault(node=>((OutstandingLeaf)node.Tag).TaskId==position.TaskId);
+            if(exact!=null)return exact;
+            if(candidates.Count==1)return candidates[0];
+        }
+        if(position.Branch && task!=null) {
+            var branch=task.Nodes.Cast<TreeNode>().FirstOrDefault(node=>node.Tag is OutstandingBranch);
+            if(branch!=null)return position.Placeholder?branch.Nodes.Cast<TreeNode>().FirstOrDefault(node=>node.Tag is OutstandingBranch)??branch:branch;
+        }
+        return task;
+    }
+    void RestoreOutstandingPositions(OutstandingTreePosition selection,OutstandingTreePosition top) {
+        var selected=ResolveOutstandingPosition(selection);
+        if(selection!=null && tasks.SelectedNode!=selected)tasks.SelectedNode=selected;
+        var first=ResolveOutstandingPosition(top);
+        if(first!=null) {
+            // Do not open a branch that the user deliberately kept collapsed.
+            for(var ancestor=first.Parent;ancestor!=null;ancestor=ancestor.Parent)if(!ancestor.IsExpanded)first=ancestor;
+            if(tasks.TopNode!=first)tasks.TopNode=first;
+        }
+    }
+    bool ApplySimpleOutstanding(TreeNode node,SharedList shared) {
+        if(SimpleOutstandingMatches(node,shared))return false;
         long id=(long)node.Tag;
-        var selected=tasks.SelectedNode==null?null:tasks.SelectedNode.Tag as OutstandingLeaf;
+        var selection=CaptureOutstandingPosition(tasks.SelectedNode);var top=CaptureOutstandingPosition(tasks.TopNode);
         bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
         try {
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf || child.Tag is OutstandingBranch).ToArray())node.Nodes.Remove(child);
@@ -195,10 +267,44 @@ internal sealed partial class FloatingWindow {
                 var item=shared.Items[index];
                 var leaf=new TreeNode((index+1)+". "+OutstandingText(item.Html)){Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html}};
                 node.Nodes.Add(leaf);tasks.ReserveSimpleImageSpace(leaf);
-                if(selected!=null && selected.TaskId==id && selected.Id==item.Id)tasks.SelectedNode=leaf;
             }
             if(!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id)))node.Expand();
+            RestoreOutstandingPositions(selection,top);
         } finally {tasks.EndUpdate();rendering=wasRendering;}
+        return true;
+    }
+    void ApplyNormalOutstanding(TreeNode node,SharedList shared) {
+        var branch=(OutstandingBranch)node.Tag;bool expanded=node.IsExpanded;
+        node.Nodes.Clear();
+        for(int index=0;index<shared.Items.Count;index++) {
+            var item=shared.Items[index];
+            node.Nodes.Add(new TreeNode((index+1)+". "+OutstandingText(item.Html)){Tag=new OutstandingLeaf{TaskId=branch.TaskId,Id=item.Id,Html=item.Html}});
+        }
+        if(shared.Items.Count==0)node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加"){Tag=new OutstandingBranch{TaskId=branch.TaskId,Loaded=true}});
+        if(expanded)node.Expand();
+    }
+    void ApplyBackgroundOutstanding(Dictionary<long,SharedList> lists) {
+        if(closing || IsDisposed || lists==null)return;
+        var updates=new List<KeyValuePair<TreeNode,SharedList>>();
+        foreach(var node in SimpleTaskNodes(tasks.Nodes)) {
+            SharedList shared;if(!lists.TryGetValue((long)node.Tag,out shared) || shared==null)continue;
+            if(simpleMode) {
+                if(!SimpleOutstandingMatches(node,shared))updates.Add(new KeyValuePair<TreeNode,SharedList>(node,shared));
+            } else foreach(var branch in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingBranch && ((OutstandingBranch)child.Tag).Loaded)) {
+                if(!NormalOutstandingMatches(branch,shared))updates.Add(new KeyValuePair<TreeNode,SharedList>(branch,shared));
+            }
+        }
+        if(updates.Count==0)return;
+        var selection=CaptureOutstandingPosition(tasks.SelectedNode);var top=CaptureOutstandingPosition(tasks.TopNode);
+        bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
+        try {
+            foreach(var update in updates) {
+                if(simpleMode)ApplySimpleOutstanding(update.Key,update.Value);
+                else ApplyNormalOutstanding(update.Key,update.Value);
+            }
+            RestoreOutstandingPositions(selection,top);
+        } finally {tasks.EndUpdate();rendering=wasRendering;}
+        tasks.Invalidate();UpdateSimpleModeState();
     }
 
     async Task TestSimpleOutstandingDetails() {
@@ -222,6 +328,17 @@ internal sealed partial class FloatingWindow {
             if(parent.Nodes.Count!=3 || parent.Nodes[0]!=child || empty.Nodes.Count!=0 || child.Nodes.Count!=0)throw new Exception("Simple outstanding leaves must be direct, preserve child tasks, and omit empty layers");
             var image=parent.Nodes[1];var plain=parent.Nodes[2];
             if(!(image.Tag is OutstandingLeaf) || !image.Text.StartsWith("1. ") || !plain.Text.StartsWith("2. ") || parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingBranch))throw new Exception("Simple outstanding structure or numbering failed");
+            parent.Expand();image.EnsureVisible();tasks.Refresh();
+            tasks.SelectedNode=image;var stableTop=tasks.TopNode;int invalidations=0;
+            InvalidateEventHandler invalidated=delegate{invalidations++;};tasks.Invalidated+=invalidated;
+            try {
+                if(ApplySimpleOutstanding(parent,shared))throw new Exception("Unchanged simple outstanding data reported a mutation");
+                tasks.SetSimpleImageLinks(true);await RefreshSimpleOutstandingWithReader(read);
+                ApplyBackgroundOutstanding(new Dictionary<long,SharedList>{{900001L,shared},{900002L,new SharedList()},{900003L,new SharedList()}});
+                if(invalidations!=0 || parent.Nodes[1]!=image || parent.Nodes[2]!=plain || !parent.IsExpanded || tasks.SelectedNode!=image || tasks.TopNode!=stableTop)throw new Exception("Unchanged simple refresh invalidated, recreated, expanded, selected, or scrolled the tree");
+            } finally {tasks.Invalidated-=invalidated;}
+            parent.Collapse();var collapsedSelection=tasks.SelectedNode;
+            if(ApplySimpleOutstanding(parent,shared) || parent.IsExpanded || tasks.SelectedNode!=collapsedSelection)throw new Exception("Unchanged outstanding data reopened a collapsed task");
             parent.Expand();image.EnsureVisible();tasks.Refresh();
             Rectangle imageLink=tasks.SimpleImageBounds(image);
             if(imageLink.IsEmpty || !tasks.SimpleImageBounds(plain).IsEmpty || !tasks.SimpleImageBounds(child).IsEmpty)throw new Exception("Image links must only appear on leaves with pictures");
@@ -251,12 +368,30 @@ internal sealed partial class FloatingWindow {
             Task stale=RefreshSimpleOutstandingWithReader(delegate(long id){return id==900001L?pending.Task:Task.FromResult(new SharedList());});
             SetSimpleMode(false);await RefreshSimpleOutstandingWithReader(read);pending.SetResult(shared);await stale;
             if(parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf) || !parent.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingBranch) || tasks.DrawMode!=TreeViewDrawMode.OwnerDrawText || !tasks.SimpleImageBounds(image).IsEmpty)throw new Exception("Late simple results replaced normal outstanding branches");
+            var normal=parent.Nodes.Cast<TreeNode>().First(node=>node.Tag is OutstandingBranch);
+            ((OutstandingBranch)normal.Tag).Loaded=true;
+            var unloaded=child.Nodes.Cast<TreeNode>().First(node=>node.Tag is OutstandingBranch);var unloadedChild=unloaded.Nodes[0];
+            var backgroundLists=new Dictionary<long,SharedList>{{900001L,shared},{900002L,shared}};
+            ApplyBackgroundOutstanding(backgroundLists);normal.Expand();
+            var normalImage=normal.Nodes[0];var normalPlain=normal.Nodes[1];tasks.SelectedNode=normalImage;stableTop=tasks.TopNode;invalidations=0;
+            tasks.Invalidated+=invalidated;
+            try {
+                tasks.SetSimpleImageLinks(false);ApplyBackgroundOutstanding(backgroundLists);
+                if(invalidations!=0 || normal.Nodes[0]!=normalImage || normal.Nodes[1]!=normalPlain || !normal.IsExpanded || tasks.SelectedNode!=normalImage || tasks.TopNode!=stableTop || unloaded.Nodes[0]!=unloadedChild || ((OutstandingBranch)unloaded.Tag).Loaded)throw new Exception("Unchanged normal background refresh mutated loaded or unloaded branches");
+            } finally {tasks.Invalidated-=invalidated;}
+            var changedShared=new SharedList();changedShared.Items.Add(new PendingItem{Id="plain",Html="联系负责人：已更新"});changedShared.Items.Add(shared.Items[0]);
+            backgroundLists[900001L]=changedShared;ApplyBackgroundOutstanding(backgroundLists);
+            if(!normal.IsExpanded || ((OutstandingLeaf)normal.Nodes[0].Tag).Html!="联系负责人：已更新" || ((OutstandingLeaf)normal.Nodes[1].Tag).Id!="image" || tasks.SelectedNode!=normal.Nodes[1] || tasks.TopNode!=stableTop)throw new Exception("Changed normal background refresh lost contents, order, expansion, selection, or scroll");
+            normal.Collapse();backgroundLists[900001L]=new SharedList();ApplyBackgroundOutstanding(backgroundLists);
+            if(normal.IsExpanded || normal.Nodes.Count!=1 || !(normal.Nodes[0].Tag is OutstandingBranch))throw new Exception("Empty normal background refresh reopened the branch or lost its placeholder");
+            var emptyPlaceholder=normal.Nodes[0];ApplyBackgroundOutstanding(backgroundLists);
+            if(normal.Nodes[0]!=emptyPlaceholder)throw new Exception("Unchanged empty normal branch was recreated");
             SetSimpleMode(true);
             var replaced=new TaskCompletionSource<SharedList>();
             stale=RefreshSimpleOutstandingWithReader(delegate(long id){return replaced.Task;});
             var fresh=new TreeNode("新树"){Tag=900001L};tasks.Nodes.Clear();tasks.Nodes.Add(fresh);replaced.SetResult(shared);await stale;
             if(fresh.Nodes.Count!=0)throw new Exception("Detached task results leaked into a reloaded tree");
-            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: direct numbered outstanding leaves; no empty layers; child tasks preserved; image-only links; single scoped click without check/drag/editor; move/reorder targets; normal branch restoration; stale mode/tree results discarded.");
+            File.WriteAllText(Path.Combine(data,"floating-simple-details-test.txt"),"PASS: direct numbered outstanding leaves; no empty layers; child tasks preserved; image-only links; single scoped click without check/drag/editor; move/reorder targets; normal branch restoration; stale mode/tree results discarded; identical simple/loaded normal refresh keeps references, selection, scroll, expansion and avoids invalidation; changed/empty loaded branches update without opening; unloaded branches untouched.");
         } finally {
             InvalidateSimpleOutstanding();tasks.SimpleImageClicked=clicked;rendering=true;
             SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);simpleDetailsActive=false;
