@@ -22,8 +22,8 @@ internal sealed partial class FloatingWindow : Form {
     string token, refresh;
     readonly System.Threading.SemaphoreSlim refreshGate = new System.Threading.SemaphoreSlim(1,1);
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
-    readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新增事项" };
-    readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "搜索事项" };
+    readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新事项名称" };
+    readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "查找事项" };
     readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, CheckBoxes = true, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -104,8 +104,8 @@ internal sealed partial class FloatingWindow : Form {
             } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }
         };
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
@@ -116,9 +116,9 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(projectRow, 0, 0);
         showCompleted.CheckedChanged += async delegate { if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
-        var addRow = Row(entry, "新增", async delegate { await AddTask(); });
+        var addRow = Row(entry, "新事项名称", "新增", async delegate { await AddTask(); });
         content.Controls.Add(addRow, 0, 1);
-        content.Controls.Add(Row(search, "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
+        content.Controls.Add(Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
         tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding();
         content.Controls.Add(tasks, 0, 3);
         var paging = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -241,11 +241,18 @@ internal sealed partial class FloatingWindow : Form {
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }
-    TableLayoutPanel Row(TextBox input, string title, EventHandler action) {
-        var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
-        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+    TableLayoutPanel TextFieldRow(TextBox input, string description, Control action) {
+        var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, action.Width>0?action.Width:68));
+        row.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var label=new Label {Text=description,Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AutoEllipsis=true,AccessibleName=description};
+        input.AccessibleDescription=description;
+        row.Controls.Add(label,0,0);row.SetColumnSpan(label,2);row.Controls.Add(input,0,1);row.Controls.Add(action,1,1);
+        return row;
+    }
+    TableLayoutPanel Row(TextBox input, string description, string title, EventHandler action) {
         var button = new Button { Text = title, Dock = DockStyle.Fill, BackColor = title == "新增" ? Blue : SystemColors.Control, ForeColor = title == "新增" ? Color.White : ForeColor, FlatStyle = FlatStyle.Flat };
-        button.Click += action; row.Controls.Add(input, 0, 0); row.Controls.Add(button, 1, 0); return row;
+        button.Click += action;return TextFieldRow(input,description,button);
     }
     Dictionary<string, object> ReadObject(string value) { return json.Deserialize<Dictionary<string, object>>(value); }
     async Task<Dictionary<string, object>> Api(string method, string path, object body, bool retry = true) {
@@ -346,7 +353,7 @@ internal sealed partial class FloatingWindow : Form {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,180));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new DateTimePicker {Format=DateTimePickerFormat.Custom,CustomFormat="yyyy-MM-dd",Value=DateTime.Today,Dock=DockStyle.Fill};
-                var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正"};
+                var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正",AccessibleDescription="当天进展与更正"};
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var save=new Button {Text="保存当天进展 (Ctrl+Enter)",Dock=DockStyle.Fill};
@@ -361,7 +368,7 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="填写当天进展或更正。引用旧记录会保留快照，原记录不变。",Dock=DockStyle.Fill});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(sharedButton);layout.Controls.Add(save);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(sharedButton);layout.Controls.Add(save);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false;
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count,references=SerializeProgressReferences(references)});};
@@ -481,19 +488,16 @@ internal sealed partial class FloatingWindow : Form {
         try {
             var parent = await Api("GET", "/tasks/" + parentId, null);
             long projectId = Convert.ToInt64(parent["project_id"]);
-            using(var dialog = new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 430), MinimumSize = new Size(380, 320), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
+            using(var dialog = new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 470), MinimumSize = new Size(380, 360), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
                 var list = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.None };
                 list.Columns.Add("子任务", 390);
-                var title = new TextBox { Dock = DockStyle.Fill };
+                var title = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "新子任务名称" };
                 var feedback = new Label { Dock = DockStyle.Bottom, Height = 46, Text = "子任务独立完成；在主列表中选择它可记录每日进展。" };
-                var row = new TableLayoutPanel { Dock = DockStyle.Top, Height = 38, ColumnCount = 2 };
-                row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
-                var add = new Button { Text = "添加子任务", Dock = DockStyle.Fill }; row.Controls.Add(title); row.Controls.Add(add);
+                var add = new Button { Text = "添加子任务", Dock = DockStyle.Fill, Width = 95 };
+                var row = TextFieldRow(title,"新子任务名称",add);row.Dock=DockStyle.Top;row.Height=58;
                 var renameTitle = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "修改子任务名称" };
-                var rename = new Button { Text = "保存名称", Dock = DockStyle.Fill, Enabled = false };
-                var renameRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 38, ColumnCount = 2 };
-                renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
-                renameRow.Controls.Add(renameTitle); renameRow.Controls.Add(rename);
+                var rename = new Button { Text = "保存名称", Dock = DockStyle.Fill, Enabled = false, Width = 95 };
+                var renameRow = TextFieldRow(renameTitle,"修改选中子任务名称",rename);renameRow.Dock=DockStyle.Top;renameRow.Height=58;
                 dialog.Controls.Add(list); dialog.Controls.Add(renameRow); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
                 bool loading = false, writing = false; long pendingId = 0; string pendingUndoGroup = null; bool depthLimit = false;
                 Func<Task> reload = async delegate {
@@ -586,7 +590,11 @@ internal sealed partial class FloatingWindow : Form {
     void ShowErrorDetails() {
         if(String.IsNullOrEmpty(lastError)) return;
         using(var dialog = new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
-            dialog.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = lastError });
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=2};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,28));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            layout.Controls.Add(new Label {Text="错误详情（可选择并复制）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft});
+            layout.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = lastError, AccessibleName="错误详情", AccessibleDescription="错误详情（可选择并复制）" });
+            dialog.Controls.Add(layout);
             dialog.ShowDialog(this);
         }
     }
@@ -679,6 +687,7 @@ internal sealed partial class FloatingWindow : Form {
             if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
+            if(entry.AccessibleDescription!="新事项名称" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Persistent text field labels missing");
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
@@ -812,7 +821,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent text field labels, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

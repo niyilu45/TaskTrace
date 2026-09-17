@@ -8,26 +8,32 @@
 		</p>
 		<form
 			v-if="editEnabled"
-			class="subtask-quick-add field has-addons"
+			class="subtask-quick-add field"
 			@submit.prevent="addSubtask"
 		>
-			<div class="control is-expanded">
-				<input
-					v-model="subtaskTitle"
-					class="input"
-					aria-label="子任务名称"
-					placeholder="拆分为子任务，输入名称后回车"
-					:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !!pendingSubtask"
-				>
-			</div>
-			<div class="control">
-				<button
-					class="button is-primary"
-					type="submit"
-					:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !subtaskTitle.trim()"
-				>
-					{{ pendingSubtask ? '重试关联' : '添加子任务' }}
-				</button>
+			<label
+				class="label"
+				:for="`subtask-title-${taskId}`"
+			>新子任务名称</label>
+			<div class="field has-addons">
+				<div class="control is-expanded">
+					<input
+						:id="`subtask-title-${taskId}`"
+						v-model="subtaskTitle"
+						class="input"
+						placeholder="例如：整理本周验收结果"
+						:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !!pendingSubtask"
+					>
+				</div>
+				<div class="control">
+					<button
+						class="button is-primary"
+						type="submit"
+						:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !subtaskTitle.trim()"
+					>
+						{{ pendingSubtask ? '重试关联' : '添加子任务' }}
+					</button>
+				</div>
 			</div>
 		</form>
 		<p
@@ -188,33 +194,45 @@
 						</RouterLink>
 						<form
 							v-if="renamingId === task.id"
-							class="field has-addons"
+							class="subtask-rename field"
 							@submit.prevent="saveSubtaskName"
 						>
-							<input
-								v-model="renameTitle"
-								v-focus
-								class="input"
-								aria-label="修改子任务名称"
-								:disabled="renameSaving"
-								maxlength="250"
-								@keydown.esc.prevent="cancelRename"
-							>
-							<button
-								type="submit"
-								class="button is-primary"
-								:disabled="renameSaving || !renameTitle.trim()"
-							>
-								保存名称
-							</button>
-							<button
-								type="button"
-								class="button"
-								:disabled="renameSaving"
-								@click="cancelRename"
-							>
-								取消
-							</button>
+							<label
+								class="label"
+								:for="`subtask-rename-${task.id}`"
+							>修改子任务名称</label>
+							<div class="field has-addons">
+								<div class="control is-expanded">
+									<input
+										:id="`subtask-rename-${task.id}`"
+										v-model="renameTitle"
+										v-focus
+										class="input"
+										:disabled="renameSaving"
+										maxlength="250"
+										@keydown.esc.prevent="cancelRename"
+									>
+								</div>
+								<div class="control">
+									<button
+										type="submit"
+										class="button is-primary"
+										:disabled="renameSaving || !renameTitle.trim()"
+									>
+										保存名称
+									</button>
+								</div>
+								<div class="control">
+									<button
+										type="button"
+										class="button"
+										:disabled="renameSaving"
+										@click="cancelRename"
+									>
+										取消
+									</button>
+								</div>
+							</div>
 						</form>
 						<button
 							v-else-if="editEnabled && rts.kind === 'subtask'"
@@ -571,6 +589,23 @@ useTasktraceUndoGuard(() => subtaskSaving.value || renameSaving.value || !!subta
 </script>
 
 <style lang="scss" scoped>
+.subtask-quick-add,
+.subtask-rename {
+	.label {
+		margin-block-end: .25rem;
+	}
+
+	.field {
+		margin-block-end: 0;
+	}
+}
+
+.subtask-rename {
+	flex: 1;
+	min-inline-size: min(100%, 22rem);
+	margin-inline-start: .5rem;
+}
+
 .add-task-relation-button {
 	margin-block-start: 0;
 

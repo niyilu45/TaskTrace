@@ -96,8 +96,8 @@ internal sealed partial class FloatingWindow {
         using(var dialog=new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
-            layout.Controls.Add(new Label{Text=reference.Date+" 的进展快照；添加引用时固定，后续更正不会改写原记录。",Dock=DockStyle.Fill});
-            layout.Controls.Add(new TextBox {Text=Plain(reference.Html),Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="引用内容快照"});
+            layout.Controls.Add(new Label{Text="引用内容快照 · "+reference.Date+"；添加引用时固定，后续更正不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft});
+            layout.Controls.Add(new TextBox {Text=Plain(reference.Html),Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="引用内容快照",AccessibleDescription="引用内容快照"});
             var images=new Button {Text="查看快照图片",Dock=DockStyle.Fill,Enabled=Regex.IsMatch(reference.Html??"",@"<img\b",RegexOptions.IgnoreCase)};
             images.Click+=async delegate{await ShowImageGallery(reference.TaskId,reference.Html,dialog,"引用快照 · "+reference.Date);};layout.Controls.Add(images);dialog.Controls.Add(layout);
             if(verify)dialog.Shown+=delegate{using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-reference-snapshot-test.png"));}dialog.Close();};

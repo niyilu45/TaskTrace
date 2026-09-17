@@ -231,3 +231,10 @@
 - 任务树箭头、优先级文字、遗留事项双击、图片链接和拖动继续复用共享逻辑；模式切换仍保留选中项、滚动位置和展开状态。
 - 隔离成品完整原生自检通过，专项验证仅一个可见恢复按钮、忙碌状态仍可恢复、窄窗不裁切以及失焦时不预留底部灰区。
 - 已检查 `.local-build/simple-restore-only-verified/data/floating-simple-outstanding-actions-test.png`，任务列表和单一恢复按钮布局正常；机械界面检测无命中。
+
+## 2026-09-17 文本框常驻说明
+- 悬浮窗的新增事项、查找事项、每日进展、子任务新增与改名、遗留事项、引用快照和错误详情文本框增加常驻可见说明，并补充无障碍名称；占位文字只作为输入示例。
+- 完整界面的子任务新增和改名输入框增加关联标签，原有每日进展、遗留事项和设置输入框继续使用常驻标签。
+- 前端正式构建通过；全库类型检查仍有上游既有错误，本次新增模板未引入新的编译错误。
+- 隔离成品完整原生自检通过，包含文本框标签存在性断言及原有任务、进展、图片、撤销、层级、托盘和简洁模式回归。
+- 已检查 `floating-test.png`、`floating-outstanding-editor-test.png`、`floating-progress-references-test.png` 和 `floating-progress-reference-snapshot-test.png`，标签可见且未被裁切。日志位于 `.local-build/text-field-labels-*`，不进入发布包。

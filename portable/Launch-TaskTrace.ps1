@@ -311,7 +311,12 @@ public sealed class TaskTraceProcessJob : IDisposable {
             $box = New-Object Windows.Forms.TextBox
             $box.Multiline = $true; $box.ReadOnly = $true; $box.ScrollBars = 'Both'
             $box.WordWrap = $false; $box.Dock = 'Fill'; $box.Text = $details
+            $box.AccessibleName = '启动错误详情'
+            $boxLabel = New-Object Windows.Forms.Label
+            $boxLabel.Text = '启动错误详情（可选择并复制）'
+            $boxLabel.Dock = 'Top'; $boxLabel.Height = 28; $boxLabel.TextAlign = 'MiddleLeft'
             $dialog.Controls.Add($box)
+            $dialog.Controls.Add($boxLabel)
             [void]$dialog.ShowDialog()
             $dialog.Dispose()
         } catch {
