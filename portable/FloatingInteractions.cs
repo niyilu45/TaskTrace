@@ -12,11 +12,12 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 // Paint the drop mark after the native tree paints; the mark also works in simple mode.
-internal sealed class TaskTreeView : TreeView {
+internal sealed partial class TaskTreeView : TreeView {
     internal TreeNode DropNode;
     internal int DropZone;
     internal bool Dropping;
     protected override void WndProc(ref Message message) {
+        if(HandleSimpleImageMessage(ref message)) return;
         base.WndProc(ref message);
         if(message.Msg != 0xF || !Dropping) return;
         using(var canvas = CreateGraphics()) using(var pen = new Pen(Color.FromArgb(36,94,210), 2)) {
@@ -57,10 +58,12 @@ internal sealed partial class FloatingWindow {
         var pictures = new Button {Text="查看图片",AutoSize=true};
         priority.Click += async delegate {await ShowPriority();};
         pictures.Click += async delegate {await ShowSelectedImages();};
-        toolbar.Controls.AddRange(new Control[]{priority,pictures,prioritySort}); toolbar.Height=108;
+        toolbar.Controls.AddRange(new Control[]{priority,pictures,priorityFilterButton}); toolbar.Height=108;
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
         prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
+        InitializePriorityFilter();
         var menu=new ContextMenuStrip();
+        menu.Items.Add(CreatePriorityFilterMenuItem());
         var setPriority=menu.Items.Add("设置优先级…",null,async delegate{await ShowPriority();});
         menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
@@ -129,7 +132,7 @@ internal sealed partial class FloatingWindow {
             else {await Api("POST","/tasks/"+plan.TaskId+"/move",new{parent_id=plan.ParentId,before_task_id=plan.BeforeId,project_view_id=taskViewId});rendering=true;try{prioritySort.Checked=false;SaveSortPreference();}finally{rendering=false;}}
             if(plan.ParentId>0)collapsedTasks.Remove(plan.ParentId);
             await LoadTasks();
-            long selected=plan.ItemId==null?plan.TaskId:plan.TargetId;var matches=tasks.Nodes.Find(selected.ToString(),true);if(matches.Length>0){tasks.SelectedNode=matches[0];matches[0].EnsureVisible();if(plan.ItemId!=null){var branch=matches[0].Nodes.Cast<TreeNode>().FirstOrDefault(node=>node.Tag is OutstandingBranch);if(branch!=null)branch.Expand();}}
+            long selected=plan.ItemId==null?plan.TaskId:plan.TargetId;var matches=tasks.Nodes.Find(selected.ToString(),true);if(matches.Length>0){tasks.SelectedNode=matches[0];matches[0].EnsureVisible();if(plan.ItemId!=null){if(simpleMode)matches[0].Expand();else{var branch=matches[0].Nodes.Cast<TreeNode>().FirstOrDefault(node=>node.Tag is OutstandingBranch);if(branch!=null)branch.Expand();}}}
             status.Text="归属和顺序已保存。";
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }

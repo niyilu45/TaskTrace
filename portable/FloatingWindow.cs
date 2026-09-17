@@ -121,7 +121,7 @@ internal sealed partial class FloatingWindow : Form {
         var addRow = Row(entry, "新增", async delegate { await AddTask(); });
         content.Controls.Add(addRow, 0, 1);
         content.Controls.Add(Row(search, "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
-        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions();
+        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding();
         content.Controls.Add(tasks, 0, 3);
         var paging = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var progressButton = new Button { Text = "记录进展", AutoSize = true };
@@ -300,6 +300,7 @@ internal sealed partial class FloatingWindow : Form {
         finally { SetBusy(false); }
     }
     async Task LoadTasks() {
+        InvalidateSimpleOutstanding();
         if(projectsDirty) {
             var previousProject = projects.SelectedItem as Project;
             long requestedProject = previousProject == null ? preferredProjectId : previousProject.Id;
@@ -360,11 +361,12 @@ internal sealed partial class FloatingWindow : Form {
         string query = search.Text.Trim();
         foreach(long id in ordered) {
             if(!showCompleted.Checked && Convert.ToBoolean(all[id]["done"])) continue;
+            if(!MatchesPriority(all[id])) continue;
             if(query.Length > 0 && ((string)all[id]["title"]).IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
             matches.Add(id); long cursor = id;
             while(included.Add(cursor) && parents.ContainsKey(cursor)) cursor = parents[cursor];
         }
-        long selectedId = tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long) ? 0 : (long)tasks.SelectedNode.Tag;
+        long selectedId = SelectedTaskId();
         rendering = true; tasks.BeginUpdate();
         try {
             tasks.Nodes.Clear(); var nodes = new Dictionary<long, TreeNode>(); var roots = new List<TreeNode>();
@@ -388,15 +390,16 @@ internal sealed partial class FloatingWindow : Form {
             tasks.ExpandAll();
             if(query.Length == 0) foreach(var pair in nodes) if(collapsedTasks.Contains(pair.Key)) pair.Value.Collapse();
             if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView == tasks) tasks.SelectedNode = nodes[selectedId];
-            if(!selfTest) foreach(var pair in nodes) {
+            if(!selfTest && !simpleMode) foreach(var pair in nodes) {
 
                 var branch = new TreeNode("遗留事项（展开查看，双击管理）") { Tag = new OutstandingBranch { TaskId = pair.Key } };
                 branch.Nodes.Add(new TreeNode("读取中…")); pair.Value.Nodes.Add(branch);
             }
             previous.Enabled = page > 1; next.Enabled = page * 50 < total;
             status.ForeColor = ForeColor;
-            status.Text = matches.Count == 0 ? "没有匹配事项，可清空搜索或显示已完成。" : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
+            status.Text = matches.Count == 0 ? (PriorityFilterActive ? PriorityFilterEmptyMessage : "没有匹配事项，可清空搜索或显示已完成。") : matches.Count + " 项 · " + total + " 个任务组 · 第 " + page + " 页";
         } finally { tasks.EndUpdate(); rendering = false; UpdateSimpleModeState(); }
+        if(simpleMode) await RefreshSimpleOutstanding();
     }
     void LoadTreePreferences() {
         try { var values = json.Deserialize<long[]>(File.ReadAllText(Path.Combine(data, "floating-tree.json"))); foreach(long id in values) collapsedTasks.Add(id); } catch { }
@@ -723,7 +726,7 @@ internal sealed partial class FloatingWindow : Form {
         SaveSimpleMode(); SaveBounds(); hoverTimer.Stop(); progressTip.Hide(tasks);
         restoreSimple.Visible = false; Hide();
     }
-    void RestoreWindow() { WindowState = FormWindowState.Normal; Show(); Activate(); }
+    void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
     void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 420); Height = expandedHeight; fold.Text = "收起"; } }
     void LoadAutoSaveSettings() {
         try {
@@ -808,7 +811,7 @@ internal sealed partial class FloatingWindow : Form {
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
             TestSimpleModeRecovery();
             var beforeSimple=Bounds;SetSimpleMode(true);Size=new Size(230,220);
-            if(!simpleMode || content.Visible || toolbar.Visible || tasks.Parent!=this || FormBorderStyle!=FormBorderStyle.None || restoreSimple.Visible)throw new Exception("Simple mode layout failed");
+            if(!simpleMode || content.Visible || toolbar.Visible || tasks.Parent!=this || FormBorderStyle!=FormBorderStyle.None)throw new Exception("Simple mode layout failed");
             SetSimpleMode(false);if(Bounds!=beforeSimple || tasks.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
             long grandchildId = await CreateSubtask(childId, Convert.ToInt64(parentWithChild["project_id"]), "下级子任务验收");
             await LoadTasks();
@@ -819,7 +822,7 @@ internal sealed partial class FloatingWindow : Form {
             outstandingTest.Nodes.Add(new TreeNode("读取中…")); tasks.Nodes[0].Nodes[0].Nodes.Add(outstandingTest); outstandingTest.Expand();
             for(int attempt=0;attempt<100 && !((OutstandingBranch)outstandingTest.Tag).Loaded;attempt++) await Task.Delay(50);
             if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="1. 跨日期待办二")throw new Exception("Outstanding dropdown failed");
-            SetSimpleMode(true);Size=new Size(330,260);
+            SetSimpleMode(true);Size=new Size(330,260);await RefreshSimpleOutstanding();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
             ShowSimpleModeRestore();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
@@ -882,6 +885,8 @@ internal sealed partial class FloatingWindow : Form {
                 using(var response = await http.SendAsync(request)) if(!response.IsSuccessStatusCode) throw new Exception("Browser session failed");
             }
             await TestInteractions();
+            await TestPriorityFilter();
+            await TestSimpleOutstandingDetails();
             await TestUndo();
             await TestProgressReferences();
             token = "expired"; await Reload();
