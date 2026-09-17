@@ -31,7 +31,7 @@ internal sealed class FloatingWindow : Form {
     readonly Button fold = new Button { Text = "收起", AutoSize = true };
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
     readonly Timer timer = new Timer { Interval = 30000 };
-    readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Icon = SystemIcons.Application, Visible = true };
+    readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Visible = false };
     bool busy, rendering, collapsed, closing, projectsDirty = true;
     bool autoSaveEnabled = true;
     int autoSaveSeconds = 30;
@@ -59,6 +59,8 @@ internal sealed class FloatingWindow : Form {
         var session = ReadObject(File.ReadAllText(Path.Combine(data, "local-session.json")));
         token = (string)session["token"]; refresh = (string)session["refresh_token"];
         http.Timeout = TimeSpan.FromSeconds(10);
+        Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        tray.Icon = Icon; tray.Visible = true;
         Text = "TaskTrace · 悬浮事项"; Font = new Font("Microsoft YaHei UI", 9F);
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;

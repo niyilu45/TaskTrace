@@ -156,3 +156,9 @@
 - 中文空格目录完整原生自检通过。实际启动脚本注入无效悬浮窗程序，确认启动阶段、原生错误码及失败后后台退出。
 - 日志：.local-build/launch-probe/result.log、.local-build/launch-compat-native.log、.local-build/launch-invalid-binary.log。
 - 已确认并修复启动方式与诊断缺陷；仍不能在本机证明另一台 Win11 的特定环境问题完全消失。
+
+## 2026-09-17 小羊驼启动图标
+- 复用 frontend/public/favicon.ico，嵌入 TaskTrace.exe 和 TaskTrace-floating.exe；悬浮窗及托盘读取嵌入图标。
+- 新增轻量原生启动入口，直接调用统一 PowerShell 启动脚本，保留原 CMD 入口。
+- 通过 TaskTrace.exe --self-test 运行完整原生验收通过；从两个成品 EXE 提取图标并确认均为小羊驼。
+- 发布白名单增加 TaskTrace.exe，仍不打包任何运行数据或本机配置。
