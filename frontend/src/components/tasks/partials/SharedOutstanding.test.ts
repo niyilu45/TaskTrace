@@ -72,6 +72,33 @@ afterEach(() => {
 })
 
 describe('outstanding item images', () => {
+	it('announces busy synchronously throughout image upload and releases it after saving', async () => {
+		let finishUpload!: (result: never) => void
+		upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve }))
+		await open()
+		await paste('pending.png')
+		await click('添加遗留事项')
+		expect(wrapper.emitted('busy')).toEqual([[true]])
+		expect(create).not.toHaveBeenCalled()
+		finishUpload({data: {success: [{id: 5}]}} as never)
+		await flushPromises()
+		expect(wrapper.emitted('busy')).toEqual([[true], [false]])
+		expect(create).toHaveBeenCalledTimes(1)
+	})
+
+	it('clears busy when the component is unmounted during an upload', async () => {
+		let finishUpload!: (result: never) => void
+		upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve }))
+		await open()
+		await paste('pending.png')
+		await click('添加遗留事项')
+		expect(wrapper.emitted('busy')).toEqual([[true]])
+		wrapper.unmount()
+		expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+		finishUpload({data: {success: [{id: 5}]}} as never)
+		await flushPromises()
+	})
+
 	it('saves an image-only item and consumes paste before the daily progress form', async () => {
 		const parentPaste = vi.fn()
 		root.addEventListener('paste', parentPaste)

@@ -164,13 +164,14 @@ import ReadonlyRichText from './ReadonlyRichText.vue'
 type ImageDraft = {file: File, preview: string, attachmentId?: number}
 type Draft = {text: string, images: ImageDraft[], itemId: string}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
-const emit = defineEmits<{saved: []}>()
+const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
 const items = ref<OutstandingItem[]>([])
 const drafts = reactive(new Map<string, Draft>())
 const activeId = ref('')
 const textInput = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
 const busy = ref(false)
+watch(busy, value => emit('busy', value), {flush: 'sync'})
 const loading = ref(false)
 const error = ref('')
 const message = ref('')
@@ -334,6 +335,7 @@ watch(() => props.taskId, () => {
 }, {immediate: true})
 onBeforeUnmount(() => {
 	mounted = false
+	emit('busy', false)
 	++loadVersion
 	for (const key of drafts.keys()) clearDraft(key)
 })

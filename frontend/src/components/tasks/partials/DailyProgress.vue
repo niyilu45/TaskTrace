@@ -41,6 +41,7 @@
 			:task-id="taskId"
 			:disabled="saving"
 			@saved="emit('saved')"
+			@busy="sharedBusy = $event"
 		/>
 		<ReadonlyRichText
 			v-if="existingImages"
@@ -73,7 +74,7 @@
 			<button
 				class="button is-primary"
 				type="submit"
-				:disabled="saving || restoring || (!progress.trim() && images.length === 0 && !autoCommentId)"
+				:disabled="saving || restoring || sharedBusy || (!progress.trim() && images.length === 0 && !autoCommentId)"
 			>
 				{{ saving ? '正在保存…' : '保存进展' }}
 			</button>
@@ -103,6 +104,7 @@ const originalText = ref('')
 const mergedIds = ref<number[]>([])
 const autoCommentId = ref<number>()
 const saving = ref(false)
+const sharedBusy = ref(false)
 const restoring = ref(true)
 const message = ref('')
 const lastSaved = ref('')
@@ -166,7 +168,7 @@ function pasteImages(event: ClipboardEvent) {
 function removeImage(index: number) { const [picture] = images.value.splice(index, 1); if (picture?.file) URL.revokeObjectURL(picture.preview) }
 function html(value: string) { return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,'<br>') }
 async function save(automatic = false) {
-	if (restoring.value || saving.value || (!progress.value.trim() && images.value.length === 0 && !autoCommentId.value)) return
+	if (restoring.value || saving.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !autoCommentId.value)) return
 	saving.value = true
 	const taskId = props.taskId
 	try {
@@ -195,7 +197,7 @@ async function save(automatic = false) {
 	} catch { message.value = '保存失败，内容已保留，请重试。' }
 	finally { saving.value = false }
 }
-useAutoSave(async () => { if (!restoring.value && snapshot() !== lastSaved.value) await save(true) })
+useAutoSave(async () => { if (!restoring.value && !sharedBusy.value && snapshot() !== lastSaved.value) await save(true) })
 onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.value, ...[...drafts.values()].flatMap(draft => draft.images)].filter(image => image.file).map(image => image.preview)); urls.forEach(url => URL.revokeObjectURL(url)) })
 </script>
 
