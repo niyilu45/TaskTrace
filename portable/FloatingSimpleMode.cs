@@ -122,6 +122,7 @@ internal sealed partial class FloatingWindow {
     }
     protected override bool ProcessCmdKey(ref Message message,Keys keys) {
         if(simpleMode && keys==Keys.Escape){RestoreFullFloatingWindow();return true;}
+        if(!simpleMode && keys==Keys.Escape && addRow!=null && addRow.Visible){HideNewTaskEditor();tasks.Focus();return true;}
         return base.ProcessCmdKey(ref message,keys);
     }
     int MeasureSimpleActions(int width) {

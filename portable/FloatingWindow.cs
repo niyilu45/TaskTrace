@@ -24,6 +24,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新事项名称" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "查找事项" };
+    readonly Button newTaskButton = new Button { Text = "新事项", AutoSize = true, AccessibleName = "添加新事项" };
     readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -42,6 +43,8 @@ internal sealed partial class FloatingWindow : Form {
     readonly bool selfTest;
     bool allowExit, simpleMode;
     FlowLayoutPanel toolbar;
+    TableLayoutPanel addRow, searchRow;
+    bool fullLayoutRefreshQueued;
     Rectangle fullBounds;
     Size simpleSize = new Size(300, 380);
     readonly Button restoreSimple = new Button { Text = "回到完整悬浮窗", AutoSize = true, Visible = false };
@@ -88,7 +91,9 @@ internal sealed partial class FloatingWindow : Form {
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
-        toolbar.Controls.AddRange(new Control[] { full, reload, pin, fold, settingsButton, simple });
+        newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
+        newTaskButton.Click+=delegate {ShowNewTaskEditor();};
+        toolbar.Controls.AddRange(new Control[] { full, newTaskButton, reload, pin, fold, settingsButton, simple });
         tasks.ShowNodeToolTips = false;
         tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
@@ -104,7 +109,7 @@ internal sealed partial class FloatingWindow : Form {
             } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }
         };
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -116,9 +121,11 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(projectRow, 0, 0);
         showCompleted.CheckedChanged += async delegate { if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
-        var addRow = Row(entry, "新事项名称", "新增", async delegate { await AddTask(); });
+        addRow = Row(entry, "新事项名称", "添加事项", async delegate { await AddTask(); });
+        addRow.Visible=false;
         content.Controls.Add(addRow, 0, 1);
-        content.Controls.Add(Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
+        searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
+        content.Controls.Add(searchRow, 0, 2);
         tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding();
         content.Controls.Add(tasks, 0, 3);
         var paging = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -155,7 +162,7 @@ internal sealed partial class FloatingWindow : Form {
             if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
         };
         // Both close and minimize keep the application available only in the notification area.
-        Resize += delegate { if(!closing && WindowState == FormWindowState.Minimized) HideToTray(); };
+        Resize += delegate { if(!closing && WindowState == FormWindowState.Minimized) HideToTray(); else QueueFullLayoutRefresh(); };
         tray.DoubleClick += delegate { RestoreWindow(); };
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
@@ -247,8 +254,49 @@ internal sealed partial class FloatingWindow : Form {
         return row;
     }
     TableLayoutPanel Row(TextBox input, string description, string title, EventHandler action) {
-        var button = new Button { Text = title, Dock = DockStyle.Fill, BackColor = title == "新增" ? Blue : SystemColors.Control, ForeColor = title == "新增" ? Color.White : ForeColor, FlatStyle = FlatStyle.Flat };
+        bool primary=title=="新增" || title=="添加事项";
+        var button = new Button { Text = title, Dock = DockStyle.Fill, BackColor = primary ? Blue : SystemColors.Control, ForeColor = primary ? Color.White : ForeColor, FlatStyle = FlatStyle.Flat };
         button.Click += action;return TextFieldRow(input,description,button);
+    }
+    void ShowNewTaskEditor() {
+        if(simpleMode || closing || IsDisposed)return;
+        if(collapsed)ToggleFold();
+        addRow.Visible=true;content.RowStyles[1].Height=58;RefreshFullLayout();
+        if(IsHandleCreated)BeginInvoke(new Action(delegate {if(!closing && addRow.Visible)entry.Focus();}));
+    }
+    void HideNewTaskEditor() {
+        if(addRow==null)return;
+        entry.Clear();addRow.Visible=false;content.RowStyles[1].Height=0;RefreshFullLayout();
+    }
+    void QueueFullLayoutRefresh() {
+        if(simpleMode || closing || IsDisposed || fullLayoutRefreshQueued || !IsHandleCreated || WindowState!=FormWindowState.Normal)return;
+        fullLayoutRefreshQueued=true;
+        BeginInvoke(new Action(delegate {fullLayoutRefreshQueued=false;RefreshFullLayout();}));
+    }
+    void RefreshFullLayout() {
+        if(simpleMode || closing || IsDisposed || toolbar==null || content==null || WindowState!=FormWindowState.Normal)return;
+        toolbar.PerformLayout();content.PerformLayout();
+        if(addRow!=null && addRow.Visible)addRow.PerformLayout();
+        if(searchRow!=null)searchRow.PerformLayout();
+        content.Invalidate(true);
+    }
+    void TestResponsiveFullLayout() {
+        var original=ClientSize;bool editorWasVisible=addRow.Visible;
+        try {
+            ShowNewTaskEditor();
+            ClientSize=new Size(Math.Max(334,MinimumSize.Width-16),Math.Max(404,original.Height));RefreshFullLayout();
+            int narrowEntry=entry.Width,narrowSearch=search.Width;
+            using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-new-task-compact-test.png"));}
+            ClientSize=new Size(Math.Max(640,original.Width),Math.Max(404,original.Height));RefreshFullLayout();
+            if(entry.Width<=narrowEntry || search.Width<=narrowSearch)throw new Exception("Floating text fields did not expand after widening the window");
+            using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-new-task-wide-test.png"));}
+            ClientSize=new Size(Math.Max(334,MinimumSize.Width-16),Math.Max(404,original.Height));RefreshFullLayout();
+            ClientSize=new Size(Math.Max(640,original.Width),Math.Max(404,original.Height));RefreshFullLayout();
+            if(entry.Width<=narrowEntry || search.Width<=narrowSearch)throw new Exception("Floating text fields stayed narrow after repeated resizing");
+        } finally {
+            ClientSize=original;
+            if(!editorWasVisible)HideNewTaskEditor();else RefreshFullLayout();
+        }
     }
     Dictionary<string, object> ReadObject(string value) { return json.Deserialize<Dictionary<string, object>>(value); }
     async Task<Dictionary<string, object>> Api(string method, string path, object body, bool retry = true) {
@@ -298,9 +346,9 @@ internal sealed partial class FloatingWindow : Form {
     async Task AddTask() {
         if(busy || closing || string.IsNullOrWhiteSpace(entry.Text)) return;
         var project = projects.SelectedItem as Project; if(project == null) return;
-        SetBusy(true);
-        try { await Api("POST", "/projects/" + project.Id + "/tasks", new { title = entry.Text.Trim() }); entry.Clear(); search.Clear(); page = 1; await LoadTasks(); entry.Focus(); }
-        catch(Exception e) { Error(e); } finally { SetBusy(false); }
+        bool created=false;SetBusy(true);
+        try { await Api("POST", "/projects/" + project.Id + "/tasks", new { title = entry.Text.Trim() }); search.Clear(); page = 1; await LoadTasks(); HideNewTaskEditor(); created=true; }
+        catch(Exception e) { Error(e); } finally { SetBusy(false); if(addRow.Visible)entry.Focus();else if(created)tasks.Focus(); }
     }
     sealed class PastedImage { public byte[] Bytes; public long Id; }
     async Task<long> SaveProgress(long id, DateTime day, string progress, string nextStep, List<PastedImage> pictures = null, long commentId = 0, string bodyOverride = null, List<long> mergedIds = null, List<ProgressReference> references = null) {
@@ -683,8 +731,12 @@ internal sealed partial class FloatingWindow : Form {
             if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
-            if(entry.AccessibleDescription!="新事项名称" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Persistent text field labels missing");
+            if(newTaskButton.Parent!=toolbar || !newTaskButton.Visible || addRow.Visible)throw new Exception("New task button entry point missing");
+            newTaskButton.PerformClick();
+            if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Labeled text fields missing");
+            TestResponsiveFullLayout();ShowNewTaskEditor();
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
+            if(addRow.Visible)throw new Exception("New task editor stayed open after creation");
             if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
             tasks.Nodes[0].EnsureVisible();tasks.Refresh();var completionBounds=tasks.CompletionBounds(tasks.Nodes[0]);
@@ -826,7 +878,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent text field labels, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: new-task button and labeled editor, responsive text fields after repeated width changes, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

@@ -116,7 +116,7 @@ internal sealed partial class FloatingWindow {
         await Api("PATCH","/tasks/"+a,new{title="按钮撤销"});await RefreshUndo();SetBusy(false);
         if(!undoButton.Enabled)throw new Exception("Undo button is not enabled");
         await PerformUndo();if((string)(await Api("GET","/tasks/"+a,null))["title"]!="撤销验收 A")throw new Exception("Undo button action failed");
-        entry.Focus();if(!EditingText())throw new Exception("Text Ctrl+Z was not isolated");tasks.Focus();if(EditingText())throw new Exception("Tree Ctrl+Z was not enabled");
+        ShowNewTaskEditor();entry.Focus();if(!EditingText())throw new Exception("Text Ctrl+Z was not isolated");HideNewTaskEditor();tasks.Focus();if(EditingText())throw new Exception("Tree Ctrl+Z was not enabled");
         undoRecording=false;foreach(long id in cleanup)await Api("DELETE","/tasks/"+id,null);undoRecording=true;await LoadTasks();await RefreshUndo();
         File.WriteAllText(Path.Combine(data,"floating-undo-test.txt"),"PASS: native toolbar undo, stale request rejection, unrelated field preservation, conflict safety and retry, grouped child creation, task delete/restore, progress create/edit undo, task move undo, outstanding image transfer undo, original image retained, input Ctrl+Z isolation.");
     }
