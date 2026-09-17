@@ -216,3 +216,12 @@
 - mage test:filter TestTaskRelation 通过（包含关系创建、深度上限与权限测试）；前端 3 个预检查单元测试通过；原生完整自检通过第 5 级可用、第 6 级拒绝且无遗留独立任务；成品浏览器验证双向关联、整棵子树超限、第五级禁用和第四级正常新增通过。
 - gofmt、ESLint 通过（19 项已有警告）；mage lint:fix 因本机缺少 golangci-lint 无法运行。
 - 日志 .local-build/depth-five-go-tests-fixed.log、depth-five-unit-final.log、depth-five-checked-e2e.log、depth-five-checked/data/floating-test.txt。
+
+
+## 2026-09-17 启动时拒绝已运行版本
+- 统一启动脚本在写入设置或数据前获取跨目录的会话运行锁，并检查同一 Windows 会话中的旧版后台服务及悬浮窗。EXE 和脚本入口共用检测，托盘隐藏状态也能识别。
+- 重复启动显示简短中文提示并返回退出码 2，不触碰已运行实例；提示框显示前释放被拒启动所持的锁。正常/异常退出后可重新启动。
+- 真实旧版运行时，从另一空目录启动新版被正确拒绝，没有创建设置、数据目录或诊断日志，原有进程继续运行。
+- portable/Test-StartupGuard.ps1 用随机独立锁名和隐藏子进程验证互斥、释放后重启、遗弃锁恢复及四进程同时启动，临时数据仅保存到 .local-build。
+- Windows PowerShell 隔离成品完整原生自检通过：.local-build/startup-guard-confirmed/data/floating-test.txt。重复启动日志：.local-build/startup-existing-probe.log。
+- 首轮额外原生回归曾出现一次已有记录更新返回 404；只读检查确认记录仍存在且没有删除。代码中数据库错误可能被误报为不存在，具体底层错误日志不足以确认；本次未修改后端，使用正式 Windows PowerShell 重新隔离验证完整通过，保留失败日志 .local-build/startup-guard-verified/data/floating-test.txt 供后续定位。

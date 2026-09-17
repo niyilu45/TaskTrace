@@ -4,14 +4,51 @@ $packageRoot = $PSScriptRoot
 $dataRoot = $null
 $server = $null
 $sessionLock = $null
+$instanceLock = $null
+$alreadyRunning = $false
+$alreadyRunningMessage = 'TaskTrace 已有程序正在运行（可能是旧版本）。' + [Environment]::NewLine + '请先在系统托盘中选择“退出 TaskTrace”，再启动此版本。'
 $processJob = $null
 $serverOutput = $null
 $serverError = $null
 $serverOutputCopy = $null
 $serverErrorCopy = $null
 $exitCode = 0
-$stage = 'Read settings and data directory'
+# One lock for all package/data directories in the current Windows desktop session.
+# Keep these helpers independent of workspace initialization so duplicate launches never touch data.
+function Enter-TaskTraceInstanceLock([string]$Name = 'Local\TaskTrace.Desktop.SingleInstance') {
+    $mutex = [Threading.Mutex]::new($false, $Name)
+    try {
+        try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
+        if ($owned) { return $mutex }
+        $mutex.Dispose()
+        return $null
+    } catch { $mutex.Dispose(); throw }
+}
+function Test-TaskTraceRunningProcess {
+    $current = [Diagnostics.Process]::GetCurrentProcess()
+    try { $sessionId = $current.SessionId } finally { $current.Dispose() }
+    # Older releases do not hold the mutex. Their server or floating process stays alive
+    # throughout a running session, including when its window is hidden in the tray.
+    foreach ($name in @('TaskTrace-server', 'TaskTrace-floating')) {
+        foreach ($running in [Diagnostics.Process]::GetProcessesByName($name)) {
+            try {
+                if ($running.SessionId -eq $sessionId -and !$running.HasExited) { return $true }
+            } catch [InvalidOperationException] { } finally { $running.Dispose() }
+        }
+    }
+    return $false
+}
+$stage = 'Check for an existing TaskTrace instance'
 try {
+    # Explicit self-tests run against disposable workspaces alongside the user's app.
+    if (!$FloatingSelfTest) {
+        $instanceLock = Enter-TaskTraceInstanceLock
+        if ($null -eq $instanceLock -or (Test-TaskTraceRunningProcess)) {
+            $alreadyRunning = $true
+            throw $alreadyRunningMessage
+        }
+    }
+    $stage = 'Read settings and data directory'
     $settingsFile = Join-Path $packageRoot 'tasktrace-settings.json'
     if (!(Test-Path -LiteralPath $settingsFile)) {
         [IO.File]::WriteAllText($settingsFile, '{"dataDirectory":"data"}', [Text.UTF8Encoding]::new($false))
@@ -25,7 +62,13 @@ try {
     try {
         $sessionLock = [IO.File]::Open((Join-Path $dataRoot 'session.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
     } catch {
-        throw 'TaskTrace is already running from this folder. Use its existing floating window or tray icon to open the full interface.'
+        $lockFailure = $_.Exception
+        while ($null -ne $lockFailure.InnerException) { $lockFailure = $lockFailure.InnerException }
+        if ($lockFailure -is [IO.IOException] -and ($lockFailure.HResult -band 0xffff) -in @(32, 33)) {
+            $alreadyRunning = $true
+            throw $alreadyRunningMessage
+        }
+        throw
     }
     $binary = Join-Path $packageRoot 'TaskTrace-server.exe'
     if (!(Test-Path -LiteralPath $binary)) { throw 'TaskTrace-server.exe is missing. Extract the complete package first.' }
@@ -209,6 +252,22 @@ public sealed class TaskTraceProcessJob : IDisposable {
     elseif ($RunSeconds -gt 0) { Start-Sleep -Seconds $RunSeconds }
     else { [void](Read-Host 'Keep this window open while using TaskTrace. Press Enter to stop') }
 } catch {
+    if ($alreadyRunning) {
+        # A rejected launch must not keep blocking retries while its notice stays open.
+        if ($null -ne $instanceLock) {
+            try { $instanceLock.ReleaseMutex() } finally { $instanceLock.Dispose(); $instanceLock = $null }
+        }
+        $exitCode = 2
+        Write-Host $alreadyRunningMessage -ForegroundColor Red
+        if (!$FloatingSelfTest -and ($Floating -or $RunSeconds -eq 0)) {
+            try {
+                Add-Type -AssemblyName System.Windows.Forms
+                [void][Windows.Forms.MessageBox]::Show($alreadyRunningMessage, 'TaskTrace · 已有程序运行', 'OK', 'Warning')
+            } catch {
+                try { $shell = New-Object -ComObject WScript.Shell; [void]$shell.Popup($alreadyRunningMessage, 0, 'TaskTrace', 48) } catch {}
+            }
+        }
+    } else {
     $failure = $_
     $details = 'Step: ' + $stage + "`r`nPowerShell: " + $PSVersionTable.PSVersion + "`r`n64-bit OS: " + [Environment]::Is64BitOperatingSystem + "`r`nError record: " + $failure.ToString() + "`r`nError ID: " + $failure.FullyQualifiedErrorId + "`r`nWindows: " + [Environment]::OSVersion + "`r`n" + $failure.Exception.ToString()
     $inner = $failure.Exception
@@ -260,6 +319,7 @@ public sealed class TaskTraceProcessJob : IDisposable {
         }
     }
     elseif ($RunSeconds -eq 0 -and !$FloatingSelfTest) { [void](Read-Host 'Press Enter to close') }
+    }
 } finally {
     if ($null -ne $server -and !$server.HasExited) {
         Stop-Process -Id $server.Id -ErrorAction SilentlyContinue
@@ -271,5 +331,6 @@ public sealed class TaskTraceProcessJob : IDisposable {
     if ($null -ne $server) { $server.Dispose() }
     if ($null -ne $processJob) { $processJob.Dispose() }
     if ($null -ne $sessionLock) { $sessionLock.Dispose() }
+    if ($null -ne $instanceLock) { try { $instanceLock.ReleaseMutex() } finally { $instanceLock.Dispose() } }
 }
 exit $exitCode
