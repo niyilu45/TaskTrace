@@ -39,13 +39,16 @@
 			:upload-callback="uploadCallback"
 			:placeholder="$t('task.description.placeholder')"
 			:show-save="true"
+			:show-discard="true"
+			:start-in-edit-when-empty="false"
 			edit-shortcut="KeyE"
 			:enable-discard-shortcut="true"
 			:enable-mentions="true"
 			:project-id="modelValue.projectId"
 			:storage-key="descriptionStorageKey"
-			@update:modelValue="saveWithDelay"
+			@update:modelValue="markChanged"
 			@save="save"
+			@discard="discard"
 		/>
 	</div>
 </template>
@@ -53,8 +56,6 @@
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount} from 'vue'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
-import {useAutoSave, autoSaveSettings} from '@/helpers/autoSave'
-import {onBeforeRouteLeave} from 'vue-router'
 import {useI18n} from 'vue-i18n'
 
 import CustomTransition from '@/components/misc/CustomTransition.vue'
@@ -97,7 +98,6 @@ const taskStore = useTaskStore()
 
 const {t} = useI18n({useScope: 'global'})
 
-const changeTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
 const savedTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
 const dwellTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
 
@@ -162,30 +162,21 @@ const descriptionStorageKey = computed(() => `task-description-${props.modelValu
 
 const isEmpty = computed(() => isEditorContentEmpty(description.value))
 
-async function saveWithDelay() {
+function markChanged() {
 	if (description.value === props.modelValue.description) {
 		hasChanges.value = false
-		if (changeTimeout.value !== null) {
-			clearTimeout(changeTimeout.value)
-		}
 		return
 	}
 
 	hasChanges.value = true
-	if (changeTimeout.value !== null) {
-		clearTimeout(changeTimeout.value)
-	}
-
-
 }
 
-useAutoSave(async () => { if (props.canWrite && !saving.value && hasChanges.value) await save() })
+function discard(savedDescription: string) {
+	description.value = savedDescription
+	hasChanges.value = false
+}
 
-onBeforeUnmount(async () => {
-	if (autoSaveSettings.enabled) await save() // Preserve edits when closing the task.
-	if (changeTimeout.value !== null) {
-		clearTimeout(changeTimeout.value)
-	}
+onBeforeUnmount(() => {
 	if (savedTimeout.value !== null) {
 		clearTimeout(savedTimeout.value)
 	}
@@ -194,17 +185,12 @@ onBeforeUnmount(async () => {
 	}
 })
 
-onBeforeRouteLeave(() => autoSaveSettings.enabled ? save() : undefined)
-
 async function save() {
 	if (undoInProgress.value || !hasChanges.value || saving.value || !props.canWrite) {
 		return
 	}
 
 	const submitted = description.value
-	if (changeTimeout.value !== null) {
-		clearTimeout(changeTimeout.value)
-	}
 	saved.value = false
 	saving.value = true
 

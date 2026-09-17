@@ -168,17 +168,28 @@
 				</BaseButton>
 			</li>
 		</ul>
-		<XButton
+		<div
 			v-else-if="isEditing && showSave"
-			v-cy="'saveEditor'"
-			class="mbs-4"
-			variant="secondary"
-			:shadow="false"
-			:disabled="!contentHasChanged"
-			@click="bubbleSave"
+			class="tiptap__save-actions mbs-4"
 		>
-			{{ $t('misc.save') }}
-		</XButton>
+			<XButton
+				v-cy="'saveEditor'"
+				variant="secondary"
+				:shadow="false"
+				:disabled="!contentHasChanged"
+				@click="bubbleSave"
+			>
+				{{ $t('misc.save') }}
+			</XButton>
+			<XButton
+				v-if="showDiscard"
+				variant="secondary"
+				:shadow="false"
+				@click="exitEditMode"
+			>
+				{{ $t('misc.cancel') }}
+			</XButton>
+		</div>
 	</div>
 </template>
 
@@ -218,6 +229,8 @@ const props = withDefaults(defineProps<{
 	isEditEnabled?: boolean,
 	bottomActions?: BottomAction[],
 	showSave?: boolean,
+	showDiscard?: boolean,
+	startInEditWhenEmpty?: boolean,
 	placeholder?: string,
 	editShortcut?: string,
 	enableDiscardShortcut?: boolean,
@@ -229,6 +242,8 @@ const props = withDefaults(defineProps<{
 	isEditEnabled: true,
 	bottomActions: () => [],
 	showSave: false,
+	showDiscard: false,
+	startInEditWhenEmpty: true,
 	placeholder: '',
 	editShortcut: '',
 	enableDiscardShortcut: false,
@@ -237,7 +252,7 @@ const props = withDefaults(defineProps<{
 	storageKey: '',
 })
 
-const emit = defineEmits(['save'])
+const emit = defineEmits(['save', 'discard'])
 
 provide(taskLinkCurrentProjectIdKey, computed(() => props.projectId || undefined))
 
@@ -422,6 +437,9 @@ function exitEditMode() {
 		...defaultSetContentOptions,
 		emitUpdate: false,
 	})
+	modelValue.value = lastSavedState
+	contentHasChanged.value = false
+	emit('discard', lastSavedState)
 
 	// Clear draft from localStorage when discarding changes
 	if (props.storageKey) {
@@ -632,7 +650,7 @@ onBeforeUnmount(() => {
 })
 
 function setModeAndValue(value: string) {
-	internalMode.value = isEditorContentEmpty(value) ? 'edit' : 'preview'
+	internalMode.value = isEditorContentEmpty(value) && props.startInEditWhenEmpty ? 'edit' : 'preview'
 	editor.value?.commands.setContent(value, {
 		...defaultSetContentOptions,
 		emitUpdate: false,
@@ -1106,6 +1124,12 @@ ul[data-type='taskList'] {
 		font-size: .9rem;
 		white-space: nowrap;
 	}
+}
+
+.tiptap__save-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .5rem;
 }
 
 ul.tiptap__editor-actions {

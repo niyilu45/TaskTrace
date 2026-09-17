@@ -3,9 +3,11 @@
 		ref="root"
 		class="calendar-month"
 		:class="{'is-large': large}"
+		:data-month="`${view.year}-${String(view.month + 1).padStart(2, '0')}`"
 	>
 		<div class="calendar-month__nav">
 			<BaseButton
+				v-if="navigation === 'both' || navigation === 'previous'"
 				v-tooltip="$t('input.datepicker.previousMonth')"
 				class="calendar-month__nav-button"
 				:aria-label="$t('input.datepicker.previousMonth')"
@@ -13,7 +15,21 @@
 			>
 				<Icon icon="angle-left" />
 			</BaseButton>
-			<div class="calendar-month__title">
+			<span
+				v-else
+				class="calendar-month__nav-spacer"
+				aria-hidden="true"
+			/>
+			<div
+				v-if="viewDate"
+				class="calendar-month__title calendar-month__title--fixed"
+			>
+				{{ formatDate(new Date(view.year, view.month, 1), 'MMMM YYYY') }}
+			</div>
+			<div
+				v-else
+				class="calendar-month__title"
+			>
 				<select
 					:value="view.month"
 					class="calendar-month__month-select"
@@ -41,6 +57,7 @@
 				>
 			</div>
 			<BaseButton
+				v-if="navigation === 'both' || navigation === 'next'"
 				v-tooltip="$t('input.datepicker.nextMonth')"
 				class="calendar-month__nav-button"
 				:aria-label="$t('input.datepicker.nextMonth')"
@@ -48,6 +65,11 @@
 			>
 				<Icon icon="angle-right" />
 			</BaseButton>
+			<span
+				v-else
+				class="calendar-month__nav-spacer"
+				aria-hidden="true"
+			/>
 		</div>
 
 		<div
@@ -87,10 +109,11 @@
 					<button
 						type="button"
 						class="calendar-month__day"
-						:class="{'is-today': isSameDay(cell.date, today), 'has-marker': markedDateSet.has(dateKey(cell.date))}"
-						:tabindex="isSameDay(cell.date, focusedDate) ? 0 : -1"
-						:aria-label="formatDate(cell.date, 'LL') + (markedDateSet.has(dateKey(cell.date)) ? '，有进展' : '')"
-						:disabled="isDisabled(cell.date) || undefined"
+						:class="{'is-today': isSameDay(cell.date, today), 'has-marker': showsMarker(cell), 'is-hidden-outside': hideOutsideDays && !cell.inMonth}"
+						:tabindex="isSameDay(cell.date, focusedDate) && !(hideOutsideDays && !cell.inMonth) ? 0 : -1"
+						:aria-label="formatDate(cell.date, 'LL') + (showsMarker(cell) ? '，有进展' : '')"
+						:aria-hidden="hideOutsideDays && !cell.inMonth || undefined"
+						:disabled="isDisabled(cell.date) || hideOutsideDays && !cell.inMonth || undefined"
 						:data-date="dateKey(cell.date)"
 						@click.stop="pick(cell.date)"
 						@focus="focusedDate = cell.date"
@@ -130,6 +153,9 @@ const props = withDefaults(defineProps<{
 	minDate?: Date | null
 	large?: boolean
 	markedDates?: string[]
+	viewDate?: Date | null
+	navigation?: 'both' | 'previous' | 'next' | 'none'
+	hideOutsideDays?: boolean
 }>(), {
 	mode: 'single',
 	selected: null,
@@ -138,10 +164,14 @@ const props = withDefaults(defineProps<{
 	minDate: null,
 	large: false,
 	markedDates: () => [],
+	viewDate: null,
+	navigation: 'both',
+	hideOutsideDays: false,
 })
 
 const emit = defineEmits<{
 	pick: [date: Date]
+	navigate: [delta: number]
 }>()
 
 const authStore = useAuthStore()
@@ -154,7 +184,7 @@ const hovered = ref<Date | null>(null)
 
 const anchor = computed(() => props.mode === 'range' ? props.rangeStart : props.selected)
 
-const initialDate = (props.mode === 'range' ? props.rangeStart : props.selected) ?? today
+const initialDate = props.viewDate ?? (props.mode === 'range' ? props.rangeStart : props.selected) ?? today
 const view = ref(monthOf(initialDate))
 const focusedDate = ref<Date>(initialDate)
 
@@ -165,12 +195,19 @@ function monthOf(date: Date) {
 const cells = computed(() => buildMonthGrid(view.value.year, view.value.month, weekStart.value)
 	.map(cell => ({...cell, classes: cellClasses(cell)})))
 
+watch(() => props.viewDate, date => {
+	if (date) view.value = monthOf(date)
+})
+
 // Follow outside changes (shortcut, v-model) but stay put when the new value is already on screen.
 watch(anchor, (date) => {
 	if (!date) {
 		return
 	}
 	focusedDate.value = date
+	if (props.viewDate) {
+		return
+	}
 	if (!cells.value.some(cell => isSameDay(cell.date, date))) {
 		view.value = monthOf(date)
 	}
@@ -218,6 +255,10 @@ function isDisabled(date: Date) {
 	return props.minDate !== null && startOfDay(date).getTime() < startOfDay(props.minDate).getTime()
 }
 
+function showsMarker(cell: CalendarCell) {
+	return markedDateSet.value.has(dateKey(cell.date)) && (!props.hideOutsideDays || cell.inMonth)
+}
+
 function cellClasses(cell: CalendarCell) {
 	const date = cell.date
 	const classes: Record<string, boolean> = {
@@ -256,6 +297,10 @@ function cellClasses(cell: CalendarCell) {
 }
 
 function moveMonth(delta: number) {
+	if (props.viewDate) {
+		emit('navigate', delta)
+		return
+	}
 	const date = new Date(view.value.year, view.value.month + delta, 1)
 	view.value = monthOf(date)
 }
@@ -316,10 +361,15 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .calendar-month__nav {
-	display: flex;
+	display: grid;
+	grid-template-columns: 2rem minmax(0, 1fr) 2rem;
 	align-items: center;
-	justify-content: space-between;
 	margin-block-end: .5rem;
+}
+
+.calendar-month__nav-spacer {
+	inline-size: 2rem;
+	block-size: 2rem;
 }
 
 .calendar-month__nav-button {
@@ -339,7 +389,15 @@ function onKeydown(event: KeyboardEvent) {
 .calendar-month__title {
 	display: flex;
 	align-items: center;
+	justify-content: center;
 	gap: .25rem;
+}
+.calendar-month__title--fixed {
+	justify-content: center;
+	font-family: $vikunja-font;
+	font-size: 1.05rem;
+	font-weight: 700;
+	color: var(--grey-900);
 }
 
 // Both read as the plain "September 2026" heading; the native controls only show on interaction.
@@ -440,6 +498,10 @@ function onKeydown(event: KeyboardEvent) {
 	color: var(--grey-800);
 	cursor: pointer;
 	transition: background-color $transition, color $transition;
+
+	&.is-hidden-outside {
+		visibility: hidden;
+	}
 
 	.is-large & {
 		font-size: 1rem;

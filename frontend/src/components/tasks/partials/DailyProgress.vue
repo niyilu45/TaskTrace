@@ -29,8 +29,9 @@
 		<label :for="`progress-text-${taskId}`">今日进展</label>
 		<textarea
 			:id="`progress-text-${taskId}`"
+			ref="progressTextarea"
 			v-model="progress"
-			class="textarea"
+			class="textarea daily-progress__textarea"
 			rows="3"
 			placeholder="今天完成了什么？"
 			:disabled="saving || restoring"
@@ -150,6 +151,7 @@
 <script setup lang="ts">
 import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {ref, reactive, computed, watch, onBeforeUnmount} from 'vue'
+import {useAutoHeightTextarea} from '@/composables/useAutoHeightTextarea'
 import {taskCommentsCreate, taskCommentsUpdate, taskAttachmentsUpload} from '@/client/generated'
 import AutoSaveSettings from './AutoSaveSettings.vue'
 import ProgressDatePicker from './ProgressDatePicker.vue'
@@ -164,6 +166,7 @@ const props = defineProps<{taskId: number}>()
 const emit = defineEmits<{saved: []}>()
 const date = ref('')
 const progress = ref('')
+const {textarea: progressTextarea} = useAutoHeightTextarea(progress)
 const images = ref<{file?: File, preview: string, attachmentId?: number}[]>([])
 const existingImages = ref('')
 const originalHtml = ref('')
@@ -323,6 +326,9 @@ onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.valu
 
 	input { max-inline-size: 12rem; }
 	label { font-weight: 600; }
+}
+.daily-progress__textarea {
+	resize: none;
 }
 .reference-picker-actions, .reference-heading {
 	display: flex;

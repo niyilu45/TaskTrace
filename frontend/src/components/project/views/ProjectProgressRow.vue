@@ -92,18 +92,21 @@
 			>
 				<time>{{ note.date }}：</time><ReadonlyRichText :html="note.progress" />
 			</div>
-			<p
+			<button
 				v-if="hiddenNotesCount > 0"
+				type="button"
 				class="range-summary"
+				:aria-expanded="showAllProgress"
+				@click="showAllProgress = !showAllProgress"
 			>
-				已隐藏 {{ hiddenNotesCount }} 条较早进展
-			</p>
+				{{ showAllProgress ? '收起较早进展' : `已隐藏 ${hiddenNotesCount} 条较早进展，点击展开` }}
+			</button>
 		</td>
 	</tr>
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onBeforeUnmount} from 'vue'
+import {ref, computed, onBeforeUnmount, watch} from 'vue'
 import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
@@ -116,8 +119,11 @@ defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()
 const history = ref<TaskComment[]>([])
 const allNotes = computed(() => sortProgressNotes(history.value))
-const notes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
-const hiddenNotesCount = computed(() => allNotes.value.length - notes.value.length)
+const limitedNotes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
+const showAllProgress = ref(false)
+const notes = computed(() => showAllProgress.value ? allNotes.value : limitedNotes.value)
+const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
+watch(() => props.progressDays, () => { showAllProgress.value = false })
 // The latest daily record replaces earlier outstanding items, including clearing them.
 const outstanding = computed(() => outstandingHtml(history.value))
 const loading = ref(false)
@@ -200,9 +206,21 @@ onBeforeUnmount(() => { disposed = true })
  }
 }
 .range-summary {
- color: var(--grey-600);
- font-size: .75rem;
- margin-block-start: .5rem;
+	display: inline-flex;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: var(--grey-600);
+	font-size: .75rem;
+	margin-block-start: .5rem;
+	cursor: pointer;
+	text-decoration: underline;
+	text-underline-offset: .15em;
+	&:hover { color: var(--primary); }
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
 }
 .empty { color: var(--grey-600);
  }
