@@ -36,6 +36,12 @@ func DoCreate(ctx context.Context, obj CObject, a web.Auth) error {
 		}
 	}()
 
+	if err := web.LockMutationUndo(ctx, s, a, "create", obj); err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	canCreate, err := obj.CanCreate(s, a)
 	if err != nil {
 		_ = s.Rollback()
@@ -49,10 +55,25 @@ func DoCreate(ctx context.Context, obj CObject, a web.Auth) error {
 		return ErrGenericForbidden{}
 	}
 
+	finishUndo, err := web.CaptureMutationUndo(ctx, s, a, "create", obj)
+	if err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	if err := obj.Create(s, a); err != nil {
 		_ = s.Rollback()
 		events.CleanupPending(s)
 		return err
+	}
+
+	if finishUndo != nil {
+		if err := finishUndo(); err != nil {
+			_ = s.Rollback()
+			events.CleanupPending(s)
+			return err
+		}
 	}
 
 	if err := s.Commit(); err != nil {
@@ -143,6 +164,12 @@ func DoUpdate(ctx context.Context, obj CObject, a web.Auth) error {
 		}
 	}()
 
+	if err := web.LockMutationUndo(ctx, s, a, "update", obj); err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	canUpdate, err := obj.CanUpdate(s, a)
 	if err != nil {
 		_ = s.Rollback()
@@ -156,10 +183,25 @@ func DoUpdate(ctx context.Context, obj CObject, a web.Auth) error {
 		return ErrGenericForbidden{}
 	}
 
+	finishUndo, err := web.CaptureMutationUndo(ctx, s, a, "update", obj)
+	if err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	if err := obj.Update(s, a); err != nil {
 		_ = s.Rollback()
 		events.CleanupPending(s)
 		return err
+	}
+
+	if finishUndo != nil {
+		if err := finishUndo(); err != nil {
+			_ = s.Rollback()
+			events.CleanupPending(s)
+			return err
+		}
 	}
 
 	if err := s.Commit(); err != nil {
@@ -182,6 +224,12 @@ func DoDelete(ctx context.Context, obj CObject, a web.Auth) error {
 		}
 	}()
 
+	if err := web.LockMutationUndo(ctx, s, a, "delete", obj); err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	canDelete, err := obj.CanDelete(s, a)
 	if err != nil {
 		_ = s.Rollback()
@@ -195,10 +243,25 @@ func DoDelete(ctx context.Context, obj CObject, a web.Auth) error {
 		return ErrGenericForbidden{}
 	}
 
+	finishUndo, err := web.CaptureMutationUndo(ctx, s, a, "delete", obj)
+	if err != nil {
+		_ = s.Rollback()
+		events.CleanupPending(s)
+		return err
+	}
+
 	if err := obj.Delete(s, a); err != nil {
 		_ = s.Rollback()
 		events.CleanupPending(s)
 		return err
+	}
+
+	if finishUndo != nil {
+		if err := finishUndo(); err != nil {
+			_ = s.Rollback()
+			events.CleanupPending(s)
+			return err
+		}
 	}
 
 	if err := s.Commit(); err != nil {

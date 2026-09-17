@@ -1,3 +1,4 @@
+import {isUndoMutation, beginUndoWrite, finishUndoWrite} from '@/helpers/tasktraceUndo'
 import {client} from '@/client/generated/client.gen'
 import type {ResolvedRequestOptions} from '@/client/generated/client/types.gen'
 import {getToken, getTokenIdentity, refreshToken} from '@/helpers/auth'
@@ -89,5 +90,27 @@ export function configureApiClient(): void {
 		headers.set('Authorization', `Bearer ${replacementToken}`)
 		const retry = new Request(retryRequest.request, {headers})
 		return (options.fetch ?? globalThis.fetch)(retry)
+	})
+
+	client.interceptors.request.use(request => {
+		if (!isUndoMutation(request.method, request.url)) return request
+		const headers = new Headers(request.headers)
+		headers.set('X-TaskTrace-Undo', '1')
+		const managed = new Request(request, {headers})
+		const retry = retryRequests.get(request)
+		if (retry) {
+			retryRequests.delete(request)
+			retryRequests.set(managed, {...retry, request: managed.clone()})
+		}
+		beginUndoWrite(managed)
+		return managed
+	})
+	client.interceptors.response.use((response, request) => {
+		finishUndoWrite(request)
+		return response
+	})
+	client.interceptors.error.use((error, _response, request) => {
+		finishUndoWrite(request)
+		return error
 	})
 }

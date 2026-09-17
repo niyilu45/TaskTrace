@@ -1,3 +1,4 @@
+import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, type TaskComment} from '@/client/generated'
 import {sortProgressNotes} from './progressNotes'
 export const sharedHeading = 'TaskTrace 遗留事项清单'
@@ -25,11 +26,11 @@ export async function readTaskHistory(taskId: number) {
 	}
 	return history
 }
-export async function changeOutstanding(taskId: number, change: (items: OutstandingItem[]) => OutstandingItem[]) {
+export async function changeOutstanding(taskId: number, change: (items: OutstandingItem[]) => OutstandingItem[], headers = undoGroupHeaders()) {
 	const current = sharedOutstanding(await readTaskHistory(taskId))
 	const items = change(current.items)
 	const comment = `<h3>${sharedHeading}</h3><ul>${items.map(item => `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}">${item.html}</li>`).join('')}</ul>`
-	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}})
-	else await taskCommentsCreate({path: {task: taskId}, body: {comment}})
+	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}, headers})
+	else await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers})
 	return items
 }

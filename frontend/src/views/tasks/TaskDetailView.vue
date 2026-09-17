@@ -647,7 +647,7 @@
 					{{ $t('task.detail.delete.text1') }}
 				</p>
 				<p class="tw:text-balance">
-					{{ $t('task.detail.delete.text2') }}
+					{{ isLocalBuild ? '删除后可使用“撤销”恢复。' : $t('task.detail.delete.text2') }}
 				</p>
 			</template>
 		</Modal>
@@ -655,6 +655,8 @@
 </template>
 
 <script lang="ts" setup>
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {undoAffectedTaskIds} from '@/helpers/tasktraceUndo'
 import {ref, reactive, shallowReactive, computed, watch, nextTick, onMounted, useTemplateRef} from 'vue'
 import {useRouter, useRoute, type RouteLocation, onBeforeRouteLeave} from 'vue-router'
 import {useI18n} from 'vue-i18n'
@@ -971,6 +973,7 @@ watch(
 			// a 404 so we route away instead of rendering an empty task shell.
 			if (e?.response?.status === 404 || e?.response?.status === 403) {
 				taskNotFound.value = true
+				if (isLocalBuild && undoAffectedTaskIds.value.includes(Number(id))) { router.replace({name: 'home'}); return }
 				router.replace({name: 'not-found'})
 				return
 			}

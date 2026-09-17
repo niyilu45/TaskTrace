@@ -59,6 +59,9 @@
 
 <script setup lang="ts">
 import {computed, ref} from 'vue'
+import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {tasksRelationsCreate} from '@/client/generated'
 import {useI18n} from 'vue-i18n'
 import {useElementHover} from '@vueuse/core'
 import {useRouter} from 'vue-router'
@@ -115,7 +118,9 @@ function resetEmptyTitleError() {
 	}
 }
 
-const loading = computed(() => taskStore.isLoading)
+const adding = ref(false)
+const loading = computed(() => adding.value || taskStore.isLoading)
+useTasktraceUndoGuard(() => !!newTaskTitle.value || loading.value, '请先添加或清空新任务草稿，再撤销。')
 
 async function addTask() {
 	if (newTaskTitle.value === '') {
@@ -124,7 +129,7 @@ async function addTask() {
 	}
 	errorMessage.value = ''
 
-	if (loading.value) {
+	if (loading.value || undoInProgress.value) {
 		return
 	}
 
@@ -153,6 +158,8 @@ async function addTask() {
 		currentProjectId = Number(router.currentRoute.value.params.projectId)
 	}
 
+	adding.value = true
+	const undoHeaders = undoGroupHeaders()
 	try {
 		newTaskTitle.value = ''
 
@@ -176,7 +183,7 @@ async function addTask() {
 		// into a single map entry.
 		const allCreated: ITask[] = []
 
-		const bulk = await taskStore.createNewTasksBulk(entries)
+		const bulk = await taskStore.createNewTasksBulk(entries, undoHeaders)
 		entries.forEach(({title}, index) => {
 			const task = bulk.tasks[index]
 			if (task === null) {
@@ -204,11 +211,13 @@ async function addTask() {
 				return
 			}
 
-			const rel = await taskRelationService.create(new TaskRelationModel({
-				taskId: createdTask.id,
-				otherTaskId: createdParentTask.id,
-				relationKind: RELATION_KIND.PARENTTASK,
-			}))
+			const rel = isLocalBuild
+				? (await tasksRelationsCreate({path: {task: createdTask.id}, body: {other_task_id: createdParentTask.id, relation_kind: 'parenttask'}, headers: undoHeaders})).data
+				: await taskRelationService.create(new TaskRelationModel({
+					taskId: createdTask.id,
+					otherTaskId: createdParentTask.id,
+					relationKind: RELATION_KIND.PARENTTASK,
+				}))
 			
 			if (typeof createdTask.relatedTasks === 'undefined') {
 				createdTask.relatedTasks = {}
@@ -248,7 +257,7 @@ async function addTask() {
 		}
 
 		if (bulk.error !== null) {
-			newTaskTitle.value = taskTitleBackup
+			newTaskTitle.value = isLocalBuild ? entries.filter((_, index) => !bulk.tasks[index]).map(entry => entry.title).join('\n') : taskTitleBackup
 			error(bulk.error)
 		}
 	} catch (e) {
@@ -258,6 +267,8 @@ async function addTask() {
 			return
 		}
 		throw e
+	} finally {
+		adding.value = false
 	}
 }
 

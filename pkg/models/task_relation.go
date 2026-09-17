@@ -329,6 +329,7 @@ func (rel *TaskRelation) Create(s *xorm.Session, a web.Auth) error {
 func (rel *TaskRelation) ReadOne(s *xorm.Session, _ web.Auth) (err error) {
 	exists, err := s.
 		Where("task_id = ? AND other_task_id = ? AND relation_kind = ?", rel.TaskID, rel.OtherTaskID, rel.RelationKind).
+		NoAutoCondition().
 		Get(rel)
 	if err != nil {
 		return err

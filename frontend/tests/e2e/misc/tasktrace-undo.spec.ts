@@ -1,0 +1,145 @@
+import {test, expect} from '@playwright/test'
+import {readFileSync, writeFileSync} from 'node:fs'
+import path from 'node:path'
+import {execFileSync} from 'node:child_process'
+
+test.use({serviceWorkers: 'block'})
+
+test('web undo protects drafts, restores saved edits and groups child creation without stale autosaves', async ({page, request}) => {
+	test.setTimeout(120000)
+	const root = process.env.TASKTRACE_LOCAL_TEST_DIR
+	test.skip(!root, 'Requires a running isolated portable instance')
+	const sessionFile = path.join(root!, 'data/undo-browser-session.json')
+	execFileSync(path.join(root!, 'TaskTrace-server.exe'), ['--config', path.join(root!, 'data/local-config.yml'), 'tasktrace-local-session', '--output', sessionFile, '--user-id', readFileSync(path.join(root!, 'data/local-user-id.txt'), 'utf8').trim()], {windowsHide: true, stdio: 'pipe'})
+	const session = JSON.parse(readFileSync(sessionFile, 'utf8').replace(/^\uFEFF/, ''))
+	const base = readFileSync(path.join(root!, 'data/local-config.yml'), 'utf8').match(/publicurl: "(http:\/\/127\.0\.0\.1:\d+)\/"/)![1]
+	const headers = {Authorization: 'Bearer ' + session.token}
+	const mutations: unknown[] = []
+	page.on('request', req => { if (req.method() !== 'GET' && /\/tasks(?:\/|$)|\/tasktrace\/undo$/.test(req.url())) mutations.push({method: req.method(), path: new URL(req.url()).pathname, body: req.postData()}) })
+	page.on('response', async res => { if (res.request().method() === 'POST' && res.url().endsWith('/tasktrace/undo')) mutations.push({undoResult: await res.json()}) })
+	async function get(url: string) { const response = await request.get(base + '/api/v2' + url, {headers}); expect(response.ok()).toBeTruthy(); return response.json() }
+	const project = await (await request.post(base + '/api/v2/projects', {headers, data: {title: '撤销功能隔离验收'}})).json()
+	try {
+		const task = await (await request.post(`${base}/api/v2/projects/${project.id}/tasks`, {headers, data: {title: '撤销验收任务', description: '<p>原始描述</p>'}})).json()
+		const baselineComment = await (await request.post(`${base}/api/v2/tasks/${task.id}/comments`, {headers, data: {comment: '<p>原始评论</p>'}})).json()
+		await page.addInitScript(() => localStorage.setItem('tasktrace-autosave', JSON.stringify({enabled: true, seconds: 5})))
+		await page.goto(`${base}/tasks/${task.id}#tasktrace-local=` + encodeURIComponent(JSON.stringify(session)))
+		const undo = page.getByRole('button', {name: '撤销上一步操作', exact: true})
+		await expect(undo).toBeVisible()
+		let undoRequests = 0
+		page.on('request', req => { if (req.method() === 'POST' && req.url().endsWith('/api/v2/tasktrace/undo')) undoRequests++ })
+
+		await page.getByRole('button', {name: /^(设置优先级|Set Priority)$/}).click()
+		await page.getByRole('combobox', {name: /^(优先级|Priority)$/}).selectOption('0')
+		await expect.poll(async () => (await get(`/tasks/${task.id}`)).priority).toBe(10)
+		await expect(undo).toBeEnabled()
+		const priorityAction = (await get('/tasktrace/undo')).id
+		await page.reload()
+		await expect(undo).toBeEnabled()
+		expect((await get('/tasktrace/undo')).id).toBe(priorityAction)
+
+		const newComment = page.locator('.comments .form [contenteditable=true]').first()
+		await newComment.fill('不能丢失的评论草稿')
+		await expect(undo).toBeDisabled()
+		await newComment.fill('')
+		await expect(undo).toBeEnabled()
+
+		const daily = page.locator('.daily-progress')
+		const progress = daily.getByLabel('今日进展', {exact: true})
+		await progress.fill('尚未保存的草稿')
+		await expect(undo).toBeDisabled()
+		await progress.press('Control+Z')
+		expect(undoRequests).toBe(0)
+		await progress.fill('')
+		await progress.press('Tab')
+		await expect(undo).toBeEnabled()
+		await page.evaluate(() => (document.activeElement as HTMLElement)?.blur())
+		await page.keyboard.press('Control+Z')
+		await expect.poll(async () => (await get(`/tasks/${task.id}`)).priority).toBe(0)
+		expect(undoRequests).toBe(1)
+
+		const descriptionSection = page.locator('.tiptap__task-description')
+		await descriptionSection.getByRole('button', {name: /^(编辑|Edit)$/}).click()
+		const description = descriptionSection.locator('[contenteditable=true]').first()
+		await expect(description).toBeVisible()
+		await description.fill('自动保存后也能撤销的描述')
+		await expect(undo).toBeDisabled()
+		await expect.poll(async () => (await get(`/tasks/${task.id}`)).description, {timeout: 12000}).toContain('自动保存后也能撤销')
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect.poll(async () => (await get(`/tasks/${task.id}`)).description).toBe('<p>原始描述</p>')
+		await expect(descriptionSection).toContainText('原始描述')
+		await page.waitForTimeout(5500)
+		expect((await get(`/tasks/${task.id}`)).description).toBe('<p>原始描述</p>')
+
+		const comment = page.locator(`#comment-${baselineComment.id}`)
+		await comment.getByRole('button', {name: /^(编辑|Edit)$/}).click()
+		await comment.locator('[contenteditable=true]').fill('自动保存的普通评论')
+		await expect(undo).toBeDisabled()
+		await expect.poll(async () => (await get(`/tasks/${task.id}/comments`)).items.find((note: {id: number}) => note.id === baselineComment.id).comment, {timeout: 12000}).toContain('自动保存的普通评论')
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect(comment).toContainText('原始评论')
+		await page.waitForTimeout(5500)
+		expect((await get(`/tasks/${task.id}/comments`)).items.find((note: {id: number}) => note.id === baselineComment.id).comment).toContain('原始评论')
+
+		await progress.fill('保存后撤销的每日进展')
+		await daily.getByRole('button', {name: '保存进展', exact: true}).click()
+		await expect(daily.getByRole('status')).toContainText('当天进展已保存')
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect(progress).toHaveValue('')
+		await page.waitForTimeout(5500)
+		expect((await get(`/tasks/${task.id}/comments`)).items.filter((note: {comment: string}) => note.comment.includes('每日进展 ·'))).toHaveLength(0)
+		await expect(progress).toHaveValue('')
+
+		const shared = daily.getByRole('region', {name: '共享遗留事项'})
+		await shared.getByRole('textbox', {name: '新增遗留事项', exact: true}).fill('可以撤销的遗留事项')
+		await expect(undo).toBeDisabled()
+		await shared.getByRole('button', {name: '添加遗留事项', exact: true}).click()
+		await expect(shared.locator('ol > li')).toHaveCount(1)
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect(shared.locator('ol > li')).toHaveCount(0)
+
+		const beforeChild = await get('/tasktrace/undo')
+		const relations = page.locator('.task-relations').last()
+		await relations.getByRole('textbox', {name: '子任务名称', exact: true}).fill('创建和关联一起撤销')
+		await relations.getByRole('button', {name: '添加子任务', exact: true}).click()
+		await expect(relations.getByRole('link', {name: /创建和关联一起撤销$/})).toBeVisible()
+		await expect(undo).toBeEnabled()
+		expect((await get('/tasktrace/undo')).count).toBe(beforeChild.count + 1)
+		const childId = (await get(`/tasks/${task.id}`)).related_tasks.subtask[0].id
+		await undo.click()
+		await expect(relations.getByRole('link', {name: /创建和关联一起撤销$/})).toHaveCount(0)
+		expect((await request.get(`${base}/api/v2/tasks/${childId}`, {headers})).status()).toBe(404)
+
+		await page.goto(`${base}/projects/${project.id}/${project.views.find((view: {view_kind: string}) => view.view_kind === 'list').id}`)
+		await page.getByRole('button', {name: '进入编辑模式', exact: true}).click()
+		const newTask = page.locator('.task-add textarea')
+		await newTask.fill('不能丢失的新任务草稿')
+		await expect(undo).toBeDisabled()
+		await expect(undo).toHaveAttribute('title', /新任务草稿/)
+		await newTask.fill('列表快速添加的任务')
+		await newTask.press('Enter')
+		await expect(page.getByRole('link', {name: '列表快速添加的任务', exact: true})).toBeVisible()
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect(page.getByRole('link', {name: '列表快速添加的任务', exact: true})).toHaveCount(0)
+
+		const created = await (await request.post(`${base}/api/v2/projects/${project.id}/tasks`, {headers: {...headers, 'X-TaskTrace-Undo': '1'}, data: {title: '撤销当前正在查看的新任务'}})).json()
+		await page.goto(`${base}/tasks/${created.id}`)
+		await expect(page.locator('.heading h1')).toContainText('撤销当前正在查看的新任务')
+		await expect(undo).toBeEnabled()
+		await undo.click()
+		await expect(page).toHaveURL(base + '/')
+		expect((await request.get(`${base}/api/v2/tasks/${created.id}`, {headers})).status()).toBe(404)
+		await page.screenshot({path: path.join(root!, 'undo-web-desktop.png'), fullPage: true})
+		await page.setViewportSize({width: 390, height: 844})
+		await expect(undo).toBeVisible()
+		await page.screenshot({path: path.join(root!, 'undo-web-mobile.png'), fullPage: true})
+	} finally {
+		writeFileSync(path.join(root!, 'undo-browser-mutations.json'), JSON.stringify(mutations, null, 2))
+		await request.delete(`${base}/api/v2/projects/${project.id}`, {headers})
+	}
+})

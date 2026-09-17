@@ -30,12 +30,17 @@ const labelQueries = vi.hoisted(() => ({
 const labelSdk = vi.hoisted(() => ({
 	taskLabelsCreate: vi.fn(),
 	taskLabelsDelete: vi.fn(),
+	tasksCreate: vi.fn(),
 }))
 
 vi.mock('@/client/queries/labels', () => labelQueries)
 vi.mock('@/client/generated', () => labelSdk)
 
-import {buildDefaultRemindersForQuickAdd, useTaskStore} from './tasks'
+import {buildDefaultRemindersForQuickAdd, createTasksWithUndo, useTaskStore} from './tasks'
+import TaskService from '@/services/task'
+import TaskModel from '@/models/task'
+import UserModel from '@/models/user'
+import TaskReminderModel from '@/models/taskReminder'
 import {useKanbanStore} from './kanban'
 import {REMINDER_PERIOD_RELATIVE_TO_TYPES} from '@/types/IReminderPeriodRelativeTo'
 import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
@@ -192,5 +197,49 @@ describe('task label operations', () => {
 			path: {task: 7, label: 4},
 		})
 		expect(kanbanStore.buckets[0].tasks[0].labels).toEqual([])
+	})
+})
+
+describe('local task creation with undo', () => {
+	beforeEach(() => { labelSdk.tasksCreate.mockReset() })
+	const headers = {'X-TaskTrace-Undo': '1', 'X-TaskTrace-Undo-Group': '9de5a1c4-d4f8-408c-aad8-d12b8ebdc54e'}
+
+	it('preserves wire conversion, input positions and one group with sequential writes', async () => {
+		let active = 0
+		let maximum = 0
+		labelSdk.tasksCreate.mockImplementation(async ({path, body}) => {
+			active++; maximum = Math.max(maximum, active)
+			await Promise.resolve()
+			active--
+			return {data: {...body, id: body.title === 'First' ? 101 : 102, project_id: path.project}}
+		})
+		const first = new TaskModel({
+			title: 'First', projectId: 7, priority: 3,
+			dueDate: new Date('2026-09-20T12:00:00Z'),
+			assignees: [new UserModel({id: 5, username: 'member'})],
+			reminders: [new TaskReminderModel({reminder: null, relativePeriod: -3600, relativeTo: REMINDER_PERIOD_RELATIVE_TO_TYPES.DUEDATE})],
+		})
+		const result = await createTasksWithUndo(new TaskService(), [first, new TaskModel({title: 'Second', projectId: 8})], headers)
+		expect(result.error).toBeNull()
+		expect(result.tasks.map(task => task?.id)).toEqual([101, 102])
+		expect(result.tasks[0]?.dueDate).toEqual(first.dueDate)
+		expect(result.tasks[0]?.projectId).toBe(7)
+		expect(maximum).toBe(1)
+		expect(labelSdk.tasksCreate.mock.calls.map(([request]) => request.body.title)).toEqual(['Second', 'First'])
+		const request = labelSdk.tasksCreate.mock.calls[1][0]
+		expect(request.headers).toBe(headers)
+		expect(request.body).toMatchObject({due_date: '2026-09-20T12:00:00.000Z', priority: 3, assignees: [{id: 5, username: 'member'}], reminders: [{reminder: null, relative_period: -3600, relative_to: 'due_date'}]})
+		expect(request.body).not.toHaveProperty('max_permission')
+		expect(request.body).not.toHaveProperty('reminder_dates')
+		expect(labelSdk.tasksCreate.mock.calls[0][0].headers).toBe(headers)
+	})
+
+	it('stops at the first failure and retains aligned successful results for retry', async () => {
+		const failure = new Error('Offline')
+		labelSdk.tasksCreate.mockResolvedValueOnce({data: {id: 103, title: 'Third', project_id: 7}}).mockRejectedValueOnce(failure)
+		const result = await createTasksWithUndo(new TaskService(), ['First', 'Second', 'Third'].map(title => new TaskModel({title, projectId: 7})), headers)
+		expect(result.error).toBe(failure)
+		expect(result.tasks.map(task => task?.id || null)).toEqual([null, null, 103])
+		expect(labelSdk.tasksCreate).toHaveBeenCalledTimes(2)
 	})
 })

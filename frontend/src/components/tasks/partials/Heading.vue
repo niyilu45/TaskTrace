@@ -72,6 +72,7 @@ import ColorBubble from '@/components/misc/ColorBubble.vue'
 import Done from '@/components/misc/Done.vue'
 
 import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
+import {useTasktraceUndoGuard} from '@/helpers/tasktraceUndo'
 import {useTaskStore} from '@/stores/tasks'
 
 import type {ITask} from '@/modelTypes/ITask'
@@ -111,6 +112,7 @@ const showSavedMessage = ref(false)
 
 // Track if title has unsaved changes
 const titleHasChanges = ref(false)
+useTasktraceUndoGuard(() => titleHasChanges.value || saving.value, '请先保存或取消任务名称的修改。')
 
 function handleBeforeUnload(e: BeforeUnloadEvent) {
 	if (titleHasChanges.value) {

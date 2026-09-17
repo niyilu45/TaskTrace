@@ -32,7 +32,7 @@ try {
         Assert-Exit 'Windows server build'
     } finally { $env:CGO_ENABLED = $oldCGO; $env:CC = $oldCC }
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-floating.exe')) (Join-Path $repoRoot 'portable/FloatingWindow.cs') (Join-Path $repoRoot 'portable/FloatingInteractions.cs')
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-floating.exe')) (Join-Path $repoRoot 'portable/FloatingWindow.cs') (Join-Path $repoRoot 'portable/FloatingInteractions.cs') (Join-Path $repoRoot 'portable/FloatingUndo.cs')
     Assert-Exit 'Floating window build'
     & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace.exe')) (Join-Path $repoRoot 'portable/Launcher.cs')
     Assert-Exit 'Launcher build'

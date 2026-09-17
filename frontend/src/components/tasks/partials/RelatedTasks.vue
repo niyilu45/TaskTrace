@@ -260,7 +260,7 @@
 			<template #text>
 				<p>
 					{{ $t('task.relation.deleteText1') }}<br>
-					<strong class="has-text-white">{{ $t('misc.cannotBeUndone') }}</strong>
+					<strong class="has-text-white">{{ isLocalBuild ? '移除后可使用“撤销”恢复关系。' : $t('misc.cannotBeUndone') }}</strong>
 				</p>
 			</template>
 		</Modal>
@@ -272,6 +272,8 @@ import {ref, reactive, shallowReactive, watch, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {useRoute} from 'vue-router'
 
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {useTasktraceUndoGuard, undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {patchTasksRead, tasksCreate, tasksRelationsCreate} from '@/client/generated'
 import TaskService from '@/services/task'
 import {taskHierarchySpan, assertCanAddSubtask, MAX_TASK_DEPTH, TASK_DEPTH_MESSAGE} from '@/helpers/taskHierarchyDepth'
@@ -348,6 +350,7 @@ const subtaskTitle = ref('')
 const subtaskSaving = ref(false)
 const subtaskMessage = ref('')
 const pendingSubtask = ref<ITask | null>(null)
+let subtaskUndoGroup = ''
 watch(() => props.taskId, () => { subtaskTitle.value = ''; pendingSubtask.value = null; subtaskMessage.value = '' })
 async function addSubtask() {
 	if (!props.editEnabled || subtaskSaving.value || !subtaskTitle.value.trim()) return
@@ -358,12 +361,13 @@ async function addSubtask() {
 		await assertCanAddSubtask(parentId)
 		let child = pendingSubtask.value
 		if (!child) {
-			const result = await tasksCreate({path: {project: projectId}, body: {title: subtaskTitle.value.trim()}})
+			subtaskUndoGroup = isLocalBuild ? crypto.randomUUID() : ''
+			const result = await tasksCreate({path: {project: projectId}, body: {title: subtaskTitle.value.trim()}, headers: undoGroupHeaders(subtaskUndoGroup)})
 			if (!result.data.id) throw new Error('Missing task ID')
 			child = new TaskModel({id: result.data.id, title: result.data.title, projectId})
 			if (props.taskId === parentId) pendingSubtask.value = child
 		}
-		await tasksRelationsCreate({path: {task: parentId}, body: {other_task_id: child.id, relation_kind: 'subtask'}})
+		await tasksRelationsCreate({path: {task: parentId}, body: {other_task_id: child.id, relation_kind: 'subtask'}, headers: undoGroupHeaders(subtaskUndoGroup)})
 		if (props.taskId !== parentId) return
 		relatedTasks.value.subtask = [...(relatedTasks.value.subtask || []), child]
 		pendingSubtask.value = null
@@ -563,6 +567,7 @@ async function toggleTaskDone(task: ITask) {
 
 	success({message: t('task.detail.updateSuccess')})
 }
+useTasktraceUndoGuard(() => subtaskSaving.value || renameSaving.value || !!subtaskTitle.value.trim() || renamingId.value !== null || showNewRelationForm.value, '请先完成或取消子任务编辑。')
 </script>
 
 <style lang="scss" scoped>

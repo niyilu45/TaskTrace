@@ -36,8 +36,10 @@ import {toISOStringOrNull} from '@/helpers/time/toISOStringOrNull'
 import {error} from '@/message'
 import {REPEAT_TYPES} from '@/types/IRepeatAfter'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
-import {taskLabelsCreate, taskLabelsDelete} from '@/client/generated'
-import type {Label} from '@/client/generated'
+import {taskLabelsCreate, taskLabelsDelete, tasksCreate} from '@/client/generated'
+import type {Label, Task as ApiTask} from '@/client/generated'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {
 	createLabelMutationOptions,
 	ensureLabels,
@@ -46,6 +48,44 @@ import {
 } from '@/client/queries/labels'
 import {queryClient} from '@/client/queryClient'
 
+// Single-task writes are journaled by TaskTrace. Reuse the existing wire/model
+// adapters and retain one result slot per input so only missing tasks are retried.
+export async function createTasksWithUndo(taskService: TaskService, tasks: ITask[], headers: Record<string, string>) {
+	const created: (ITask | null)[] = new Array(tasks.length).fill(null)
+	let error: unknown = null
+	// Each create prepends to its project's views; reverse writes preserve input order.
+	for (let index = tasks.length - 1; index >= 0; index--) {
+		try {
+			const processed = taskService.beforeCreate(tasks[index]) as unknown as ApiTask
+			// The v2 schema rejects the adapter's frontend-only properties. Keep the
+			// same create fields as TaskService.bulkCreate, including quick-add dates.
+			const body: ApiTask = {
+				title: processed.title,
+				description: processed.description,
+				done: processed.done,
+				due_date: processed.due_date,
+				start_date: processed.start_date,
+				end_date: processed.end_date,
+				priority: processed.priority,
+				hex_color: processed.hex_color,
+				percent_done: processed.percent_done,
+				repeat_after: processed.repeat_after,
+				repeat_mode: processed.repeat_mode,
+				is_favorite: processed.is_favorite,
+				bucket_id: processed.bucket_id,
+				assignees: processed.assignees?.map(a => ({id: a.id, username: a.username})),
+				reminders: processed.reminders?.map(r => ({reminder: r.reminder, relative_period: r.relative_period, relative_to: r.relative_to})),
+			}
+			const {data} = await tasksCreate({path: {project: tasks[index].projectId}, body, headers})
+			if (!data.id) throw new Error('创建任务返回了无效结果，请刷新后检查。')
+			created[index] = taskService.modelCreateFactory(data as unknown as Partial<ITask>)
+		} catch (cause) {
+			error = cause
+			break
+		}
+	}
+	return {tasks: created, error}
+}
 interface MatchedAssignee extends IUser {
 	match: string,
 }
@@ -578,6 +618,7 @@ export const useTaskStore = defineStore('task', () => {
 	// error is null when nothing failed.
 	async function createNewTasksBulk(
 		entries: {title: string, projectId: number}[],
+		headers = undoGroupHeaders(),
 	): Promise<{tasks: (ITask | null)[], error: unknown}> {
 		const cancel = setModuleLoading(setIsLoading)
 		try {
@@ -587,7 +628,12 @@ export const useTaskStore = defineStore('task', () => {
 			}))
 
 			const taskService = new TaskService()
-			const {tasks, error: bulkError} = await taskService.bulkCreate(built.map(b => b.task))
+			const {tasks, error: bulkError} = isLocalBuild
+				? await createTasksWithUndo(taskService, built.map(b => b.task), headers)
+				: await taskService.bulkCreate(built.map(b => b.task))
+
+			// Labels remain a separate existing operation. If added after creation,
+			// server undo safely refuses to remove that task's newer dependencies.
 
 			const withLabels = built
 				.map(({parsedLabels}, index) => ({task: tasks[index], parsedLabels}))

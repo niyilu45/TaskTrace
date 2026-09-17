@@ -45,7 +45,10 @@
 					v-slot="{ Component }"
 					:route="routeWithModal"
 				>
-					<keep-alive :include="['project.view']">
+					<keep-alive
+						:key="undoViewVersion"
+						:include="['project.view']"
+					>
 						<component :is="Component" />
 					</keep-alive>
 				</RouterView>
@@ -59,6 +62,7 @@
 				>
 					<component
 						:is="currentModal"
+						:key="undoViewVersion"
 						@close="closeModal()"
 					/>
 				</Modal>
@@ -77,6 +81,7 @@
 </template>
 
 <script lang="ts" setup>
+import {undoViewVersion, useTasktraceUndoGuard, isUndoSafeRoute} from '@/helpers/tasktraceUndo'
 import {watch, computed, onBeforeUnmount} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 
@@ -114,6 +119,7 @@ function showKeyboardShortcuts() {
 
 const route = useRoute()
 const router = useRouter()
+useTasktraceUndoGuard(() => !isUndoSafeRoute(route.name) || !isUndoSafeRoute(routeWithModal.value.name), '请先关闭设置或编辑页面，再撤销任务操作。')
 
 // FIXME: this is really error prone
 // Reset the current project highlight in menu if the current route is not project related.

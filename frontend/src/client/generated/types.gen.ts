@@ -1298,6 +1298,18 @@ export type PaginatedTaskComment = {
     total_pages?: number;
 };
 
+export type PaginatedTaskPosition = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    items?: Array<TaskPosition> | null;
+    page?: number;
+    per_page?: number;
+    total?: number;
+    total_pages?: number;
+};
+
 export type PaginatedTeam = {
     /**
      * A URL to the JSON Schema for this object.
@@ -2553,6 +2565,98 @@ export type TaskReminder = {
     relative_period?: number;
     relative_to?: string;
     reminder?: string;
+};
+
+export type TaskTraceMove = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Insert before this sibling; zero appends to the new parent's children.
+     */
+    before_task_id?: number;
+    /**
+     * New parent in the same project; zero makes the task a root task.
+     */
+    parent_id?: number;
+    /**
+     * The persisted position after the move.
+     */
+    readonly position?: number;
+    /**
+     * Existing view of the task's project in which to save manual order. Its filters are ignored.
+     */
+    project_view_id?: number;
+    /**
+     * Task being moved, taken from the URL.
+     */
+    readonly task_id?: number;
+};
+
+export type TaskTraceOutstandingMove = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Insert before this destination item; empty appends. A missing anchor rejects the move.
+     */
+    before_item_id?: string;
+    /**
+     * Stable data-id of the item in the source list.
+     */
+    item_id?: string;
+    /**
+     * Canonical source list comment after the move.
+     */
+    readonly source_comment_id?: number;
+    /**
+     * Canonical destination list comment after the move.
+     */
+    readonly target_comment_id?: number;
+    /**
+     * Destination task in the same project; may equal the source to reorder.
+     */
+    target_task_id?: number;
+    /**
+     * Source task, taken from the URL.
+     */
+    readonly task_id?: number;
+};
+
+export type TaskTraceUndo = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Tasks restored by this undo request.
+     */
+    readonly affected_task_ids?: Array<number> | null;
+    /**
+     * Number of retained consecutive action groups, up to 50.
+     */
+    readonly count?: number;
+    /**
+     * Latest journal entry ID. Undo requires the most recently read ID; zero means no history remains.
+     */
+    id?: number;
+    /**
+     * Description of the newest undo step.
+     */
+    readonly label?: string;
+};
+
+export type TasktraceUndoCreateRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Latest journal entry ID read from undo status.
+     */
+    id?: number;
 };
 
 export type Team = {
@@ -4062,6 +4166,14 @@ export type PaginatedTaskCommentWritable = {
     total_pages?: number;
 };
 
+export type PaginatedTaskPositionWritable = {
+    items?: Array<TaskPositionWritable> | null;
+    page?: number;
+    per_page?: number;
+    total?: number;
+    total_pages?: number;
+};
+
 export type PaginatedTeamWritable = {
     items?: Array<TeamWritable> | null;
     page?: number;
@@ -4538,6 +4650,50 @@ export type TaskRelationWritable = {
      * The kind of relation, describing the direction from the base task to the other task (e.g. subtask, blocking, related). The inverse relation is created automatically.
      */
     relation_kind?: 'subtask' | 'parenttask' | 'related' | 'duplicateof' | 'duplicates' | 'blocking' | 'blocked' | 'precedes' | 'follows' | 'copiedfrom' | 'copiedto';
+};
+
+export type TaskTraceMoveWritable = {
+    /**
+     * Insert before this sibling; zero appends to the new parent's children.
+     */
+    before_task_id?: number;
+    /**
+     * New parent in the same project; zero makes the task a root task.
+     */
+    parent_id?: number;
+    /**
+     * Existing view of the task's project in which to save manual order. Its filters are ignored.
+     */
+    project_view_id?: number;
+};
+
+export type TaskTraceOutstandingMoveWritable = {
+    /**
+     * Insert before this destination item; empty appends. A missing anchor rejects the move.
+     */
+    before_item_id?: string;
+    /**
+     * Stable data-id of the item in the source list.
+     */
+    item_id?: string;
+    /**
+     * Destination task in the same project; may equal the source to reorder.
+     */
+    target_task_id?: number;
+};
+
+export type TaskTraceUndoWritable = {
+    /**
+     * Latest journal entry ID. Undo requires the most recently read ID; zero means no history remains.
+     */
+    id?: number;
+};
+
+export type TasktraceUndoCreateRequestWritable = {
+    /**
+     * Latest journal entry ID read from undo status.
+     */
+    id?: number;
 };
 
 export type TeamWritable = {
@@ -8408,6 +8564,53 @@ export type ProjectViewTasksListResponses = {
 
 export type ProjectViewTasksListResponse = ProjectViewTasksListResponses[keyof ProjectViewTasksListResponses];
 
+export type ProjectsViewsTasktracePositionsData = {
+    body?: never;
+    path: {
+        /**
+         * Project owning the view.
+         */
+        project: number;
+        /**
+         * Existing project view whose positions to read.
+         */
+        view: number;
+    };
+    query?: {
+        /**
+         * 1-based page number.
+         */
+        page?: number;
+        /**
+         * Items per page (max 1000).
+         */
+        per_page?: number;
+        /**
+         * Search query; filters the list to items matching this string.
+         */
+        q?: string;
+    };
+    url: '/projects/{project}/views/{view}/tasktrace-positions';
+};
+
+export type ProjectsViewsTasktracePositionsErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type ProjectsViewsTasktracePositionsError = ProjectsViewsTasktracePositionsErrors[keyof ProjectsViewsTasktracePositionsErrors];
+
+export type ProjectsViewsTasktracePositionsResponses = {
+    /**
+     * OK
+     */
+    200: PaginatedTaskPosition;
+};
+
+export type ProjectsViewsTasktracePositionsResponse = ProjectsViewsTasktracePositionsResponses[keyof ProjectsViewsTasktracePositionsResponses];
+
 export type WebhooksListData = {
     body?: never;
     path: {
@@ -9607,6 +9810,66 @@ export type TaskLabelsDeleteResponses = {
 
 export type TaskLabelsDeleteResponse = TaskLabelsDeleteResponses[keyof TaskLabelsDeleteResponses];
 
+export type TasksTasktraceMoveData = {
+    body: TaskTraceMoveWritable;
+    path: {
+        /**
+         * Task to move.
+         */
+        task: number;
+    };
+    query?: never;
+    url: '/tasks/{task}/move';
+};
+
+export type TasksTasktraceMoveErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasksTasktraceMoveError = TasksTasktraceMoveErrors[keyof TasksTasktraceMoveErrors];
+
+export type TasksTasktraceMoveResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceMove;
+};
+
+export type TasksTasktraceMoveResponse = TasksTasktraceMoveResponses[keyof TasksTasktraceMoveResponses];
+
+export type TasksOutstandingMoveData = {
+    body: TaskTraceOutstandingMoveWritable;
+    path: {
+        /**
+         * Source task containing the outstanding item.
+         */
+        task: number;
+    };
+    query?: never;
+    url: '/tasks/{task}/outstanding/move';
+};
+
+export type TasksOutstandingMoveErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasksOutstandingMoveError = TasksOutstandingMoveErrors[keyof TasksOutstandingMoveErrors];
+
+export type TasksOutstandingMoveResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceOutstandingMove;
+};
+
+export type TasksOutstandingMoveResponse = TasksOutstandingMoveResponses[keyof TasksOutstandingMoveResponses];
+
 export type TasksPositionUpdateData = {
     body: TaskPositionWritable;
     path: {
@@ -9734,6 +9997,56 @@ export type TasksRelationsDeleteResponses = {
 };
 
 export type TasksRelationsDeleteResponse = TasksRelationsDeleteResponses[keyof TasksRelationsDeleteResponses];
+
+export type TasktraceUndoReadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/undo';
+};
+
+export type TasktraceUndoReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUndoReadError = TasktraceUndoReadErrors[keyof TasktraceUndoReadErrors];
+
+export type TasktraceUndoReadResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceUndo;
+};
+
+export type TasktraceUndoReadResponse = TasktraceUndoReadResponses[keyof TasktraceUndoReadResponses];
+
+export type TasktraceUndoCreateData = {
+    body: TasktraceUndoCreateRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/undo';
+};
+
+export type TasktraceUndoCreateErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUndoCreateError = TasktraceUndoCreateErrors[keyof TasktraceUndoCreateErrors];
+
+export type TasktraceUndoCreateResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceUndo;
+};
+
+export type TasktraceUndoCreateResponse = TasktraceUndoCreateResponses[keyof TasktraceUndoCreateResponses];
 
 export type TeamsListData = {
     body?: never;

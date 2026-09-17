@@ -65,7 +65,8 @@ internal sealed partial class FloatingWindow {
         menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
         var toRoot=menu.Items.Add("移为顶层任务",null,async delegate{long id=SelectedTaskId();if(id>0)await ExecuteDrop(new DropPlan{TaskId=id,ParentId=0,BeforeId=0,Message="移为顶层任务"});});
-        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy || tasks.SelectedNode==null;setPriority.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;toRoot.Enabled=setPriority.Enabled && taskParents.ContainsKey(SelectedTaskId());};
+        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;toRoot.Enabled=setPriority.Enabled && taskParents.ContainsKey(SelectedTaskId());};
+        InitializeUndo(menu);
         tasks.ContextMenuStrip=menu;
         tasks.NodeMouseClick+=delegate(object sender,TreeNodeMouseClickEventArgs e){if(e.Button==MouseButtons.Right)tasks.SelectedNode=e.Node;};
         tasks.AllowDrop=true;

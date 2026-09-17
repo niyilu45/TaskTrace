@@ -191,6 +191,7 @@ func NewEcho() *echo.Echo {
 	// Normalize PHP-style `foo[]=...` query params to `foo=...` before any
 	// handler binds them. Runs globally so both /api/v1 and /api/v2 benefit.
 	e.Use(vmiddleware.NormalizeArrayParams())
+	e.Use(vmiddleware.TaskTraceUndo())
 
 	if config.AuditEnabled.GetBool() {
 		e.Use(vmiddleware.RequestMeta())

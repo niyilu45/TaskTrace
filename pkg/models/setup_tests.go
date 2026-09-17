@@ -59,6 +59,7 @@ func SetupTests() {
 		"task_assignees",
 		"task_attachments",
 		"task_comments",
+		"tasktrace_undo_entries",
 		"task_relations",
 		"task_reminders",
 		"tasks",

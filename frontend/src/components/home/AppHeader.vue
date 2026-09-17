@@ -63,6 +63,7 @@
 		</div>
 
 		<div class="navbar-end">
+			<TasktraceUndo v-if="isLocalBuild" />
 			<TimerBadge />
 			<OpenQuickActions />
 			<Notifications />
@@ -131,7 +132,8 @@
 </template>
 
 <script setup lang="ts">
-import {isLocalWorkspace} from '@/helpers/tasktraceLocal'
+import TasktraceUndo from '@/components/home/TasktraceUndo.vue'
+import {isLocalBuild, isLocalWorkspace} from '@/helpers/tasktraceLocal'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'

@@ -157,6 +157,7 @@
 
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, reactive, ref, watch} from 'vue'
+import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import ReadonlyRichText from './ReadonlyRichText.vue'
@@ -175,7 +176,7 @@ watch(busy, value => emit('busy', value), {flush: 'sync'})
 const loading = ref(false)
 const error = ref('')
 const message = ref('')
-const blocked = computed(() => props.disabled || busy.value || loading.value)
+const blocked = computed(() => props.disabled || busy.value || loading.value || undoInProgress.value)
 const activeIndex = computed(() => items.value.findIndex(item => item.id === activeId.value))
 const draft = computed(() => {
 	const key = `${props.taskId}:${activeId.value}`
@@ -185,6 +186,7 @@ const draft = computed(() => {
 const canSave = computed(() => draft.value.images.length > 0 || (!activeId.value && !!draft.value.text.trim()))
 let loadVersion = 0
 let mounted = true
+useTasktraceUndoGuard(() => busy.value || [...drafts.values()].some(value => !!value.text.trim() || value.images.length > 0), '请先保存或清空遗留事项的输入和待保存图片。')
 
 async function load() {
 	const taskId = props.taskId

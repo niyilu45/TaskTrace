@@ -290,6 +290,8 @@ internal sealed partial class FloatingWindow : Form {
         using(var request = new HttpRequestMessage(new HttpMethod(method), url + "/api/v2" + path)) {
             string requestToken = token;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", requestToken);
+            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo";
+            if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
             using(var response = await http.SendAsync(request)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
@@ -302,15 +304,22 @@ internal sealed partial class FloatingWindow : Form {
                     } finally { refreshGate.Release(); }
                     return await Api(method, path, body, false);
                 }
-                if(!response.IsSuccessStatusCode) throw new Exception("操作未保存（" + (int)response.StatusCode + "），请刷新后重试。");
-                return ReadObject(await response.Content.ReadAsStringAsync());
+                string responseBody = await response.Content.ReadAsStringAsync();
+                if(!response.IsSuccessStatusCode) {
+                    string message = "操作未保存（" + (int)response.StatusCode + "），请刷新后重试。";
+                    if(path == "/tasktrace/undo") try { var problem = ReadObject(responseBody); object detail; if(problem.TryGetValue("detail", out detail) || problem.TryGetValue("message", out detail)) message = Convert.ToString(detail); } catch { }
+                    throw new Exception(message);
+                }
+                var result = ReadObject(responseBody);
+                if(recordUndo) await RefreshUndo();
+                return result;
             }
         }
     }
-    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; } }
+    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; UpdateUndoControls(); } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
-        try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); }
+        try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); await RefreshUndo(); }
         catch(Exception e) { Error(e); }
         finally { SetBusy(false); }
     }
@@ -492,6 +501,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return;}
                     submitting=true;day.Enabled=false;save.Enabled=false;sharedButton.Enabled=false;progress.ReadOnly=true;
                     try {
+                        using(BeginUndoGroup()) {
                         var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
                         string images=String.Join("",Regex.Matches(originalBody,"<img[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
                         string body=progress.Text==originalText?originalBody:"<p>"+WebUtility.HtmlEncode(progress.Text.Trim()).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>"+images;
@@ -500,6 +510,7 @@ internal sealed partial class FloatingWindow : Form {
                         foreach(var picture in pictures) body+="<p><img src=\"/api/v1/tasks/"+id+"/attachments/"+picture.Id+"\"></p>";
                         originalBody=body;originalText=progress.Text;pictures.Clear();lastSaved=snapshot();drafts.Remove(selectedDay);
                         history=await ReadHistory(id);feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
+                        }
                     } catch {feedback.Text="保存失败，内容已保留，请重试。";}
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;progress.ReadOnly=false;}
                 };
@@ -528,10 +539,12 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task<long> CreateSubtask(long parentId, long projectId, string title, long existingId = 0) {
         if(await TaskHierarchySpan(parentId) >= 5) throw new Exception(TaskDepthMessage);
+        using(BeginUndoGroup()) {
         long childId = existingId;
         if(childId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title }); childId = Convert.ToInt64(child["id"]); }
         await Api("POST", "/tasks/" + parentId + "/relations", new { other_task_id = childId, relation_kind = "subtask" });
         return childId;
+        }
     }
     async Task ShowSubtasks() {
         if(busy || closing) return;
@@ -555,7 +568,7 @@ internal sealed partial class FloatingWindow : Form {
                 renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); renameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 95));
                 renameRow.Controls.Add(renameTitle); renameRow.Controls.Add(rename);
                 dialog.Controls.Add(list); dialog.Controls.Add(renameRow); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
-                bool loading = false, writing = false; long pendingId = 0; bool depthLimit = false;
+                bool loading = false, writing = false; long pendingId = 0; string pendingUndoGroup = null; bool depthLimit = false;
                 Func<Task> reload = async delegate {
                     loading = true;
                     try {
@@ -589,9 +602,12 @@ internal sealed partial class FloatingWindow : Form {
                     writing = true; add.Enabled = false; title.Enabled = false;
                     try {
                         if(await TaskHierarchySpan(parentId) >= 5) { depthLimit = true; throw new Exception(TaskDepthMessage); }
+                        if(pendingUndoGroup == null) pendingUndoGroup = Guid.NewGuid().ToString();
+                        using(BeginUndoGroup(pendingUndoGroup)) {
                         if(pendingId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title.Text.Trim() }); pendingId = Convert.ToInt64(child["id"]); }
                         await CreateSubtask(parentId, projectId, title.Text, pendingId);
-                        pendingId = 0; title.Clear(); feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
+                        }
+                        pendingId = 0; pendingUndoGroup = null; title.Clear(); feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
                     } catch { feedback.Text = depthLimit ? TaskDepthMessage : pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
                     finally { writing = false; add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0; }
                 };
@@ -824,6 +840,7 @@ internal sealed partial class FloatingWindow : Form {
                 using(var response = await http.SendAsync(request)) if(!response.IsSuccessStatusCode) throw new Exception("Browser session failed");
             }
             await TestInteractions();
+            await TestUndo();
             token = "expired"; await Reload();
             if(status.ForeColor != ForeColor) throw new Exception("Session refresh failed");
             ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
@@ -842,7 +859,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native button and text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

@@ -84,7 +84,8 @@
 </template>
 
 <script setup lang="ts">
-import {ref, watch, onBeforeUnmount} from 'vue'
+import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
+import {ref, reactive, watch, onBeforeUnmount} from 'vue'
 import {taskCommentsCreate, taskCommentsUpdate, taskAttachmentsUpload} from '@/client/generated'
 import AutoSaveSettings from './AutoSaveSettings.vue'
 import SharedOutstanding from './SharedOutstanding.vue'
@@ -110,9 +111,19 @@ const message = ref('')
 const lastSaved = ref('')
 let version = 0
 const snapshot = () => JSON.stringify([date.value, progress.value, images.value.map(image => image.attachmentId || image.preview)])
-const drafts = new Map<string, {text: string, images: typeof images.value}>()
+const drafts = reactive(new Map<string, {text: string, images: typeof images.value}>())
+useTasktraceUndoGuard(() => saving.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
 function stash() {
-	if (restoring.value || !date.value || snapshot() === lastSaved.value) return
+	if (undoInProgress.value || restoring.value || !date.value) return
+	if (snapshot() === lastSaved.value) {
+		drafts.delete(`${props.taskId}:${date.value}`)
+		try {
+			localStorage.removeItem(`tasktrace-day-draft-${props.taskId}-${date.value}`)
+			const legacy = JSON.parse(localStorage.getItem(`tasktrace-progress-draft-${props.taskId}`) || 'null')
+			if (legacy?.date === date.value) localStorage.removeItem(`tasktrace-progress-draft-${props.taskId}`)
+		} catch { /* Optional draft cleanup. */ }
+		return
+	}
 	drafts.set(`${props.taskId}:${date.value}`, {text: progress.value, images: [...images.value]})
 	try { localStorage.setItem(`tasktrace-day-draft-${props.taskId}-${date.value}`, JSON.stringify({progress: progress.value, attachments: images.value.map(image => image.attachmentId).filter(Boolean)})) } catch { /* Server save remains available. */ }
 }
@@ -168,12 +179,13 @@ function pasteImages(event: ClipboardEvent) {
 function removeImage(index: number) { const [picture] = images.value.splice(index, 1); if (picture?.file) URL.revokeObjectURL(picture.preview) }
 function html(value: string) { return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,'<br>') }
 async function save(automatic = false) {
-	if (restoring.value || saving.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !autoCommentId.value)) return
+	if (undoInProgress.value || restoring.value || saving.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !autoCommentId.value)) return
 	saving.value = true
 	const taskId = props.taskId
+	const undoHeaders = undoGroupHeaders()
 	try {
 		const latestHistory = await readTaskHistory(taskId)
-		if (!sharedOutstanding(latestHistory).id) await changeOutstanding(taskId, items => items)
+		if (!sharedOutstanding(latestHistory).id) await changeOutstanding(taskId, items => items, undoHeaders)
 		let body = progress.value === originalText.value ? originalHtml.value : `<p>${html(progress.value.trim())}</p>${existingImages.value}`
 		for (const picture of images.value) {
 			if (!picture.attachmentId) {
@@ -185,8 +197,8 @@ async function save(automatic = false) {
 		}
 		const comment = `<h3 data-tasktrace-merged="${mergedIds.value.join(',')}">每日进展 · ${date.value}</h3>${body}`
 		if (snapshot() !== lastSaved.value || mergedIds.value.length) {
-			if (autoCommentId.value) await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}})
-			else autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}})).data.id
+			if (autoCommentId.value) await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}, headers: undoHeaders})
+			else autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoHeaders})).data.id
 		}
 		if (taskId !== props.taskId) return
 		originalHtml.value = body; originalText.value = progress.value

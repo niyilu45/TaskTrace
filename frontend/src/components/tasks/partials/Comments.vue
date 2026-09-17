@@ -216,7 +216,7 @@
 			<template #text>
 				<p>
 					{{ $t('task.comment.deleteText1') }}<br>
-					<strong class="has-text-white">{{ $t('misc.cannotBeUndone') }}</strong>
+					<strong class="has-text-white">{{ isLocalBuild ? '删除后可使用“撤销”恢复。' : $t('misc.cannotBeUndone') }}</strong>
 				</p>
 			</template>
 		</Modal>
@@ -224,7 +224,10 @@
 </template>
 
 <script setup lang="ts">
-import {ref, reactive, computed, nextTick, provide, shallowReactive, watch} from 'vue'
+import {ref, reactive, computed, nextTick, provide, shallowReactive, watch, onBeforeUnmount} from 'vue'
+import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {useI18n} from 'vue-i18n'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -270,6 +273,12 @@ const localSortOrder = ref<'asc' | 'desc' | null>(null)
 const commentSortOrder = computed(() => localSortOrder.value ?? authStore.settings.frontendSettings.commentSortOrder ?? 'asc')
 
 const comments = ref<ITaskComment[]>([])
+const savedComments = reactive(new Map<number, string>())
+const uploading = ref(0)
+function rememberComments() {
+	savedComments.clear()
+	comments.value.forEach(comment => savedComments.set(comment.id, comment.comment))
+}
 
 const showDeleteModal = ref(false)
 const commentToDelete = reactive(new TaskCommentModel())
@@ -360,11 +369,11 @@ async function waitForEditorRef() {
 }
 
 
-function attachmentUpload(files: File[] | FileList): Promise<string[]> {
-	return uploadFilesForEditor(
-		(file, onSuccess) => uploadFile(props.taskId, file, onSuccess),
-		files,
-	)
+async function attachmentUpload(files: File[] | FileList): Promise<string[]> {
+	uploading.value++
+	try {
+		return await uploadFilesForEditor((file, onSuccess) => uploadFile(props.taskId, file, onSuccess), files)
+	} finally { uploading.value-- }
 }
 
 const taskCommentService = shallowReactive(new TaskCommentService())
@@ -391,11 +400,13 @@ async function loadComments(taskId: ITask['id'], force = false) {
 	if (!force && commentSortOrder.value === 'asc' && typeof props.initialComments !== 'undefined' && currentPage.value === 1) {
 		if (props.initialComments.length < configStore.maxItemsPerPage) {
 			comments.value = props.initialComments
+			rememberComments()
 			return
 		}
 	}
 
 	comments.value = await taskCommentService.getAll({taskId}, {order_by: commentSortOrder.value}, currentPage.value)
+	rememberComments()
 }
 
 async function changePage(page: number) {
@@ -442,7 +453,7 @@ const editorActive = ref(true)
 const creating = ref(false)
 
 async function addComment() {
-	if (newCommentText.value === '') {
+	if (undoInProgress.value || newCommentText.value === '') {
 		return
 	}
 
@@ -453,6 +464,7 @@ async function addComment() {
 		newComment.taskId = props.taskId
 		newComment.comment = newCommentText.value
 		const comment = await taskCommentService.create(newComment)
+		savedComments.set(comment.id, comment.comment)
 
 		if (commentSortOrder.value === 'desc' && currentPage.value > 1) {
 			currentPage.value = 1
@@ -488,6 +500,16 @@ function toggleDelete(commentId: ITaskComment['id']) {
 }
 
 const changeTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
+let disposed = false
+useTasktraceUndoGuard(() => !isEditorContentEmpty(newCommentText.value) || uploading.value > 0 || creating.value || saving.value !== null || changeTimeout.value !== null || comments.value.some(comment => savedComments.get(comment.id) !== comment.comment), '请先保存或清空评论草稿，再撤销。')
+onBeforeUnmount(() => {
+	if (changeTimeout.value !== null) {
+		clearTimeout(changeTimeout.value)
+		changeTimeout.value = null
+		if (!undoInProgress.value) void editComment()
+	}
+	disposed = true
+})
 
 async function editCommentWithDelay() {
 	if (changeTimeout.value !== null) {
@@ -500,25 +522,22 @@ async function editCommentWithDelay() {
 }
 
 async function editComment() {
-	if (commentEdit.comment === '') {
-		return
-	}
-
 	if (changeTimeout.value !== null) {
 		clearTimeout(changeTimeout.value)
+		changeTimeout.value = null
 	}
-
-	saving.value = commentEdit.id
-
-	commentEdit.taskId = props.taskId
+	if (undoInProgress.value || disposed || commentEdit.comment === '') return
+	const submitted = new TaskCommentModel({...commentEdit, taskId: props.taskId})
+	saving.value = submitted.id
 	try {
-		const comment = await taskCommentService.update(commentEdit)
+		const comment = await taskCommentService.update(submitted)
 		for (let c = 0; c < comments.value.length; c++) {
-			if (comments.value[c].id === commentEdit.id) {
+			if (comments.value[c].id === submitted.id) {
 				comments.value[c] = comment
 			}
 		}
-		saved.value = commentEdit.id
+		savedComments.set(comment.id, comment.comment)
+		saved.value = submitted.id
 		setTimeout(() => {
 			saved.value = null
 		}, 2000)

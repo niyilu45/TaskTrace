@@ -52,6 +52,7 @@
 
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount} from 'vue'
+import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {useAutoSave, autoSaveSettings} from '@/helpers/autoSave'
 import {onBeforeRouteLeave} from 'vue-router'
 import {useI18n} from 'vue-i18n'
@@ -89,6 +90,8 @@ watch(() => props.modelValue.id, () => {
 
 const saved = ref(false)
 const saving = ref(false)
+const uploading = ref(0)
+useTasktraceUndoGuard(() => hasChanges.value || saving.value || uploading.value > 0, '请先保存或取消事项描述的修改。')
 
 const taskStore = useTaskStore()
 
@@ -194,7 +197,7 @@ onBeforeUnmount(async () => {
 onBeforeRouteLeave(() => autoSaveSettings.enabled ? save() : undefined)
 
 async function save() {
-	if (!hasChanges.value || saving.value || !props.canWrite) {
+	if (undoInProgress.value || !hasChanges.value || saving.value || !props.canWrite) {
 		return
 	}
 
@@ -230,8 +233,9 @@ async function save() {
 	}
 }
 
-function uploadCallback(files: File[] | FileList): Promise<string[]> {
-	return uploadFilesForEditor(props.attachmentUpload, files)
+async function uploadCallback(files: File[] | FileList): Promise<string[]> {
+	uploading.value++
+	try { return await uploadFilesForEditor(props.attachmentUpload, files) } finally { uploading.value-- }
 }
 </script>
 
