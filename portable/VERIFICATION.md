@@ -225,3 +225,9 @@
 - portable/Test-StartupGuard.ps1 用随机独立锁名和隐藏子进程验证互斥、释放后重启、遗弃锁恢复及四进程同时启动，临时数据仅保存到 .local-build。
 - Windows PowerShell 隔离成品完整原生自检通过：.local-build/startup-guard-confirmed/data/floating-test.txt。重复启动日志：.local-build/startup-existing-probe.log。
 - 首轮额外原生回归曾出现一次已有记录更新返回 404；只读检查确认记录仍存在且没有删除。代码中数据库错误可能被误报为不存在，具体底层错误日志不足以确认；本次未修改后端，使用正式 Windows PowerShell 重新隔离验证完整通过，保留失败日志 .local-build/startup-guard-verified/data/floating-test.txt 供后续定位。
+
+## 2026-09-17 简洁模式仅保留恢复入口
+- 简洁悬浮窗底部操作区只保留“回到完整悬浮窗”，移除“展开/收起”“添加遗留事项”和“按优先级”按钮及专用展开/收起菜单项；完整模式保留全部操作。
+- 任务树箭头、优先级文字、遗留事项双击、图片链接和拖动继续复用共享逻辑；模式切换仍保留选中项、滚动位置和展开状态。
+- 隔离成品完整原生自检通过，专项验证仅一个可见恢复按钮、忙碌状态仍可恢复、窄窗不裁切以及失焦时不预留底部灰区。
+- 已检查 `.local-build/simple-restore-only-verified/data/floating-simple-outstanding-actions-test.png`，任务列表和单一恢复按钮布局正常；机械界面检测无命中。
