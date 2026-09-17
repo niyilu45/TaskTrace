@@ -202,3 +202,9 @@
 - 7 个层级单元测试通过；成品浏览器通过两个项目、51 条跨页任务、三级嵌套、已完成祖先上下文、项目/任务折叠、完成筛选及勾选后的持久化，窄屏无横向溢出。
 - 已查看桌面和窄屏截图；修正收起状态使用未注册图标的问题，改为旋转现有箭头。ESLint 0 错误（19 项已有警告）、Stylelint 通过，界面扫描无命中。
 - 日志 .local-build/overview-groups-unit.log、overview-groups-final-e2e.log、overview-groups-lint.log、overview-groups-style.log。
+
+## 2026-09-17 悬浮窗仅保留系统托盘入口
+- 主悬浮窗及其进展、子任务、遗留事项、设置和错误详情窗口明确关闭任务栏显示。
+- 关闭或最小化主窗口隐藏到托盘；双击托盘或“显示悬浮窗”恢复正常状态，托盘“退出 TaskTrace”保持原退出语义。
+- 原生完整自检通过，新增验证启动无任务栏入口、关闭/最小化隐藏、普通/简洁模式托盘恢复，后台接口保持可用；原有功能回归通过。
+- 日志 .local-build/tray-only-build.log、.local-build/tray-only-verify/data/floating-test.txt；测试数据不进入发布包。

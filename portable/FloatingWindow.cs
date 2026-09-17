@@ -76,7 +76,7 @@ internal sealed class FloatingWindow : Form {
         http.Timeout = TimeSpan.FromSeconds(10);
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         tray.Icon = Icon; tray.Visible = true;
-        Text = "TaskTrace · 悬浮事项"; Font = new Font("Microsoft YaHei UI", 9F);
+        ShowInTaskbar = false; Text = "TaskTrace · 悬浮事项"; Font = new Font("Microsoft YaHei UI", 9F);
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
@@ -178,7 +178,8 @@ internal sealed class FloatingWindow : Form {
         tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
             if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
         };
-        // Minimize keeps the application visible on the Windows taskbar.
+        // Both close and minimize keep the application available only in the notification area.
+        Resize += delegate { if(!closing && WindowState == FormWindowState.Minimized) HideToTray(); };
         tray.DoubleClick += delegate { RestoreWindow(); };
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
@@ -190,8 +191,7 @@ internal sealed class FloatingWindow : Form {
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
             if(e.CloseReason == CloseReason.UserClosing && !allowExit) {
-                e.Cancel = true; SaveBounds(); ShowInTaskbar = true;
-                WindowState = FormWindowState.Minimized;
+                e.Cancel = true; HideToTray();
                 return;
             }
             closing = true; timer.Stop(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
@@ -284,7 +284,7 @@ internal sealed class FloatingWindow : Form {
         SetBusy(true); timer.Stop();
         try {
             var shared = ReadShared(await ReadHistory(id));
-            using(var dialog = new Form {Text="遗留事项 · 所有日期共享",Size=new Size(480,380),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent}) {
+            using(var dialog = new Form {Text="遗留事项 · 所有日期共享",Size=new Size(480,380),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
                 var list = new ListBox {Dock=DockStyle.Fill};
                 var input = new TextBox {Dock=DockStyle.Top,AccessibleName="新增遗留事项"};
                 var buttons = new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=40};
@@ -547,7 +547,7 @@ internal sealed class FloatingWindow : Form {
         try {
             var parent = await Api("GET", "/tasks/" + parentId, null);
             long projectId = Convert.ToInt64(parent["project_id"]);
-            using(var dialog = new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 430), MinimumSize = new Size(380, 320), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent }) {
+            using(var dialog = new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 430), MinimumSize = new Size(380, 320), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
                 var list = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.None };
                 list.Columns.Add("子任务", 390);
                 var title = new TextBox { Dock = DockStyle.Fill };
@@ -644,7 +644,7 @@ internal sealed class FloatingWindow : Form {
     string lastError = "";
     void ShowErrorDetails() {
         if(String.IsNullOrEmpty(lastError)) return;
-        using(var dialog = new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, StartPosition = FormStartPosition.CenterParent }) {
+        using(var dialog = new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
             dialog.Controls.Add(new TextBox { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Dock = DockStyle.Fill, Text = lastError });
             dialog.ShowDialog(this);
         }
@@ -665,7 +665,11 @@ internal sealed class FloatingWindow : Form {
         status.ForeColor = Color.FromArgb(170, 35, 35);
         status.Text = "操作失败，点击此处查看完整错误详情。";
     }
-    void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+    void HideToTray() {
+        SaveSimpleMode(); SaveBounds(); hoverTimer.Stop(); progressTip.Hide(tasks);
+        restoreSimple.Visible = false; Hide();
+    }
+    void RestoreWindow() { WindowState = FormWindowState.Normal; Show(); Activate(); }
     void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 300); Height = expandedHeight; fold.Text = "收起"; } }
     void LoadAutoSaveSettings() {
         try {
@@ -675,7 +679,7 @@ internal sealed class FloatingWindow : Form {
         } catch { }
     }
     void ShowAutoSaveSettings() {
-        using(var settings = new Form { Text = "设置", Size = new Size(430, 345), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost }) {
+        using(var settings = new Form { Text = "设置", Size = new Size(430, 345), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
@@ -715,7 +719,7 @@ internal sealed class FloatingWindow : Form {
             string diagnostic = File.ReadAllText(Path.Combine(data, "TaskTrace-window-error.log"));
             if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
             await Reload();
-            if(projects.Items.Count == 0 || !TopMost) throw new Exception("Workspace or TopMost missing");
+            if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(tasks.Nodes.Count == 0 || tasks.Nodes[0].Text != createdTitle) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
@@ -814,12 +818,20 @@ internal sealed class FloatingWindow : Form {
             ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
             pin.Checked = false; if(TopMost) throw new Exception("Unpin failed"); pin.Checked = true;
             Close();
-            if(closing || IsDisposed || WindowState != FormWindowState.Minimized || !ShowInTaskbar || !Visible) throw new Exception("Close must minimize to taskbar");
+            if(closing || IsDisposed || ShowInTaskbar || Visible || !tray.Visible) throw new Exception("Close must hide to tray without a taskbar entry");
             await Api("GET", "/projects", null);
             RestoreWindow();
+            if(!Visible || WindowState != FormWindowState.Normal || ShowInTaskbar) throw new Exception("Tray restore failed");
+            WindowState = FormWindowState.Minimized;
+            if(Visible || ShowInTaskbar || !tray.Visible) throw new Exception("Minimize must hide to tray");
+            RestoreWindow(); SetSimpleMode(true); Close();
+            if(Visible || ShowInTaskbar || !tray.Visible || closing) throw new Exception("Simple window must hide to tray");
+            RestoreWindow();
+            if(!simpleMode || !Visible || ShowInTaskbar) throw new Exception("Simple window tray restore failed");
+            SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
