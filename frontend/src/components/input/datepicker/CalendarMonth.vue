@@ -87,9 +87,9 @@
 					<button
 						type="button"
 						class="calendar-month__day"
-						:class="{'is-today': isSameDay(cell.date, today)}"
+						:class="{'is-today': isSameDay(cell.date, today), 'has-marker': markedDateSet.has(dateKey(cell.date))}"
 						:tabindex="isSameDay(cell.date, focusedDate) ? 0 : -1"
-						:aria-label="formatDate(cell.date, 'LL')"
+						:aria-label="formatDate(cell.date, 'LL') + (markedDateSet.has(dateKey(cell.date)) ? '，有进展' : '')"
 						:disabled="isDisabled(cell.date) || undefined"
 						:data-date="dateKey(cell.date)"
 						@click.stop="pick(cell.date)"
@@ -129,6 +129,7 @@ const props = withDefaults(defineProps<{
 	rangeEnd?: Date | null
 	minDate?: Date | null
 	large?: boolean
+	markedDates?: string[]
 }>(), {
 	mode: 'single',
 	selected: null,
@@ -136,6 +137,7 @@ const props = withDefaults(defineProps<{
 	rangeEnd: null,
 	minDate: null,
 	large: false,
+	markedDates: () => [],
 })
 
 const emit = defineEmits<{
@@ -146,6 +148,7 @@ const authStore = useAuthStore()
 const weekStart = computed(() => authStore.settings.weekStart ?? 0)
 
 const today = startOfDay(new Date())
+const markedDateSet = computed(() => new Set(props.markedDates))
 const root = ref<HTMLElement | null>(null)
 const hovered = ref<Date | null>(null)
 
@@ -422,6 +425,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .calendar-month__day {
+	position: relative;
 	inline-size: var(--calendar-day-size);
 	block-size: var(--calendar-day-size);
 	display: grid;
@@ -449,6 +453,22 @@ function onKeydown(event: KeyboardEvent) {
 		border-color: var(--primary);
 		color: var(--primary);
 		font-weight: 700;
+	}
+
+	&.has-marker::after {
+		content: '';
+		position: absolute;
+		inset-inline-start: 50%;
+		inset-block-end: .18rem;
+		inline-size: .34rem;
+		block-size: .34rem;
+		border-radius: 50%;
+		background: var(--primary);
+		transform: translateX(-50%);
+	}
+
+	.is-selected &.has-marker::after {
+		background: var(--primary-invert);
 	}
 
 	&:hover:not(:disabled) {

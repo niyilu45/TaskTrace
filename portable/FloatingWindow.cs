@@ -218,6 +218,11 @@ internal sealed partial class FloatingWindow : Form {
         var hidden = new HashSet<long>(notes.SelectMany(note => MergedIds((string)note["comment"])));
         return notes.Where(note => DayOf(note)!="" && !hidden.Contains(Convert.ToInt64(note["id"]))).OrderByDescending(note => DayOf(note)).ThenByDescending(note => Convert.ToInt64(note["id"])).ToList();
     }
+    static List<DateTime> ProgressDates(List<Dictionary<string,object>> notes) {
+        var dates=new List<DateTime>();DateTime date;
+        foreach(string value in DailyHistory(notes).Select(note=>DayOf(note)).Distinct())if(DateTime.TryParseExact(value,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))dates.Add(date.Date);
+        return dates;
+    }
     static string ProgressBody(string html,long taskId=0) {
         return ProgressDisplayBody(SplitProgressReferences(html,taskId).Body);
     }
@@ -402,7 +407,7 @@ internal sealed partial class FloatingWindow : Form {
             using(var dialog=new Form {Text="每日进展 · "+taskTitle,Size=new Size(560,700),MinimumSize=new Size(420,580),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,180));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
-                var day=new DateTimePicker {Format=DateTimePickerFormat.Custom,CustomFormat="yyyy-MM-dd",Value=DateTime.Today,Dock=DockStyle.Fill};
+                var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正",AccessibleDescription="当天进展与更正"};
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
@@ -469,7 +474,7 @@ internal sealed partial class FloatingWindow : Form {
                         commentId=await SaveProgress(id,day.Value,progress.Text,"",pictures,commentId,body,mergedIds,references);
                         foreach(var picture in pictures) body+="<p><img src=\"/api/v1/tasks/"+id+"/attachments/"+picture.Id+"\"></p>";
                         originalBody=body;originalText=progress.Text;pictures.Clear();lastSaved=snapshot();drafts.Remove(selectedDay);
-                        history=await ReadHistory(id);refreshReferences();feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
+                        history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
                         }
                     } catch {feedback.Text="保存失败，内容已保留，请重试。";}
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}
@@ -484,6 +489,8 @@ internal sealed partial class FloatingWindow : Form {
                 if(verify)dialog.Shown+=async delegate {
                     try {
                         autoTimer.Stop();
+                        if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
+                        using(var calendar=day.RenderCalendarForTest())calendar.Save(Path.Combine(data,"floating-progress-calendar-test.png"));
                         if(referenceDay.Items.Count<2 || referenceDay.Items.Cast<string>().Any(date=>String.CompareOrdinal(date,selectedDay)>=0))throw new Exception("Reference date choices are not earlier than selected day");
                         string first=(string)referenceDay.Items[0],second=(string)referenceDay.Items[1];
                         var sourceRecord=DailyHistory(history).First(note=>DayOf(note)==first);string sourceOriginal=(string)sourceRecord["comment"];

@@ -19,15 +19,13 @@
 			重新读取当天进展
 		</button>
 		<label :for="`progress-date-${taskId}`">记录日期</label>
-		<input
+		<ProgressDatePicker
 			:id="`progress-date-${taskId}`"
-			:value="date"
-			class="input"
-			type="date"
-			required
+			:model-value="date"
+			:marked-dates="progressDates"
 			:disabled="saving || referenceLoading"
-			@change="switchDate(($event.target as HTMLInputElement).value)"
-		>
+			@update:modelValue="switchDate"
+		/>
 		<label :for="`progress-text-${taskId}`">今日进展</label>
 		<textarea
 			:id="`progress-text-${taskId}`"
@@ -154,6 +152,7 @@ import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers
 import {ref, reactive, computed, watch, onBeforeUnmount} from 'vue'
 import {taskCommentsCreate, taskCommentsUpdate, taskAttachmentsUpload} from '@/client/generated'
 import AutoSaveSettings from './AutoSaveSettings.vue'
+import ProgressDatePicker from './ProgressDatePicker.vue'
 import SharedOutstanding from './SharedOutstanding.vue'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {readTaskHistory, sharedOutstanding, changeOutstanding} from '@/helpers/sharedOutstanding'
@@ -177,6 +176,11 @@ const references = ref<ProgressReference[]>([])
 const referenceDate = ref('')
 const referenceLoading = ref(false)
 const referenceHistory = ref<Awaited<ReturnType<typeof readTaskHistory>>>([])
+const progressDates = computed(() => {
+	const dates = new Set(sortProgressNotes(referenceHistory.value).filter(note => note.daily).map(note => note.date))
+	if (autoCommentId.value && date.value) dates.add(date.value)
+	return [...dates]
+})
 const referenceDates = computed(() => [...new Set(sortProgressNotes(referenceHistory.value)
 	.filter(note => note.daily && note.date < date.value && !references.value.some(reference => reference.date === note.date))
 	.map(note => note.date))].sort().reverse())

@@ -144,7 +144,7 @@ internal sealed partial class FloatingWindow {
             correction=(await ReadHistory(taskId)).First(note=>Convert.ToInt64(note["id"])==correctionId);if(SplitProgressReferences((string)correction["comment"],taskId).References.Count!=1)throw new Exception("Default save lost existing references");
             await ShowImageGallery(taskId,serialized,this,"引用快照验收");
             if((await DownloadImage("/api/v1/tasks/"+taskId+"/attachments/"+images[0].Id)).Length==0)throw new Exception("Referenced image became inaccessible");
-            File.WriteAllText(Path.Combine(data,"floating-progress-references-test.txt"),"PASS: earlier same-task dates, multi-reference add and duplicate prevention, same-date distinct snapshots retained, merged source IDs, immutable source records, snapshot text/images, no nested reference content, malformed markup retained, own body isolation, date draft roundtrip, autosave/edit/remove persistence, reference preview and image download, minimum-size dialog layout.");
+            File.WriteAllText(Path.Combine(data,"floating-progress-references-test.txt"),"PASS: earlier same-task dates, multi-reference add and duplicate prevention, same-date distinct snapshots retained, merged source IDs, immutable source records, snapshot text/images, no nested reference content, malformed markup retained, own body isolation, date draft roundtrip, autosave/edit/remove persistence, marked progress dates, calendar screenshot, reference preview and image download, minimum-size dialog layout.");
         } finally {undoRecording=recordingBefore;}
         if(taskId>0){undoRecording=false;await Api("DELETE","/tasks/"+taskId,null);undoRecording=recordingBefore;}
     }
