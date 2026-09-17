@@ -6,6 +6,32 @@ using System.Linq;
 using System.Reflection;
 using System.Windows.Forms;
 
+internal sealed partial class TaskTreeView {
+    internal Func<bool> WindowDragEnabled;
+    internal Action<Point> WindowDragRequested;
+    bool windowDragGesture;
+
+    internal bool IsWindowDragSpace(Point point) {
+        if(!ClientRectangle.Contains(point))return false;
+        // Owner-drawn links are interactive even when they extend beyond native label bounds.
+        if(PriorityNodeAt(point)!=null || ImageNodeAt(point)!=null)return false;
+        var hit=HitTest(point);
+        const TreeViewHitTestLocations interactive=TreeViewHitTestLocations.Label|TreeViewHitTestLocations.Image|TreeViewHitTestLocations.StateImage|TreeViewHitTestLocations.PlusMinus;
+        return (hit.Location&interactive)==0;
+    }
+    internal bool HandleWindowDragMessage(ref Message message) {
+        const int LeftDown=0x201,LeftUp=0x202,LeftDoubleClick=0x203,MouseMove=0x200;
+        if(windowDragGesture && (message.Msg==MouseMove || message.Msg==LeftUp || message.Msg==LeftDoubleClick))return true;
+        if((message.Msg!=LeftDown && message.Msg!=LeftDoubleClick) || !Enabled || WindowDragEnabled==null || !WindowDragEnabled() || WindowDragRequested==null)return false;
+        long coordinates=message.LParam.ToInt64();
+        var point=new Point(unchecked((short)(coordinates&0xffff)),unchecked((short)((coordinates>>16)&0xffff)));
+        if(!IsWindowDragSpace(point))return false;
+        // Intercept before native TreeView processing so blank-row dragging cannot select/reorder a task.
+        windowDragGesture=true;
+        try {WindowDragRequested(point);}finally{windowDragGesture=false;}
+        return true;
+    }
+}
 internal sealed partial class FloatingWindow {
     long preferredProjectId;
     readonly Label simpleEmpty = new Label {BorderStyle=BorderStyle.FixedSingle, Padding=new Padding(8), TextAlign=ContentAlignment.MiddleCenter, BackColor=Color.White, ForeColor=Color.FromArgb(90,100,115), Visible=false};
@@ -31,12 +57,14 @@ internal sealed partial class FloatingWindow {
         Activated+=delegate {ShowSimpleModeRestore();};
         VisibleChanged+=delegate {QueueSimpleRestoreLayout();};
         Deactivate+=delegate {HideSimpleModeActions();};
-        tasks.MouseDown+=SimpleSurfaceMouseDown;
+        tasks.WindowDragEnabled=delegate {return simpleMode && !closing && !dragging;};
+        tasks.WindowDragRequested=delegate(Point point) {StartSimpleWindowDrag(tasks,point);};
+        tasks.MouseDown+=delegate {ShowSimpleModeRestore();};
         tasks.MouseClick+=delegate {ShowSimpleModeRestore();};
         tasks.AfterSelect+=delegate {UpdateSimpleActionState();};
         tasks.AfterExpand+=delegate {UpdateSimpleActionState();};
         tasks.AfterCollapse+=delegate {UpdateSimpleActionState();};
-        MouseDown+=SimpleSurfaceMouseDown;simpleEmpty.MouseDown+=SimpleSurfaceMouseDown;
+        MouseDown+=SimpleSurfaceMouseDown;simpleEmpty.MouseDown+=SimpleSurfaceMouseDown;simpleActions.MouseDown+=SimpleSurfaceMouseDown;
         trayRestoreFull=new ToolStripMenuItem("回到完整悬浮窗",null,delegate {RestoreFullFloatingWindow();});
         trayMenu.Items.Insert(1,trayRestoreFull);
         treeRestoreFull=new ToolStripMenuItem("回到完整悬浮窗 (Esc)",null,delegate {RestoreFullFloatingWindow();});
@@ -66,12 +94,26 @@ internal sealed partial class FloatingWindow {
         if(simpleExpandTaskMenu!=null)simpleExpandTaskMenu.Enabled=available && !node.IsExpanded;
         if(simpleCollapseTaskMenu!=null)simpleCollapseTaskMenu.Enabled=available && node.IsExpanded;
     }
+    bool IsSimpleSurfaceDragSpace(Control surface,Point point) {
+        if(surface==null || !surface.ClientRectangle.Contains(point))return false;
+        if(surface==tasks)return tasks.IsWindowDragSpace(point);
+        if(surface==simpleEmpty)return true;
+        if(surface==this || surface==simpleActions)return surface.GetChildAtPoint(point,GetChildAtPointSkip.Invisible)==null;
+        return false;
+    }
     void SimpleSurfaceMouseDown(object sender,MouseEventArgs e) {
         if(!simpleMode)return;
         ShowSimpleModeRestore();
-        if(e.Button==MouseButtons.Left && (sender!=tasks || tasks.GetNodeAt(e.Location)==null)) {
-            ReleaseCapture();SendMessage(Handle,0xA1,new IntPtr(2),null);
-        }
+        var surface=sender as Control;
+        if(e.Button==MouseButtons.Left && IsSimpleSurfaceDragSpace(surface,e.Location))StartSimpleWindowDrag(surface,e.Location);
+    }
+    void StartSimpleWindowDrag(Control surface,Point point) {
+        if(!simpleMode || closing || dragging || WindowState!=FormWindowState.Normal)return;
+        var screenPoint=surface.PointToScreen(point);
+        ShowSimpleModeRestore();hoverTimer.Stop();hoverNode=null;progressTip.Hide(tasks);
+        ReleaseCapture();
+        int coordinates=(screenPoint.Y<<16)|(screenPoint.X&0xffff);
+        SendSimpleMessage(Handle,0xA1,new IntPtr(2),new IntPtr(coordinates));
     }
     protected override bool ProcessCmdKey(ref Message message,Keys keys) {
         if(simpleMode && keys==Keys.Escape){RestoreFullFloatingWindow();return true;}

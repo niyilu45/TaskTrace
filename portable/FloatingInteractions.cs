@@ -18,6 +18,7 @@ internal sealed partial class TaskTreeView : TreeView {
     internal bool Dropping;
     protected override void WndProc(ref Message message) {
         if(HandleSimpleImageMessage(ref message)) return;
+        if(HandleWindowDragMessage(ref message)) return;
         base.WndProc(ref message);
         if(message.Msg != 0xF || !Dropping) return;
         using(var canvas = CreateGraphics()) using(var pen = new Pen(Color.FromArgb(36,94,210), 2)) {
