@@ -15,15 +15,16 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
-internal sealed class FloatingWindow : Form {
+internal sealed partial class FloatingWindow : Form {
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8388608 };
     readonly HttpClient http = new HttpClient(new HttpClientHandler { UseProxy = false });
     readonly string root, url, data;
     string token, refresh;
+    readonly System.Threading.SemaphoreSlim refreshGate = new System.Threading.SemaphoreSlim(1,1);
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新增事项" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "搜索事项" };
-    readonly TreeView tasks = new TreeView { Dock = DockStyle.Fill, CheckBoxes = true, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
+    readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, CheckBoxes = true, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly Button previous = new Button { Text = "上一页", AutoSize = true };
@@ -49,7 +50,7 @@ internal sealed class FloatingWindow : Form {
     TreeNode hoverNode;
     sealed class OutstandingBranch { public long TaskId; public bool Loaded; }
     sealed class OutstandingLeaf { public long TaskId; public string Id, Html; }
-    sealed class PendingItem { public string Id, Html; public override string ToString() { return Plain(Html); } }
+    sealed class PendingItem { public string Id, Html; public int Number; public override string ToString() { return Number + ". " + OutstandingText(Html); } }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
     const string SharedHeading = "TaskTrace 遗留事项清单";
 
@@ -78,7 +79,7 @@ internal sealed class FloatingWindow : Form {
         tray.Icon = Icon; tray.Visible = true;
         ShowInTaskbar = false; Text = "TaskTrace · 悬浮事项"; Font = new Font("Microsoft YaHei UI", 9F);
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
-        Size = new Size(400, 560); MinimumSize = new Size(350, 300); TopMost = true; StartPosition = FormStartPosition.Manual;
+        Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
         LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, Padding = new Padding(9, 6, 0, 0), WrapContents = false };
@@ -97,7 +98,7 @@ internal sealed class FloatingWindow : Form {
         tasks.NodeMouseClick += delegate { if(simpleMode) { restoreSimple.Visible = true; restoreSimple.BringToFront(); } };
         tasks.MouseDown += delegate(object sender, MouseEventArgs e) { if(simpleMode && e.Button == MouseButtons.Left && tasks.GetNodeAt(e.Location) == null) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), null); } };
         tasks.ShowNodeToolTips = false;
-        tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
+        tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
         hoverTimer.Tick += async delegate {
             hoverTimer.Stop(); var node = hoverNode;
@@ -126,7 +127,7 @@ internal sealed class FloatingWindow : Form {
         var addRow = Row(entry, "新增", async delegate { await AddTask(); });
         content.Controls.Add(addRow, 0, 1);
         content.Controls.Add(Row(search, "搜索", async delegate { page = 1; await Reload(); }), 0, 2);
-        tasks.BorderStyle = BorderStyle.FixedSingle;
+        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions();
         content.Controls.Add(tasks, 0, 3);
         var paging = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var progressButton = new Button { Text = "记录进展", AutoSize = true };
@@ -170,7 +171,7 @@ internal sealed class FloatingWindow : Form {
                 var shared = ReadShared(await ReadHistory(branch.TaskId));
                 if(e.Node.TreeView != tasks) return;
                 e.Node.Nodes.Clear();
-                foreach(var item in shared.Items) e.Node.Nodes.Add(new TreeNode(Plain(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } });
+                for(int index=0; index<shared.Items.Count; index++) { var item=shared.Items[index]; e.Node.Nodes.Add(new TreeNode((index+1)+". "+OutstandingText(item.Html)) { Tag = new OutstandingLeaf { TaskId = branch.TaskId, Id = item.Id, Html = item.Html } }); }
                 if(shared.Items.Count == 0) e.Node.Nodes.Add(new TreeNode("暂无遗留事项，双击此处添加") { Tag = new OutstandingBranch { TaskId = branch.TaskId, Loaded = true } });
                 branch.Loaded = true; e.Node.Expand();
             } catch { if(!closing) { Error(new Exception("遗留事项读取失败，请重新展开重试。")); } }
@@ -185,7 +186,7 @@ internal sealed class FloatingWindow : Form {
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
-        timer.Tick += async delegate { if(Visible && !collapsed && !busy) { projectsDirty = true; await Reload(); } };
+        timer.Tick += async delegate { if(Visible && !collapsed && !busy && !dragging) { projectsDirty = true; await Reload(); } };
         Shown += async delegate { await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
@@ -218,7 +219,7 @@ internal sealed class FloatingWindow : Form {
             restoreSimple.Visible = false;
         } else {
             simpleSize = Size; simpleMode = false; Controls.Remove(tasks); Padding = Padding.Empty;
-            FormBorderStyle = FormBorderStyle.Sizable; MinimumSize = new Size(350,300);
+            FormBorderStyle = FormBorderStyle.Sizable; MinimumSize = new Size(350,420);
             content.Controls.Add(tasks, 0, 3); content.Visible = true; toolbar.Visible = true; restoreSimple.Visible = false; Bounds = fullBounds;
         }
         SaveSimpleMode();
@@ -278,35 +279,6 @@ internal sealed class FloatingWindow : Form {
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }
-    async void ShowOutstanding(long id, bool nested = false) {
-        if(busy && !nested) return;
-        var owner = Form.ActiveForm ?? this;
-        SetBusy(true); timer.Stop();
-        try {
-            var shared = ReadShared(await ReadHistory(id));
-            using(var dialog = new Form {Text="遗留事项 · 所有日期共享",Size=new Size(480,380),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
-                var list = new ListBox {Dock=DockStyle.Fill};
-                var input = new TextBox {Dock=DockStyle.Top,AccessibleName="新增遗留事项"};
-                var buttons = new FlowLayoutPanel {Dock=DockStyle.Bottom,Height=40};
-                var add = new Button {Text="添加一条",AutoSize=true}; var remove = new Button {Text="移除选中",AutoSize=true};
-                var feedback = new Label {Dock=DockStyle.Bottom,Height=32,Text="逐条添加，切换进展日期不会改变此清单。"};
-                Action render = delegate {list.Items.Clear();foreach(var item in shared.Items) list.Items.Add(item);};render();
-                bool writing=false;
-                Func<bool,Task> save = async delegate(bool adding) {
-                    if(writing || (adding && String.IsNullOrWhiteSpace(input.Text)) || (!adding && list.SelectedItem==null)) return;
-                    var selected = list.SelectedItem as PendingItem; writing=true; buttons.Enabled=false;input.Enabled=false;list.Enabled=false;
-                    try { var current = ReadShared(await ReadHistory(id)); if(adding) current.Items.Add(new PendingItem {Id=Guid.NewGuid().ToString(),Html=WebUtility.HtmlEncode(input.Text.Trim())}); else current.Items.RemoveAll(item=>item.Id==selected.Id); await WriteShared(id,current); shared=current;render();if(adding)input.Clear();feedback.Text="已保存。"; }
-                    catch {feedback.Text="保存失败，输入已保留，请重试。";}
-                    finally {writing=false;buttons.Enabled=true;input.Enabled=true;list.Enabled=true;}
-                };
-                add.Click+=async delegate {await save(true);};remove.Click+=async delegate {await save(false);};
-                input.KeyDown+=async delegate(object sender,KeyEventArgs e){if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;await save(true);}};
-                buttons.Controls.AddRange(new Control[]{add,remove});dialog.Controls.Add(list);dialog.Controls.Add(input);dialog.Controls.Add(feedback);dialog.Controls.Add(buttons);
-                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(owner);
-            }
-            await LoadTasks();
-        } catch(Exception e){Error(e);}finally {if(!nested){SetBusy(false);timer.Start();}}
-    }
     TableLayoutPanel Row(TextBox input, string title, EventHandler action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
@@ -316,14 +288,18 @@ internal sealed class FloatingWindow : Form {
     Dictionary<string, object> ReadObject(string value) { return json.Deserialize<Dictionary<string, object>>(value); }
     async Task<Dictionary<string, object>> Api(string method, string path, object body, bool retry = true) {
         using(var request = new HttpRequestMessage(new HttpMethod(method), url + "/api/v2" + path)) {
-            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            string requestToken = token;
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", requestToken);
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
             using(var response = await http.SendAsync(request)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
-                    using(var renewed = await http.PostAsync(url + "/api/v2/oauth/token", new StringContent(json.Serialize(new { grant_type = "refresh_token", refresh_token = refresh }), Encoding.UTF8, "application/json"))) {
-                        if(!renewed.IsSuccessStatusCode) throw new Exception("会话已失效，请退出并重新启动悬浮窗。");
-                        var pair = ReadObject(await renewed.Content.ReadAsStringAsync()); token = (string)pair["access_token"]; refresh = (string)pair["refresh_token"];
-                    }
+                    await refreshGate.WaitAsync();
+                    try {
+                        if(token == requestToken) using(var renewed = await http.PostAsync(url + "/api/v2/oauth/token", new StringContent(json.Serialize(new { grant_type = "refresh_token", refresh_token = refresh }), Encoding.UTF8, "application/json"))) {
+                            if(!renewed.IsSuccessStatusCode) throw new Exception("会话已失效，请退出并重新启动悬浮窗。");
+                            var pair = ReadObject(await renewed.Content.ReadAsStringAsync()); token = (string)pair["access_token"]; refresh = (string)pair["refresh_token"];
+                        }
+                    } finally { refreshGate.Release(); }
                     return await Api(method, path, body, false);
                 }
                 if(!response.IsSuccessStatusCode) throw new Exception("操作未保存（" + (int)response.StatusCode + "），请刷新后重试。");
@@ -331,7 +307,7 @@ internal sealed class FloatingWindow : Form {
             }
         }
     }
-    void SetBusy(bool value) { busy = value; if(!closing) content.Enabled = !value; }
+    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
         try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); }
@@ -371,6 +347,9 @@ internal sealed class FloatingWindow : Form {
             }
             if(count == 0 || fetchPage >= Convert.ToInt32(result["total_pages"])) break;
         }
+        await ReadTaskOrder(project.Id, all);
+        ordered = SortTaskIds(ordered, all);
+        taskCache = all;
         var parents = new Dictionary<long, long>();
         foreach(long id in ordered) {
             object relationsValue, parentValue;
@@ -390,6 +369,7 @@ internal sealed class FloatingWindow : Form {
                 cursor = parents[cursor];
             }
         }
+        taskParents = parents;
         var included = new HashSet<long>(); var matches = new HashSet<long>();
         string query = search.Text.Trim();
         foreach(long id in ordered) {
@@ -416,13 +396,14 @@ internal sealed class FloatingWindow : Form {
                 if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id])) nodes[parents[id]].Nodes.Add(nodes[id]);
                 else roots.Add(nodes[id]);
             }
+            NumberTasks(roots, all);
             total = roots.Count; page = Math.Max(1, Math.Min(page, Math.Max(1, (total + 49) / 50)));
             for(int index = (page - 1) * 50; index < Math.Min(page * 50, roots.Count); index++) tasks.Nodes.Add(roots[index]);
             tasks.ExpandAll();
             if(query.Length == 0) foreach(var pair in nodes) if(collapsedTasks.Contains(pair.Key)) pair.Value.Collapse();
             if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView == tasks) tasks.SelectedNode = nodes[selectedId];
             if(!selfTest) foreach(var pair in nodes) {
-                if(!parents.ContainsKey(pair.Key)) continue;
+
                 var branch = new TreeNode("遗留事项（展开查看，双击管理）") { Tag = new OutstandingBranch { TaskId = pair.Key } };
                 branch.Nodes.Add(new TreeNode("读取中…")); pair.Value.Nodes.Add(branch);
             }
@@ -523,7 +504,7 @@ internal sealed class FloatingWindow : Form {
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;progress.ReadOnly=false;}
                 };
                 save.Click+=async delegate {await write(true);};
-                var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=async delegate {if(autoSaveEnabled && snapshot()!=lastSaved)await write(false);};autoTimer.Start();
+                var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=async delegate {if(autoSaveEnabled && !editingOutstanding && snapshot()!=lastSaved)await write(false);};autoTimer.Start();
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !submitting && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}feedback.Text="已粘贴 "+pictures.Count+" 张图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
@@ -687,7 +668,7 @@ internal sealed class FloatingWindow : Form {
         restoreSimple.Visible = false; Hide();
     }
     void RestoreWindow() { WindowState = FormWindowState.Normal; Show(); Activate(); }
-    void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 300); Height = expandedHeight; fold.Text = "收起"; } }
+    void ToggleFold() { if(!collapsed) { expandedHeight = Height; content.Visible = false; MinimumSize = new Size(350, 85); Height = 85; collapsed = true; fold.Text = "展开"; } else { collapsed = false; content.Visible = true; MinimumSize = new Size(350, 420); Height = expandedHeight; fold.Text = "收起"; } }
     void LoadAutoSaveSettings() {
         try {
             var settings = ReadObject(File.ReadAllText(Path.Combine(data, "autosave.json")));
@@ -738,7 +719,7 @@ internal sealed class FloatingWindow : Form {
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
-            if(tasks.Nodes.Count == 0 || tasks.Nodes[0].Text != createdTitle) throw new Exception("Task creation failed");
+            if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
             await Api("PATCH", "/tasks/" + id, new { description = "保留已有进展" });
             await SaveProgress(id, DateTime.Today, "已完成接口联调 <检查>", "明天补充图片");
@@ -779,7 +760,7 @@ internal sealed class FloatingWindow : Form {
             var outstandingTest = new TreeNode("遗留事项") {Tag = new OutstandingBranch {TaskId=childId}};
             outstandingTest.Nodes.Add(new TreeNode("读取中…")); tasks.Nodes[0].Nodes[0].Nodes.Add(outstandingTest); outstandingTest.Expand();
             for(int attempt=0;attempt<100 && !((OutstandingBranch)outstandingTest.Tag).Loaded;attempt++) await Task.Delay(50);
-            if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="跨日期待办二")throw new Exception("Outstanding dropdown failed");
+            if(!outstandingTest.IsExpanded || outstandingTest.Nodes.Count!=1 || outstandingTest.Nodes[0].Text!="1. 跨日期待办二")throw new Exception("Outstanding dropdown failed");
             SetSimpleMode(true);Size=new Size(330,260);
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
             restoreSimple.Visible=true;restoreSimple.BringToFront();
@@ -842,6 +823,7 @@ internal sealed class FloatingWindow : Form {
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", (string)browserPair["token"]);
                 using(var response = await http.SendAsync(request)) if(!response.IsSuccessStatusCode) throw new Exception("Browser session failed");
             }
+            await TestInteractions();
             token = "expired"; await Reload();
             if(status.ForeColor != ForeColor) throw new Exception("Session refresh failed");
             ToggleFold(); if(Height != 85) throw new Exception("Collapse failed"); ToggleFold();
@@ -860,7 +842,7 @@ internal sealed class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, outstanding dropdown, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, 51-task pagination, search, independent browser session, refresh, pin, collapse, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

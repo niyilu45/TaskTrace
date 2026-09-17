@@ -2,15 +2,15 @@
 	<span
 		v-if="!done && (showAll || priority >= minimumPriority)"
 		:class="{
-			'negligible': priority <= priorities.LOW,
-			'not-so-high': priority > priorities.LOW && priority < priorities.HIGH,
-			'high-priority': priority >= priorities.HIGH
+			'negligible': priority <= lowThreshold,
+			'not-so-high': priority > lowThreshold && priority < highThreshold,
+			'high-priority': priority >= highThreshold
 		}"
 		class="priority-label"
 	>
 		<span class="icon">
 			<Icon
-				v-if="priority >= priorities.HIGH"
+				v-if="priority >= highThreshold"
 				icon="exclamation-circle"
 			/>
 			<Icon
@@ -19,17 +19,22 @@
 			/>
 		</span>
 		<span>
-			<template v-if="priority === priorities.UNSET">{{ $t('task.priority.unset') }}</template>
-			<template v-if="priority === priorities.LOW">{{ $t('task.priority.low') }}</template>
-			<template v-if="priority === priorities.MEDIUM">{{ $t('task.priority.medium') }}</template>
-			<template v-if="priority === priorities.HIGH">{{ $t('task.priority.high') }}</template>
-			<template v-if="priority === priorities.URGENT">{{ $t('task.priority.urgent') }}</template>
-			<template v-if="priority === priorities.DO_NOW">{{ $t('task.priority.doNow') }}</template>
+			<template v-if="isLocalBuild">优先级 {{ tasktracePriorityNumber(priority) }}</template>
+			<template v-else>
+				<template v-if="priority === priorities.UNSET">{{ $t('task.priority.unset') }}</template>
+				<template v-if="priority === priorities.LOW">{{ $t('task.priority.low') }}</template>
+				<template v-if="priority === priorities.MEDIUM">{{ $t('task.priority.medium') }}</template>
+				<template v-if="priority === priorities.HIGH">{{ $t('task.priority.high') }}</template>
+				<template v-if="priority === priorities.URGENT">{{ $t('task.priority.urgent') }}</template>
+				<template v-if="priority === priorities.DO_NOW">{{ $t('task.priority.doNow') }}</template>
+			</template>
 		</span>
 	</span>
 </template>
 
 <script setup lang="ts">
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {tasktracePriorityNumber} from '@/helpers/tasktracePriority'
 import {computed} from 'vue'
 import {PRIORITIES as priorities} from '@/constants/priorities'
 import {useAuthStore} from '@/stores/auth'
@@ -44,6 +49,8 @@ withDefaults(defineProps<{
 })
 
 const authStore = useAuthStore()
+const lowThreshold = isLocalBuild ? 4 : priorities.LOW
+const highThreshold = isLocalBuild ? 8 : priorities.HIGH
 
 const minimumPriority = computed(() => {
 	return authStore.settings.frontendSettings.minimumPriority || priorities.MEDIUM

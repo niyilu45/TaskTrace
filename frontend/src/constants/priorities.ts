@@ -7,4 +7,5 @@ export const PRIORITIES = {
 	'DO_NOW': 5,
 } as const
 
-export type Priority = typeof PRIORITIES[keyof typeof PRIORITIES]
+// TaskTrace stores its 0–9 display range as 10–1; zero remains the legacy default.
+export type Priority = typeof PRIORITIES[keyof typeof PRIORITIES] | 6 | 7 | 8 | 9 | 10
