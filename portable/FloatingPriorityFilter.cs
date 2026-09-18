@@ -19,6 +19,12 @@ internal sealed partial class FloatingWindow {
     bool PriorityFilterActive { get { return visiblePriorities.Count != 10; } }
     string PriorityFilterEmptyMessage { get { return visiblePriorities.Count == 0 ? "尚未选择任何优先级，请在“按优先级”菜单中选择或全选。" : "没有符合所选优先级的事项，可在“按优先级”菜单中全选。"; } }
     bool MatchesPriority(Dictionary<string,object> task) { return task != null && visiblePriorities.Contains(PriorityNumber(task)); }
+    bool MatchesPriority(PendingItem item) { return item != null && visiblePriorities.Contains(Math.Max(0,Math.Min(9,item.Priority))); }
+    SharedList FilterOutstandingPriorities(SharedList source) {
+        if(source==null || !PriorityFilterActive)return source;
+        var filtered=new SharedList {CommentId=source.CommentId};
+        filtered.Items.AddRange(source.Items.Where(MatchesPriority));return filtered;
+    }
     string PriorityFilterPath { get { return Path.Combine(data,"floating-priority-filter.json"); } }
 
     void InitializePriorityFilter() {
@@ -81,7 +87,7 @@ internal sealed partial class FloatingWindow {
     void UpdatePriorityFilterControls() {
         if(closing || IsDisposed)return;
         priorityFilterButton.Text=visiblePriorities.Count==10?"按优先级":"按优先级 ("+visiblePriorities.Count+"/10)";
-        progressTip.SetToolTip(priorityFilterButton,visiblePriorities.Count==0?PriorityFilterEmptyMessage:"选择要显示的优先级，可多选；父任务会为匹配的子任务保留。");
+        progressTip.SetToolTip(priorityFilterButton,visiblePriorities.Count==0?PriorityFilterEmptyMessage:"选择要显示的优先级，可多选；父任务会为匹配的子任务或遗留事项保留。");
         foreach(var menu in priorityFilterMenus.ToArray()) {
             if(menu.IsDisposed)continue;
             foreach(ToolStripItem item in menu.Items) {
@@ -184,20 +190,23 @@ internal sealed partial class FloatingWindow {
                 if(((ToolStripMenuItem)first.DropDownItems["priority-filter-sort"]).Checked)throw new Exception("Manual order restoration left stale menu checks");
             }
             rendering=true;search.Clear();showCompleted.Checked=false;rendering=false;
-            long parent,child,hidden;
+            long parent,child,hidden,outstandingOwner;
             using(BeginUndoGroup()) {
                 parent=Convert.ToInt64((await Api("POST","/projects/"+project.Id+"/tasks",new{title="优先级筛选父任务",priority=1}))["id"]);created.Add(parent);
                 child=await CreateSubtask(parent,project.Id,"优先级筛选命中子任务");created.Add(child);await Api("PATCH","/tasks/"+child,new{priority=10});
                 hidden=Convert.ToInt64((await Api("POST","/projects/"+project.Id+"/tasks",new{title="优先级筛选隐藏任务",priority=5}))["id"]);created.Add(hidden);
+                outstandingOwner=Convert.ToInt64((await Api("POST","/projects/"+project.Id+"/tasks",new{title="遗留事项命中优先级的父任务",priority=1}))["id"]);created.Add(outstandingOwner);
+                var shared=new SharedList();shared.Items.Add(new PendingItem{Id="priority-match",Html="命中筛选的遗留事项",Priority=0});shared.Items.Add(new PendingItem{Id="priority-hidden",Html="未命中筛选的遗留事项",Priority=4});await WriteShared(outstandingOwner,shared);
             }
             ChangePrioritySelection(new[]{0});SetBusy(false);await ApplyPendingPriorityFilter();
-            var parents=tasks.Nodes.Find(parent.ToString(),true);var children=tasks.Nodes.Find(child.ToString(),true);
+            var parents=tasks.Nodes.Find(parent.ToString(),true);var children=tasks.Nodes.Find(child.ToString(),true);var outstandingOwners=tasks.Nodes.Find(outstandingOwner.ToString(),true);
             if(parents.Length!=1 || children.Length!=1 || children[0].Parent!=parents[0] || tasks.Nodes.Find(hidden.ToString(),true).Length!=0)throw new Exception("Priority filter failed to retain unmatched ancestors or hide unmatched tasks");
+            if(outstandingOwners.Length!=1 || outstandingOwners[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is OutstandingLeaf)!=1 || ((OutstandingLeaf)outstandingOwners[0].Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf).Tag).Priority!=0)throw new Exception("Matching outstanding priority did not retain its task or hide nonmatching outstanding items");
             ChangePrioritySelection(new int[0]);await ApplyPendingPriorityFilter();
             if(tasks.Nodes.Count!=0)throw new Exception("No-priority selection still displays tasks");
             ChangePrioritySelection(Enumerable.Range(0,10));await ApplyPendingPriorityFilter();
             if(tasks.Nodes.Find(hidden.ToString(),true).Length!=1)throw new Exception("Select-all did not restore hidden tasks");
-            File.WriteAllText(Path.Combine(data,"floating-priority-filter-test.txt"),"PASS: priorities 0-9 plus legacy unspecified priority9; multi-select/all/none; independent menus synchronized; settings persist including none and reject malformed/out-of-range types; sorting and manual-order menu state; rapid changes retained while busy; unmatched ancestors retained; unmatched tasks hidden; select-all restores tasks.");
+            File.WriteAllText(Path.Combine(data,"floating-priority-filter-test.txt"),"PASS: priorities 0-9 plus legacy unspecified priority9; multi-select/all/none; independent menus synchronized; settings persist including none and reject malformed/out-of-range types; sorting and manual-order menu state; rapid changes retained while busy; unmatched ancestors retained; matching outstanding retains its task; nonmatching outstanding hidden; unmatched tasks hidden; select-all restores tasks.");
         } catch(Exception e) {failure=e;}
         {
             SetBusy(true);priorityFilterReloadTimer.Stop();priorityFilterReloadPending=false;

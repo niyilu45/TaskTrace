@@ -51,6 +51,13 @@ internal sealed partial class FloatingWindow {
         return nodes.Where(node=>node.Tag is long).Select(node=>(object)new object[]{node.Tag,node.Text,node.Checked,
             node.ToolTipText,TaskTreeShape(node.Nodes.Cast<TreeNode>())}).ToArray();
     }
+    async Task ReadSharedLists(IEnumerable<long> ids,Dictionary<long,SharedList> destination) {
+        using(var gate=new SemaphoreSlim(4,4)) {
+            await Task.WhenAll(ids.Distinct().Select(async delegate(long id){
+                await gate.WaitAsync();try{destination[id]=ReadShared(await ReadHistory(id));}finally{gate.Release();}
+            }));
+        }
+    }
     async Task<bool> LoadTasks(bool background=false) {
         int version=++taskLoadVersion;
         string context=TaskViewContext();
@@ -91,10 +98,17 @@ internal sealed partial class FloatingWindow {
             }
         }
         var included=new HashSet<long>();var matches=new HashSet<long>();string query=search.Text.Trim();
+        var sharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
         foreach(long id in ordered) {
             if(!showCompleted.Checked && Convert.ToBoolean(all[id]["done"]))continue;
-            if(!MatchesPriority(all[id]))continue;
             if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
+            candidates.Add(id);
+        }
+        if(PriorityFilterActive && visiblePriorities.Count>0)await ReadSharedLists(candidates,sharedLists);
+        if(!TaskLoadCurrent(version,context,background))return false;
+        foreach(long id in candidates) {
+            SharedList shared;bool outstandingMatch=sharedLists.TryGetValue(id,out shared) && shared.Items.Any(MatchesPriority);
+            if(!MatchesPriority(all[id]) && !outstandingMatch)continue;
             matches.Add(id);long cursor=id;
             while(included.Add(cursor) && parents.ContainsKey(cursor))cursor=parents[cursor];
         }
@@ -104,7 +118,7 @@ internal sealed partial class FloatingWindow {
             if(!included.Contains(id))continue;bool done=Convert.ToBoolean(all[id]["done"]);
             nodes[id]=new TreeNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
                 ForeColor=done?Color.FromArgb(100,110,125):ForeColor,
-                ToolTipText=(done?"已完成 · ":"未完成 · ")+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务保留的父任务）")};
+                ToolTipText=(done?"已完成 · ":"未完成 · ")+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
         }
         foreach(long id in ordered) {
             if(!nodes.ContainsKey(id))continue;
@@ -114,17 +128,13 @@ internal sealed partial class FloatingWindow {
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
         var visibleRoots=roots.ToArray();
-        var sharedLists=new Dictionary<long,SharedList>();
         var needed=new HashSet<long>();
         foreach(var node in nodes.Values) {
             var ancestor=node;while(ancestor.Parent!=null)ancestor=ancestor.Parent;
             if(visibleRoots.Contains(ancestor))needed.Add((long)node.Tag);
         }
-        using(var gate=new SemaphoreSlim(4,4)) {
-            await Task.WhenAll(needed.Select(async delegate(long id){
-                await gate.WaitAsync();try{sharedLists[id]=ReadShared(await ReadHistory(id));}finally{gate.Release();}
-            }));
-        }
+        await ReadSharedLists(needed.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
+        if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
             (oldProject==null?0:oldProject.Id)!=(project==null?0:project.Id);

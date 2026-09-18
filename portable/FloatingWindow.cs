@@ -47,7 +47,8 @@ internal sealed partial class FloatingWindow : Form {
     bool fullLayoutRefreshQueued;
     Rectangle fullBounds;
     Size simpleSize = new Size(300, 380);
-    readonly Button restoreSimple = new Button { Text = "回到完整悬浮窗", AutoSize = true, Visible = false };
+    readonly Button restoreSimple = new Button { Text = "完整", AutoSize = true, Visible = false };
+    readonly Button minimizeSimple = new Button { Text = "最小化", AutoSize = true, Visible = false };
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
