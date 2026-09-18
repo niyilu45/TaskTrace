@@ -36,6 +36,8 @@ internal sealed partial class FloatingWindow : Form {
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
     readonly Timer timer = new Timer { Interval = 1000 };
     readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Visible = false };
+    ToolStripMenuItem startWithWindowsMenu;
+    bool updatingStartWithWindowsMenu;
     bool busy, rendering, collapsed, closing, completionPending, projectsDirty = true;
     bool autoSaveEnabled = true;
     int autoSaveSeconds = 30;
@@ -195,6 +197,7 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         InitializeEdgeHide(menu);
+        InitializeStartWithWindows(menu);
         menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
@@ -824,6 +827,37 @@ internal sealed partial class FloatingWindow : Form {
             if(settings.ContainsKey("completed_hide_delay_minutes"))completedHideDelayMinutes=Math.Max(0,Math.Min(525600,Convert.ToInt32(settings["completed_hide_delay_minutes"])));
         } catch { }
     }
+    const string WindowsRunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    const string WindowsRunValue = "TaskTrace";
+    string StartWithWindowsCommand() { return "\"" + Path.GetFullPath(Path.Combine(root, "TaskTrace.exe")) + "\""; }
+    bool IsStartWithWindowsEnabled() {
+        try { using(var key=Microsoft.Win32.Registry.CurrentUser.OpenSubKey(WindowsRunKey,false))return key!=null && key.GetValue(WindowsRunValue,null) is string; }
+        catch { return false; }
+    }
+    void SetStartWithWindows(bool enabled) {
+        using(var key=Microsoft.Win32.Registry.CurrentUser.CreateSubKey(WindowsRunKey)) {
+            if(key==null)throw new InvalidOperationException("无法打开当前用户的开机启动设置。");
+            if(enabled)key.SetValue(WindowsRunValue,StartWithWindowsCommand(),Microsoft.Win32.RegistryValueKind.String);
+            else key.DeleteValue(WindowsRunValue,false);
+        }
+        RefreshStartWithWindowsMenu();
+    }
+    void RefreshStartWithWindowsMenu() {
+        if(startWithWindowsMenu==null)return;
+        updatingStartWithWindowsMenu=true;startWithWindowsMenu.Checked=IsStartWithWindowsEnabled();updatingStartWithWindowsMenu=false;
+    }
+    void InitializeStartWithWindows(ContextMenuStrip menu) {
+        bool enabled=IsStartWithWindowsEnabled();
+        if(enabled)try {SetStartWithWindows(true);} catch { }
+        startWithWindowsMenu=new ToolStripMenuItem("开机启动"){CheckOnClick=true,Checked=enabled};
+        startWithWindowsMenu.CheckedChanged+=delegate {
+            if(updatingStartWithWindowsMenu)return;
+            try {SetStartWithWindows(startWithWindowsMenu.Checked);status.Text=startWithWindowsMenu.Checked?"已启用开机启动。":"已关闭开机启动。";}
+            catch(Exception e){RefreshStartWithWindowsMenu();MessageBox.Show(this,e.Message,"开机启动设置失败",MessageBoxButtons.OK,MessageBoxIcon.Error);}
+        };
+        menu.Items.Add(startWithWindowsMenu);
+        menu.Opening+=delegate {RefreshStartWithWindowsMenu();};
+    }
     void ShowAutoSaveSettings(bool verify=false) {
         using(var settings = DpiDialog(new Form { Text = "设置", ClientSize = new Size(470, 625), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false })) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
@@ -846,16 +880,18 @@ internal sealed partial class FloatingWindow : Form {
             var hideDelay = new NumericUpDown { Minimum = 0, Maximum = 525600, Value = completedHideDelayMinutes, Location = new Point(18, 418), Width = 100, AccessibleName = "完成后延迟隐藏分钟数" };
             var hideDelayUnit = new Label { Text = "分钟（0 为立即隐藏）", Location = new Point(128, 422), AutoSize = true };
             var apply = new Button { Text = "保存设置", Location = new Point(320, 416), Size = new Size(110, 32) };
+            var startWithWindows = new CheckBox { Text = "Windows 登录后自动启动 TaskTrace（默认关闭）", Checked = IsStartWithWindowsEnabled(), Location = new Point(18, 462), AutoSize = true, AccessibleName = "开机启动" };
             settings.AcceptButton=apply;
             apply.Click += async delegate {
                 try {
                     File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value, completed_gray = completedGray.Checked, completed_strikeout = completedStrike.Checked, completed_hide_delay_minutes = (int)hideDelay.Value }));
                     autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority;
                     grayCompleted=completedGray.Checked;strikeCompleted=completedStrike.Checked;completedHideDelayMinutes=(int)hideDelay.Value;tasks.StrikeCompleted=strikeCompleted;
+                    SetStartWithWindows(startWithWindows.Checked);
                     ChangePrioritySelection(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
                     await Reload();
                     settings.Close();
-                } catch { MessageBox.Show(settings, "设置保存失败，请检查目录写入权限。"); }
+                } catch(Exception e) { MessageBox.Show(settings, "设置保存失败："+e.Message,"设置",MessageBoxButtons.OK,MessageBoxIcon.Error); }
             };
             var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 495), Size = new Size(430, 48), AutoEllipsis = true };
             var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 568), Size = new Size(250, 32) };
@@ -863,7 +899,7 @@ internal sealed partial class FloatingWindow : Form {
                 try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -STA -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "Configure-TaskTrace.ps1") + "\"") { UseShellExecute = false, CreateNoWindow = true }); }
                 catch(Exception e) { MessageBox.Show(settings, e.Message); }
             };
-            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, completedLabel, completedGray, completedStrike, hideDelayLabel, hideDelay, hideDelayUnit, apply, dataLabel, chooseData });
+            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, completedLabel, completedGray, completedStrike, hideDelayLabel, hideDelay, hideDelayUnit, apply, startWithWindows, dataLabel, chooseData });
             Exception verificationError=null;
             if(verify)settings.Shown+=delegate {
                 try {
@@ -871,7 +907,8 @@ internal sealed partial class FloatingWindow : Form {
                     if((int)priority.Value!=defaultPriority || priority.AccessibleName!="默认新增任务优先级" || !priorityLabel.Text.Contains("0 最高，9 最低"))throw new Exception("Default priority setting is missing or incorrect");
                     if(visibleChoices.Items.Count!=10 || visibleChoices.AccessibleName!="悬浮窗展示优先级" || !checkedPriorities.SetEquals(visiblePriorities) || visibleChoices.Bottom>settings.ClientSize.Height || chooseData.Bottom>settings.ClientSize.Height)throw new Exception("Visible priority settings are missing, stale, or clipped");
                     if(completedGray.Checked!=grayCompleted || completedStrike.Checked!=strikeCompleted || (int)hideDelay.Value!=completedHideDelayMinutes)throw new Exception("Completed item presentation settings are stale");
-                    if(completedGray.Bottom>settings.ClientSize.Height || completedStrike.Bottom>settings.ClientSize.Height || hideDelay.Bottom>settings.ClientSize.Height || apply.Bottom>settings.ClientSize.Height)throw new Exception("Completed item presentation settings are clipped");
+                    if(completedGray.Bottom>settings.ClientSize.Height || completedStrike.Bottom>settings.ClientSize.Height || hideDelay.Bottom>settings.ClientSize.Height || apply.Bottom>settings.ClientSize.Height || startWithWindows.Bottom>settings.ClientSize.Height)throw new Exception("Completed item presentation settings are clipped");
+                    if(startWithWindows.AccessibleName!="开机启动" || startWithWindows.Checked!=IsStartWithWindowsEnabled() || startWithWindowsMenu==null || startWithWindowsMenu.Checked!=IsStartWithWindowsEnabled())throw new Exception("Start-with-Windows settings are missing or out of sync");
                     selectNone.PerformClick();if(Enumerable.Range(0,10).Any(index=>visibleChoices.GetItemChecked(index)))throw new Exception("Select-none did not clear visible priorities");
                     selectAll.PerformClick();if(Enumerable.Range(0,10).Any(index=>!visibleChoices.GetItemChecked(index)))throw new Exception("Select-all did not restore visible priorities");
                     for(int index=0;index<10;index++)visibleChoices.SetItemChecked(index,visiblePriorities.Contains(index));

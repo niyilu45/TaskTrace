@@ -11,7 +11,7 @@ internal static class Launcher {
             string script = Path.Combine(root, "Launch-TaskTrace.ps1");
             if(!File.Exists(script)) throw new FileNotFoundException("请完整解压程序包，缺少 Launch-TaskTrace.ps1。", script);
             string powershell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe");
-            string options = args.Length == 1 && args[0] == "--self-test" ? " -Floating -FloatingSelfTest" : " -Floating -OpenBrowser";
+            string options = args.Length == 1 && args[0] == "--self-test" ? " -Floating -FloatingSelfTest" : " -Floating";
             var start = new ProcessStartInfo(powershell, "-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File \"" + script + "\"" + options) {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root
             };

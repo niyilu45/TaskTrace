@@ -1,5 +1,11 @@
 # 本机体验版验证记录
 
+## 2026-09-19 悬浮窗默认启动与开机启动
+
+- `TaskTrace.exe` 默认只启动悬浮窗，不再主动打开浏览器；完整界面仍可从悬浮窗和托盘菜单打开。
+- 悬浮窗设置与托盘菜单均提供“开机启动”开关，使用当前用户的 Windows 启动项并保持同步，默认不创建启动项；程序目录移动后再次运行会更新已启用启动项的路径。
+- 设置窗口布局、自检同步状态、C# 编译和隔离免安装包完整原生自检通过。
+
 ## 2026-09-18 源码安装器与字体缩放
 
 - `dist/Install-TaskTrace.cmd` / `Install-TaskTrace-Engine.ps1` 会先检查 Windows x64、PowerShell、Node.js 24、pnpm 11.26、Go 1.27、x64 GCC 和 .NET Framework C# 编译器，再生成 `dist/TaskTrace-local`；Git 与 `.git` 信息不是构建条件，Source code ZIP 可以直接生成程序。
