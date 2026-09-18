@@ -206,11 +206,12 @@ internal sealed partial class FloatingWindow {
     }
     void RestoreFullFloatingWindow() {
         if(closing || IsDisposed)return;
-        WindowState=FormWindowState.Normal;SetSimpleMode(false);
+        WindowState=FormWindowState.Normal;RestoreFromEdge(true);SetSimpleMode(false);
         if(collapsed)ToggleFold();RestoreWindow();tasks.Focus();
     }
     void SetSimpleMode(bool enabled) {
         if(enabled==simpleMode){UpdateSimpleModeState();return;}
+        RestoreFromEdge(true);
         var selected=tasks.SelectedNode;var top=tasks.TopNode;
         SuspendLayout();content.SuspendLayout();simpleLayout=true;
         try {
@@ -235,6 +236,7 @@ internal sealed partial class FloatingWindow {
         if(selected!=null && selected.TreeView==tasks)tasks.SelectedNode=selected;
         if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
         tasks.Invalidate();SaveSimpleMode();
+        if(edgeHideEnabled && !Bounds.Contains(Cursor.Position))BeginInvoke(new Action(delegate {TryHideAtTouchedEdge();}));
     }
     void SaveSimpleMode() {
         try {File.WriteAllText(Path.Combine(data,"simple-window.json"),json.Serialize(new {enabled=simpleMode,width=simpleSize.Width,height=simpleSize.Height}));}catch{}

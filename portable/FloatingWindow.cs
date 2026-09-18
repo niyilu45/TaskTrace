@@ -180,6 +180,7 @@ internal sealed partial class FloatingWindow : Form {
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
+        InitializeEdgeHide(menu);
         menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
@@ -206,6 +207,7 @@ internal sealed partial class FloatingWindow : Form {
             else if(bottom) message.Result = new IntPtr(left ? 16 : right ? 17 : 15);
             else if(left || right) message.Result = new IntPtr(left ? 10 : 11);
         }
+        HandleEdgeHideWindowMessage(message.Msg);
     }
     static string Plain(string html) {
         string value = Regex.Replace(html ?? "", @"<br\s*/?>|</p>|</div>|</li>", "\r\n", RegexOptions.IgnoreCase);
@@ -751,7 +753,7 @@ internal sealed partial class FloatingWindow : Form {
         SaveSimpleMode(); SaveBounds(); hoverTimer.Stop(); progressTip.Hide(tasks);
         restoreSimple.Visible = false; Hide();
     }
-    void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+    void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; RestoreFromEdge(false); Activate(); }
     bool fittingFoldedToolbar;
     void FitFoldedToolbar() {
         if(!collapsed || simpleMode || simpleLayout || fittingFoldedToolbar || closing || toolbar==null || WindowState!=FormWindowState.Normal)return;
@@ -831,6 +833,7 @@ internal sealed partial class FloatingWindow : Form {
             if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
             if(saved.ContainsKey("singleLine")) singleLine.Checked = Convert.ToBoolean(saved["singleLine"]);
+            if(saved.ContainsKey("edgeHide")) edgeHideEnabled = Convert.ToBoolean(saved["edgeHide"]);
             var bounds = new Rectangle(Convert.ToInt32(saved["x"]), Convert.ToInt32(saved["y"]), Math.Max(350, Convert.ToInt32(saved["width"])), Math.Max(300, Convert.ToInt32(saved["height"])));
             var area = Screen.FromRectangle(bounds).WorkingArea;
             Size = new Size(Math.Min(bounds.Width, area.Width), Math.Min(bounds.Height, area.Height));
@@ -838,7 +841,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, singleLine = singleLine.Checked, projectId = preferredProjectId })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -857,6 +860,7 @@ internal sealed partial class FloatingWindow : Form {
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
             ShowAutoSaveSettings(true);
+            TestEdgeHideBehavior();
             if(newTaskButton.Parent!=bottomActions || !newTaskButton.Visible || addRow.Visible)throw new Exception("Bottom new-item button entry point missing");
             newTaskButton.PerformClick();
             if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || entryPriority.SelectedIndex!=defaultPriority || entryPriority.AccessibleDescription!="0 最高，9 最低" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !entryPriority.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="优先级") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Labeled task fields or default priority missing");
@@ -1042,9 +1046,9 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, bold outstanding items, persisted full/simple single-line task paths, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: tray reset-to-center and persistent edge hide/hover restore, bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, bold outstanding items, persisted full/simple single-line task paths, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
-    protected override void Dispose(bool disposing) { if(disposing) { DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if(disposing) { DisposeEdgeHide(); DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
 }
