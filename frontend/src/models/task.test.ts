@@ -4,6 +4,7 @@ import BucketModel from './bucket'
 import ProjectModel from './project'
 import TaskModel from './task'
 import TaskDuplicateModel from './taskDuplicateModel'
+import {TASK_STATUSES} from '@/types/ITaskStatus'
 
 const generatedLabel = {
 	id: 1,
@@ -45,5 +46,20 @@ describe('TaskModel labels', () => {
 		} as never)
 
 		expectGeneratedLabel(task.relatedTasks.subtask![0].labels[0])
+	})
+})
+
+
+describe('TaskModel workflow status', () => {
+	it('maps legacy completion to done', () => {
+		const task = new TaskModel({done: true})
+		expect(task.status).toBe(TASK_STATUSES.DONE)
+		expect(task.done).toBe(true)
+	})
+
+	it('keeps hold incomplete even when stale done data is present', () => {
+		const task = new TaskModel({done: true, status: TASK_STATUSES.HOLD})
+		expect(task.status).toBe(TASK_STATUSES.HOLD)
+		expect(task.done).toBe(false)
 	})
 })

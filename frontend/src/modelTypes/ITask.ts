@@ -10,6 +10,7 @@ import type {IBucket} from './IBucket'
 import type {IRelationKind} from '@/types/IRelationKind'
 import type {IRepeatAfter} from '@/types/IRepeatAfter'
 import type {IRepeatMode} from '@/types/IRepeatMode'
+import type {TaskStatus} from '@/types/ITaskStatus'
 
 import type {PartialWithId} from '@/types/PartialWithId'
 import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
@@ -22,6 +23,7 @@ export interface ITask extends IAbstract {
 	title: string
 	description: string
 	done: boolean
+	status: TaskStatus
 	doneAt: Date | null
 	deletedAt: Date | null
 	priority: Priority

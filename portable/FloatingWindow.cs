@@ -840,7 +840,13 @@ internal sealed partial class FloatingWindow : Form {
             if(addRow.Visible)throw new Exception("New task editor stayed open after creation");
             if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
-            if(PriorityNumber(await Api("GET","/tasks/"+id,null))!=defaultPriority)throw new Exception("New task did not use the configured default priority");
+            var createdTask=await Api("GET","/tasks/"+id,null);
+            if(PriorityNumber(createdTask)!=defaultPriority)throw new Exception("New task did not use the configured default priority");
+            if(TaskStatusValue(createdTask)!="to-do")throw new Exception("New task did not default to to-do");
+            await Api("PATCH","/tasks/"+id,new{status="hold"});await LoadTasks();var heldTask=await Api("GET","/tasks/"+id,null);
+            if(TaskStatusValue(heldTask)!="hold" || Convert.ToBoolean(heldTask["done"]) || !tasks.Nodes.Find(id.ToString(),true).First().Text.Contains("[暂停]"))throw new Exception("Hold status was not persisted or displayed");
+            await Api("PATCH","/tasks/"+id,new{status="doing"});await LoadTasks();var doingTask=await Api("GET","/tasks/"+id,null);
+            if(TaskStatusValue(doingTask)!="doing" || Convert.ToBoolean(doingTask["done"]))throw new Exception("Doing status was not persisted");
             tasks.SelectedNode=tasks.Nodes.Find(id.ToString(),true).First();await ShowSubtasks(true);
             tasks.Nodes[0].EnsureVisible();tasks.Refresh();var completionBounds=tasks.CompletionBounds(tasks.Nodes[0]);
             if(completionBounds.IsEmpty)throw new Exception("Task completion box is not visible");
@@ -849,8 +855,9 @@ internal sealed partial class FloatingWindow : Form {
             bool clickCompleted=false;
             for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+id,null))["done"])){clickCompleted=true;break;}}
             if(!clickCompleted)throw new Exception("Task completion box click did not persist");
+            var completedTask=await Api("GET","/tasks/"+id,null);if(TaskStatusValue(completedTask)!="done")throw new Exception("Completion did not sync task status");
             while(busy)await Task.Delay(20);await Complete(id,false);
-            if(Convert.ToBoolean((await Api("GET","/tasks/"+id,null))["done"]))throw new Exception("Task did not reopen after completion click test");
+            var reopenedTask=await Api("GET","/tasks/"+id,null);if(Convert.ToBoolean(reopenedTask["done"]) || TaskStatusValue(reopenedTask)!="to-do")throw new Exception("Task did not reopen as to-do after completion click test");
             await Api("PATCH", "/tasks/" + id, new { description = "保留已有进展" });
             await SaveProgress(id, DateTime.Today, "已完成接口联调 <检查>", "明天补充图片");
             var testPictures = new List<PastedImage>();

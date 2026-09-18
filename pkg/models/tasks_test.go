@@ -1674,3 +1674,86 @@ func TestGetTaskByIDSimpleMemo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, behindTheBackTitle, afterWrite.Title)
 }
+
+func TestNormalizeTaskStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		task       Task
+		fallback   TaskStatus
+		wantStatus TaskStatus
+		wantDone   bool
+		wantErr    bool
+	}{
+		{name: "new task defaults to to-do", task: Task{}, wantStatus: TaskStatusTodo},
+		{name: "legacy completed task maps to done", task: Task{Done: true}, wantStatus: TaskStatusDone, wantDone: true},
+		{name: "hold remains incomplete", task: Task{Done: true, Status: TaskStatusHold}, wantStatus: TaskStatusHold},
+		{name: "missing status preserves fallback", task: Task{}, fallback: TaskStatusDoing, wantStatus: TaskStatusDoing},
+		{name: "unknown status rejected", task: Task{Status: "waiting"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := normalizeTaskStatus(&tt.task, tt.fallback)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantStatus, tt.task.Status)
+			require.Equal(t, tt.wantDone, tt.task.Done)
+		})
+	}
+}
+
+func TestReconcileTaskStatusForUpdate(t *testing.T) {
+	tests := []struct {
+		name       string
+		stored     Task
+		updated    Task
+		partial    bool
+		doneSet    bool
+		statusSet  bool
+		wantStatus TaskStatus
+	}{
+		{
+			name:       "merge patch completion makes stored doing task done",
+			stored:     Task{Done: false, Status: TaskStatusDoing},
+			updated:    Task{Done: true, Status: TaskStatusDoing},
+			wantStatus: TaskStatusDone,
+		},
+		{
+			name:       "merge patch reopen makes stored done task to-do",
+			stored:     Task{Done: true, Status: TaskStatusDone},
+			updated:    Task{Done: false, Status: TaskStatusDone},
+			wantStatus: TaskStatusTodo,
+		},
+		{
+			name:       "explicit full status change wins over stale done value",
+			stored:     Task{Done: true, Status: TaskStatusDone},
+			updated:    Task{Done: true, Status: TaskStatusHold},
+			wantStatus: TaskStatusHold,
+		},
+		{
+			name:       "partial done update synchronizes status",
+			stored:     Task{Done: false, Status: TaskStatusHold},
+			updated:    Task{Done: true, Status: TaskStatusHold},
+			partial:    true,
+			doneSet:    true,
+			wantStatus: TaskStatusDone,
+		},
+		{
+			name:       "partial status update remains authoritative",
+			stored:     Task{Done: true, Status: TaskStatusDone},
+			updated:    Task{Done: true, Status: TaskStatusDoing},
+			partial:    true,
+			statusSet:  true,
+			wantStatus: TaskStatusDoing,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reconcileTaskStatusForUpdate(&tt.updated, tt.stored, tt.partial, tt.doneSet, tt.statusSet)
+			require.Equal(t, tt.wantStatus, tt.updated.Status)
+		})
+	}
+}

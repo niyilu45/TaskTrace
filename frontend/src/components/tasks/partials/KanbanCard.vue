@@ -31,6 +31,10 @@
 					/>
 					{{ getTaskIdentifier(task) }}
 					<span
+						class="kanban-card__status"
+						:data-status="task.status"
+					>{{ taskStatusLabel(task.status, task.done) }}</span>
+					<span
 						v-if="showTaskPosition"
 						class="tw:text-red-600 tw:ps-2"
 					>
@@ -149,6 +153,7 @@ import {playPopSound} from '@/helpers/playPop'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {useProjectStore} from '@/stores/projects'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
+import {TASK_STATUSES, taskStatusLabel} from '@/types/ITaskStatus'
 
 const props = withDefaults(defineProps<{
 	task: ITask,
@@ -198,6 +203,7 @@ async function toggleTaskDone(task: ITask) {
 		const updatedTask = await useTaskStore().update({
 			...task,
 			done: !task.done,
+			status: !task.done ? TASK_STATUSES.DONE : TASK_STATUSES.TODO,
 		})
 
 		if (updatedTask.done) {
@@ -409,6 +415,32 @@ $task-background: var(--white);
 		.priority-label.high-priority {
 			color: hsl(var(--danger-h), var(--danger-s), 68%);
 		}
+	}
+}
+
+.kanban-card__status {
+	margin-inline-start: .4rem;
+	padding: .05rem .4rem;
+	border-radius: 999px;
+	background: var(--grey-200);
+	color: var(--grey-700);
+	font-size: .7rem;
+	font-weight: 600;
+	line-height: 1.35;
+
+	&[data-status="doing"] {
+		background: hsl(210deg 85% 93%);
+		color: hsl(214deg 75% 35%);
+	}
+
+	&[data-status="hold"] {
+		background: hsl(42deg 90% 90%);
+		color: hsl(34deg 75% 30%);
+	}
+
+	&[data-status="done"] {
+		background: hsl(145deg 55% 90%);
+		color: hsl(145deg 55% 28%);
 	}
 }
 

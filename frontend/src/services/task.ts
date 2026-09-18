@@ -10,6 +10,7 @@ import {apiV2Url, AuthenticatedHTTPFactory} from '@/helpers/fetcher'
 import {invalidateCachedTask} from '@/helpers/taskCache'
 import {toISOStringOrNull} from '@/helpers/time/toISOStringOrNull'
 import {translatedError} from '@/message'
+import {TASK_STATUSES} from '@/types/ITaskStatus'
 
 // Mirrors models.MaxTasksPerBulkCreation on the backend.
 const MAX_TASKS_PER_BULK_CREATION = 100
@@ -83,6 +84,8 @@ export default class TaskService extends AbstractService<ITask> {
 		const model = {...updatedModel}
 
 		model.title = model.title?.trim()
+		if (model.done) model.status = TASK_STATUSES.DONE
+		else if (model.status === TASK_STATUSES.DONE) model.status = TASK_STATUSES.TODO
 
 		// Ensure that projectId is an int
 		model.projectId = Number(model.projectId)
@@ -151,6 +154,7 @@ export default class TaskService extends AbstractService<ITask> {
 			title: processed.title,
 			description: processed.description,
 			done: processed.done,
+			status: processed.status,
 			due_date: processed.due_date,
 			start_date: processed.start_date,
 			end_date: processed.end_date,

@@ -119,7 +119,7 @@
 						aria-hidden="true"
 						:class="{expanded: isExpanded(group.root.id)}"
 					><path d="m6 3 5 5-5 5" /></svg>
-				</button><h3>{{ group.root.title }}</h3><span>{{ group.root.done ? '任务已完成' : '任务未完成' }} · {{ group.rows.length - 1 }} 个子任务</span>
+				</button><h3>{{ group.root.title }}</h3><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
 			</header>
 			<template v-if="isExpanded(group.root.id)">
 				<ReadonlyRichText
@@ -203,6 +203,7 @@ import {visibleProgressRows, groupProgressTasks, type ProgressTask} from '@/help
 import ProjectProgressRow from './ProjectProgressRow.vue'
 import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
+import {taskStatusLabel} from '@/types/ITaskStatus'
 const props = defineProps<{projectId: number}>()
 const overview = ref<HTMLElement>()
 const {width: overviewWidth} = useElementSize(overview)

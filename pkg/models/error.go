@@ -2898,3 +2898,19 @@ const ErrCodeTaskHierarchyDepth = 4090
 func (err ErrTaskHierarchyDepth) HTTPError() web.HTTPError {
 	return web.HTTPError{HTTPCode: http.StatusConflict, Code: ErrCodeTaskHierarchyDepth, Message: err.Error()}
 }
+
+// ErrInvalidTaskStatus is returned when a task workflow state is unknown.
+type ErrInvalidTaskStatus struct {
+	Status string
+}
+
+func (err ErrInvalidTaskStatus) Error() string {
+	return fmt.Sprintf("Invalid task status. [Status: %s]", err.Status)
+}
+
+// ErrCodeInvalidTaskStatus is the public error code for invalid workflow states.
+const ErrCodeInvalidTaskStatus = 4095
+
+func (err ErrInvalidTaskStatus) HTTPError() web.HTTPError {
+	return web.HTTPError{HTTPCode: http.StatusBadRequest, Code: ErrCodeInvalidTaskStatus, Message: "Task status must be one of: to-do, doing, done, hold."}
+}

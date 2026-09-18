@@ -10,6 +10,7 @@ import type {IBucket} from '@/modelTypes/IBucket'
 import type {IRepeatAfter} from '@/types/IRepeatAfter'
 import type {IRelationKind} from '@/types/IRelationKind'
 import {TASK_REPEAT_MODES, type IRepeatMode} from '@/types/IRepeatMode'
+import {isTaskStatus, TASK_STATUSES, type TaskStatus} from '@/types/ITaskStatus'
 import type {Label} from '@/client/generated'
 
 import {parseDateOrNull} from '@/helpers/parseDateOrNull'
@@ -62,6 +63,7 @@ export default class TaskModel extends AbstractModel<ITask> implements ITask {
 	title = ''
 	description = ''
 	done = false
+	status: TaskStatus = TASK_STATUSES.TODO
 	doneAt: Date | null = null
 	deletedAt: Date | null = null
 	priority: Priority = PRIORITIES.UNSET
@@ -102,7 +104,10 @@ export default class TaskModel extends AbstractModel<ITask> implements ITask {
 	constructor(data: Partial<ITask> = {}) {
 		super()
 		const labels = (data.labels ?? []).map(label => objectToSnakeCase(label) as Label)
+		const providedStatus = data.status
 		this.assignData(data)
+		this.status = isTaskStatus(providedStatus) ? providedStatus : this.done ? TASK_STATUSES.DONE : TASK_STATUSES.TODO
+		this.done = this.status === TASK_STATUSES.DONE
 
 		this.id = Number(this.id)
 		this.title = this.title?.trim()

@@ -29,7 +29,7 @@
 				/>
 				<span>{{ task.title }}</span>
 			</div>
-			<small>{{ task.done ? '已完成' : '未完成' }}<template v-if="depth > 1"> · 下级子任务</template></small>
+			<small>{{ taskStatusLabel(task.status, task.done) }}<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
 		<td>
 			<ReadonlyRichText
@@ -114,6 +114,7 @@ import {outstandingHtml} from '@/helpers/sharedOutstanding'
 import {sortProgressNotes, limitProgressNotes} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
+import {taskStatusLabel} from '@/types/ITaskStatus'
 const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number}>()
 defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()

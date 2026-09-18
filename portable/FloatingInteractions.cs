@@ -132,6 +132,15 @@ internal sealed partial class FloatingWindow {
         object value; long raw = task.TryGetValue("priority",out value) ? Convert.ToInt64(value) : 0;
         return raw >= 1 && raw <= 10 ? 10-(int)raw : 9;
     }
+    static string TaskStatusValue(Dictionary<string,object> task) {
+        object value;
+        string status=task!=null && task.TryGetValue("status",out value)?Convert.ToString(value):"";
+        if(status=="to-do" || status=="doing" || status=="done" || status=="hold")return status;
+        return task!=null && task.ContainsKey("done") && Convert.ToBoolean(task["done"])?"done":"to-do";
+    }
+    static string TaskStatusText(string value) {
+        return value=="doing"?"进行中":value=="done"?"已完成":value=="hold"?"暂停":"待办";
+    }
     void InitializeInteractions() {
         tasks.PriorityClicked += async delegate(TreeNode node) {
             if(busy || closing || dragging || node == null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)) || node.TreeView != tasks)return;
@@ -145,10 +154,11 @@ internal sealed partial class FloatingWindow {
         var menu=new ContextMenuStrip();
         menu.Items.Add(CreatePriorityFilterMenuItem());
         var setPriority=menu.Items.Add("设置优先级…",null,async delegate{await ShowPriority();});
+        var setStatus=menu.Items.Add("设置任务状态…",null,async delegate{await ShowTaskStatus();});
         menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
         var toRoot=menu.Items.Add("移为顶层任务",null,async delegate{long id=SelectedTaskId();if(id>0)await ExecuteDrop(new DropPlan{TaskId=id,ParentId=0,BeforeId=0,Message="移为顶层任务"});});
-        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);toRoot.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long && taskParents.ContainsKey(SelectedTaskId());};
+        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);setStatus.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;toRoot.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long && taskParents.ContainsKey(SelectedTaskId());};
         InitializeUndo(menu);
         tasks.ContextMenuStrip=menu;
         tasks.NodeMouseClick+=delegate(object sender,TreeNodeMouseClickEventArgs e){if(e.Button==MouseButtons.Right)tasks.SelectedNode=e.Node;};
@@ -244,7 +254,7 @@ internal sealed partial class FloatingWindow {
     }
     void NumberTasks(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all){for(int index=0;index<roots.Count;index++)NumberTask(roots[index],(index+1).ToString(),all);}
     void NumberTask(TreeNode node,string number,Dictionary<long,Dictionary<string,object>> all){
-        long id=(long)node.Tag;int priority=PriorityNumber(all[id]);node.Text=number+". "+"[P"+priority+"] "+(string)all[id]["title"];
+        long id=(long)node.Tag;int priority=PriorityNumber(all[id]);node.Text=number+". "+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+(string)all[id]["title"];
         int index=0;foreach(TreeNode child in node.Nodes)if(child.Tag is long)NumberTask(child,number+"."+(++index),all);
     }
     async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
@@ -268,6 +278,26 @@ internal sealed partial class FloatingWindow {
                 var save=new Button{Text="保存优先级",AutoSize=true};bool writing=false;
                 layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；当前新增默认 "+defaultPriority+"。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；当前新增默认 "+defaultPriority+"。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
                 save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
+            }
+            await LoadTasks();
+        }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
+    }
+
+    async Task ShowTaskStatus(){
+        if(busy || closing)return;var selected=tasks.SelectedNode;
+        if(selected==null || !(selected.Tag is long)){status.Text="请先选中一个任务。";return;}
+        long id=(long)selected.Tag;SetBusy(true);timer.Stop();
+        try {
+            var current=await Api("GET","/tasks/"+id,null);string currentStatus=TaskStatusValue(current);
+            string[] values={"to-do","doing","done","hold"};string[] labels={"待办（to-do）","进行中（doing）","已完成（done）","暂停（hold）"};
+            using(var dialog=new Form{Text="任务状态 · "+(string)current["title"],Size=new Size(360,205),MinimumSize=new Size(360,205),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
+                var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="任务状态"};choice.Items.AddRange(labels);choice.SelectedIndex=Math.Max(0,Array.IndexOf(values,currentStatus));
+                var save=new Button{Text="保存状态",AutoSize=true};bool writing=false;
+                layout.Controls.Add(new Label{Text="选择任务当前所处的状态",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="任务状态说明"});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
+                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{await Api("PATCH","/tasks/"+id,new{status=values[choice.SelectedIndex]});writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"任务状态未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
             await LoadTasks();

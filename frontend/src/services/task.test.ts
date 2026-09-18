@@ -71,6 +71,7 @@ describe('TaskService.bulkCreate', () => {
 			'repeat_after',
 			'repeat_mode',
 			'start_date',
+			'status',
 			'title',
 		])
 	})

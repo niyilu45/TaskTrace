@@ -59,6 +59,11 @@
 						class="pis-2 mie-1"
 					/>
 
+					<span
+						class="task-status-badge mie-1"
+						:data-status="task.status"
+					>{{ taskStatusLabel(task.status, task.done) }}</span>
+
 					<TaskGlanceTooltip :task="task">
 						<RouterLink
 							ref="taskLinkRef"
@@ -234,6 +239,7 @@ import {useIntervalFn} from '@vueuse/core'
 import {playPopSound} from '@/helpers/playPop'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
+import {TASK_STATUSES, taskStatusLabel} from '@/types/ITaskStatus'
 import {useGlobalNow} from '@/composables/useGlobalNow'
 
 const props = withDefaults(defineProps<{
@@ -338,6 +344,7 @@ async function markAsDone(checked: boolean, wasReverted: boolean = false) {
 	const updatePromise = taskStore.update({
 		...task.value,
 		done: checked,
+		status: checked ? TASK_STATUSES.DONE : TASK_STATUSES.TODO,
 	})
 
 	const finish = async () => {
@@ -628,6 +635,34 @@ defineExpose({
 	&.is-open {
 		padding: 1rem;
 		border: 1px solid var(--grey-200);
+	}
+}
+</style>
+
+<style scoped lang="scss">
+.task-status-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: .1rem .45rem;
+	border-radius: 999px;
+	background: var(--grey-200);
+	color: var(--grey-700);
+	font-size: .75rem;
+	font-weight: 600;
+	white-space: nowrap;
+	&[data-status="doing"] {
+		background: hsl(210deg 85% 93%);
+		color: hsl(214deg 75% 35%);
+	}
+
+	&[data-status="hold"] {
+		background: hsl(42deg 90% 90%);
+		color: hsl(34deg 75% 30%);
+	}
+
+	&[data-status="done"] {
+		background: hsl(145deg 55% 90%);
+		color: hsl(145deg 55% 28%);
 	}
 }
 </style>

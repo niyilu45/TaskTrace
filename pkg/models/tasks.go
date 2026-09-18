@@ -47,6 +47,65 @@ import (
 
 type TaskRepeatMode int
 
+type TaskStatus string
+
+const (
+	TaskStatusTodo  TaskStatus = "to-do"
+	TaskStatusDoing TaskStatus = "doing"
+	TaskStatusDone  TaskStatus = "done"
+	TaskStatusHold  TaskStatus = "hold"
+)
+
+func isValidTaskStatus(status TaskStatus) bool {
+	switch status {
+	case TaskStatusTodo, TaskStatusDoing, TaskStatusDone, TaskStatusHold:
+		return true
+	default:
+		return false
+	}
+}
+
+func reconcileTaskStatusForUpdate(task *Task, stored Task, partial, doneSet, statusSet bool) {
+	if partial {
+		if doneSet && !statusSet {
+			if task.Done {
+				task.Status = TaskStatusDone
+			} else {
+				task.Status = TaskStatusTodo
+			}
+		}
+		return
+	}
+
+	// Huma's merge-patch support reads the current task, applies the patch, then
+	// sends the complete object through PUT. If only done changed, status still
+	// contains the stored value and must not overwrite the checkbox change.
+	if task.Done != stored.Done && (task.Status == "" || task.Status == stored.Status) {
+		if task.Done {
+			task.Status = TaskStatusDone
+		} else {
+			task.Status = TaskStatusTodo
+		}
+	}
+}
+
+func normalizeTaskStatus(task *Task, fallback TaskStatus) error {
+	if task.Status == "" {
+		if task.Done {
+			task.Status = TaskStatusDone
+		} else if fallback != "" {
+			task.Status = fallback
+		} else {
+			task.Status = TaskStatusTodo
+		}
+	}
+	if !isValidTaskStatus(task.Status) {
+		return ErrInvalidTaskStatus{Status: string(task.Status)}
+	}
+	task.Done = task.Status == TaskStatusDone
+	return nil
+}
+
 const (
 	TaskRepeatModeDefault TaskRepeatMode = iota
 	TaskRepeatModeMonth
@@ -70,6 +129,9 @@ func validateTaskForCreation(t *Task) error {
 	if t.Title == "" {
 		return ErrTaskCannotBeEmpty{}
 	}
+	if err := normalizeTaskStatus(t, ""); err != nil {
+		return err
+	}
 
 	return validateRepeatAfter(t.RepeatAfter)
 }
@@ -85,8 +147,10 @@ type Task struct {
 	// The project this task belongs to.
 	// Must precede done/due_date: xorm orders composite index columns by struct field order.
 	ProjectID int64 `xorm:"bigint INDEX not null unique(tasks_project_index) index(project_done_due_date)" json:"project_id" param:"project" doc:"The id of the project this task belongs to. On create it is taken from the URL; on update, setting it to a different project moves the task (requires write access to the target project)."`
-	// Whether a task is done or not.
+	// Whether a task is done or not. Kept in sync with Status for Vikunja compatibility.
 	Done bool `xorm:"INDEX null index(project_done_due_date)" json:"done"`
+	// The TaskTrace workflow state: to-do, doing, done, or hold.
+	Status TaskStatus `xorm:"varchar(20) not null default 'to-do'" json:"status" doc:"The TaskTrace workflow state: to-do, doing, done, or hold."`
 	// The time when a task was marked as done. This field is system-controlled and cannot be set via API.
 	DoneAt time.Time `xorm:"INDEX null 'done_at'" json:"done_at" readOnly:"true" doc:"When the task was marked as done. Set by the server; ignored on write."`
 	// The time when the task is due.
@@ -1227,8 +1291,9 @@ func setTasksInBucketInViews(s *xorm.Session, views []*ProjectView, tasks []*Tas
 
 				if view.DoneBucketID != 0 && view.DoneBucketID == t.BucketID && !t.Done {
 					t.Done = true
+					t.Status = TaskStatusDone
 					_, err = s.Where("id = ?", t.ID).
-						Cols("done").
+						Cols("done", "status").
 						Update(t)
 					if err != nil {
 						return nil, nil, err
@@ -1320,6 +1385,7 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 		"title",
 		"description",
 		"done",
+		"status",
 		"due_date",
 		"repeat_after",
 		"priority",
@@ -1360,6 +1426,10 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 			t.Done = ot.Done
 			t.DoneAt = ot.DoneAt
 		}
+		if !fieldSet["status"] {
+			t.Status = ot.Status
+		}
+
 		if !fieldSet["due_date"] {
 			t.DueDate = ot.DueDate
 		}
@@ -1392,6 +1462,27 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 		}
 		if !fieldSet["cover_image_attachment_id"] {
 			t.CoverImageAttachmentID = ot.CoverImageAttachmentID
+		}
+	}
+
+	reconcileTaskStatusForUpdate(t, ot, len(fields) > 0, fieldSet["done"], fieldSet["status"])
+	statusFallback := ot.Status
+	if statusFallback == "" {
+		if ot.Done {
+			statusFallback = TaskStatusDone
+		} else {
+			statusFallback = TaskStatusTodo
+		}
+	}
+	if err := normalizeTaskStatus(t, statusFallback); err != nil {
+		return err
+	}
+	if len(fields) > 0 {
+		if fieldSet["status"] && !fieldSet["done"] {
+			colsToUpdate = append(colsToUpdate, "done")
+		}
+		if fieldSet["done"] && !fieldSet["status"] {
+			colsToUpdate = append(colsToUpdate, "status")
 		}
 	}
 
@@ -1511,6 +1602,9 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 
 	// When a repeating task is marked as done, we update all deadlines and reminders and set it as undone
 	updateDoneAt := updateDone(&ot, t)
+	if t.Status == TaskStatusDone && !t.Done {
+		t.Status = TaskStatusTodo
+	}
 	if updateDoneAt {
 		colsToUpdate = append(colsToUpdate, "done_at")
 	}
@@ -1603,6 +1697,10 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 	// Done
 	if !t.Done {
 		ot.Done = false
+	}
+	// Status
+	if t.Status != "" {
+		ot.Status = t.Status
 	}
 	// Priority
 	if t.Priority == 0 {

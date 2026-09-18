@@ -116,9 +116,10 @@ internal sealed partial class FloatingWindow {
         var nodes=new Dictionary<long,TreeNode>();var roots=new List<TreeNode>();
         foreach(long id in ordered) {
             if(!included.Contains(id))continue;bool done=Convert.ToBoolean(all[id]["done"]);
+            string taskStatus=TaskStatusValue(all[id]);
             nodes[id]=new TreeNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
                 ForeColor=done?Color.FromArgb(100,110,125):ForeColor,
-                ToolTipText=(done?"已完成 · ":"未完成 · ")+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
+                ToolTipText=TaskStatusText(taskStatus)+" · "+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
         }
         foreach(long id in ordered) {
             if(!nodes.ContainsKey(id))continue;

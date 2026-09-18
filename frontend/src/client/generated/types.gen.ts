@@ -2180,6 +2180,10 @@ export type Task = {
     repeat_mode?: number;
     start_date?: string;
     /**
+     * The TaskTrace workflow state: to-do, doing, done, or hold.
+     */
+    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    /**
      * The requesting user's subscription to this task. Read-only here; use the subscription endpoints to change it. Only present when reading a single task.
      */
     readonly subscription?: Subscription;
@@ -2516,6 +2520,10 @@ export type TaskReadOneBody = {
      */
     repeat_mode?: number;
     start_date?: string;
+    /**
+     * The TaskTrace workflow state: to-do, doing, done, or hold.
+     */
+    status?: 'to-do' | 'doing' | 'done' | 'hold';
     /**
      * The requesting user's subscription to this task. Read-only here; use the subscription endpoints to change it. Only present when reading a single task.
      */
@@ -4535,6 +4543,10 @@ export type TaskWritable = {
     repeat_mode?: number;
     start_date?: string;
     /**
+     * The TaskTrace workflow state: to-do, doing, done, or hold.
+     */
+    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    /**
      * The task title. This is what you'll see in the project.
      */
     title?: string;
@@ -4635,6 +4647,10 @@ export type TaskReadOneBodyWritable = {
      */
     repeat_mode?: number;
     start_date?: string;
+    /**
+     * The TaskTrace workflow state: to-do, doing, done, or hold.
+     */
+    status?: 'to-do' | 'doing' | 'done' | 'hold';
     /**
      * The task title. This is what you'll see in the project.
      */

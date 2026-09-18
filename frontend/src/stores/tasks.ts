@@ -63,6 +63,7 @@ export async function createTasksWithUndo(taskService: TaskService, tasks: ITask
 				title: processed.title,
 				description: processed.description,
 				done: processed.done,
+				status: processed.status,
 				due_date: processed.due_date,
 				start_date: processed.start_date,
 				end_date: processed.end_date,

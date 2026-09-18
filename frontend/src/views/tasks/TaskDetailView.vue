@@ -73,6 +73,27 @@
 					class="column detail-content"
 				>
 					<div class="columns details">
+						<div class="column task-status-field">
+							<div class="detail-title">
+								<Icon icon="tasks" />
+								任务状态
+							</div>
+							<select
+								v-model="task.status"
+								class="input task-status-select"
+								:disabled="!canWrite || taskService.loading"
+								aria-label="任务状态"
+								@change="setTaskStatus"
+							>
+								<option
+									v-for="option in TASK_STATUS_OPTIONS"
+									:key="option.value"
+									:value="option.value"
+								>
+									{{ option.label }}
+								</option>
+							</select>
+						</div>
 						<div
 							v-if="activeFields.assignees"
 							class="column assignees"
@@ -705,6 +726,7 @@ import {uploadFile} from '@/helpers/attachments'
 import {getProjectTitle} from '@/helpers/getProjectTitle'
 import {scrollIntoView} from '@/helpers/scrollIntoView'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
+import {TASK_STATUS_OPTIONS, TASK_STATUSES} from '@/types/ITaskStatus'
 import {REMINDER_PERIOD_RELATIVE_TO_TYPES} from '@/types/IReminderPeriodRelativeTo'
 import {playPopSound} from '@/helpers/playPop'
 
@@ -1159,9 +1181,11 @@ async function deleteTask() {
 }
 
 async function toggleTaskDone() {
+	const newDone = !task.value.done
 	const newTask = {
 		...task.value,
-		done: !task.value.done,
+		done: newDone,
+		status: newDone ? TASK_STATUSES.DONE : TASK_STATUSES.TODO,
 	}
 
 	if (newTask.done) {
@@ -1200,6 +1224,12 @@ async function duplicateCurrentTask() {
 			params: {id: duplicatedTask.id},
 		})
 	}
+}
+
+async function setTaskStatus() {
+	const done = task.value.status === TASK_STATUSES.DONE
+	if (done) playPopSound()
+	await saveTask({...task.value, done})
 }
 
 async function setPriority(priority: Priority) {
