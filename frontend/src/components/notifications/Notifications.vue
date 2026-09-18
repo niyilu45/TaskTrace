@@ -48,6 +48,18 @@
 						</BaseButton>
 					</div>
 				</div>
+				<button
+					v-if="updateStore.shouldNotify"
+					type="button"
+					class="single-notification update-release-notification"
+					@click="openUpdateDetails"
+				>
+					<span class="read-indicator" />
+					<span class="detail">
+						<strong>发现新版本 {{ updateStore.state.latest_version }}</strong>
+						<span class="created">{{ displayReleaseDate(updateStore.state.published_at) }}</span>
+					</span>
+				</button>
 				<div
 					v-for="(n, index) in notifications"
 					:key="n.id"
@@ -92,7 +104,7 @@
 					{{ $t('notification.markAllRead') }}
 				</XButton>
 				<p
-					v-if="notifications.length === 0"
+					v-if="notifications.length === 0 && !updateStore.shouldNotify"
 					class="nothing"
 				>
 					{{ $t('notification.none') }}<br>
@@ -102,6 +114,25 @@
 				</p>
 			</div>
 		</CustomTransition>
+		<Modal
+			:enabled="showUpdateDetails"
+			@close="declineUpdate"
+			@submit="installUpdate"
+		>
+			<template #header>
+				发现新版本 {{ updateStore.state.latest_version }}
+			</template>
+			<template #text>
+				<p><strong>发布日期：</strong>{{ displayReleaseDate(updateStore.state.published_at) }}</p>
+				<p class="mbs-3">
+					<strong>更新内容：</strong>
+				</p>
+				<pre class="release-notes">{{ updateStore.state.release_notes || '本次发布未填写更新内容。' }}</pre>
+				<p class="mbs-4">
+					更新需要关闭正在运行的 TaskTrace。确认后将使用 Windows 系统代理下载更新，随后关闭、替换文件并自动重新启动。
+				</p>
+			</template>
+		</Modal>
 	</div>
 </template>
 
@@ -121,21 +152,25 @@ import {getDisplayName} from '@/models/user'
 import {useAuthStore} from '@/stores/auth'
 import {useWebSocket} from '@/composables/useWebSocket'
 import XButton from '@/components/input/Button.vue'
-import {success} from '@/message'
+import Modal from '@/components/misc/Modal.vue'
+import {error as showError, success} from '@/message'
 import {useI18n} from 'vue-i18n'
+import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
 const authStore = useAuthStore()
 const router = useRouter()
 const {t} = useI18n()
+const updateStore = useTasktraceUpdateStore()
 
 const allNotifications = ref<INotification[]>([])
 const showNotifications = ref(false)
+const showUpdateDetails = ref(false)
 const popup = ref(null)
 
 const unreadNotifications = computed(() => {
-	return notifications.value.filter(n => n.readAt === null).length
+	return notifications.value.filter(n => n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0)
 })
 const notifications = computed(() => {
 	return allNotifications.value ? allNotifications.value.filter(n => n.name !== '') : []
@@ -144,6 +179,7 @@ const userInfo = computed(() => authStore.info)
 
 let unsubscribeWs: (() => void) | null = null
 let pollInterval: ReturnType<typeof setInterval> | null = null
+let updatePollInterval: ReturnType<typeof setInterval> | null = null
 
 const POLL_INTERVAL = 10000
 
@@ -172,6 +208,8 @@ onMounted(async () => {
 
 	// Fallback polling when WebSocket is not available
 	startPollingFallback()
+	try { await updateStore.refresh() } catch { /* Updates are available only in the local portable build. */ }
+	updatePollInterval = setInterval(() => updateStore.refresh().catch(() => undefined), 15_000)
 })
 
 // Reload notifications when WebSocket disconnects to catch any events
@@ -186,7 +224,34 @@ onUnmounted(() => {
 	document.removeEventListener('click', hidePopup)
 	unsubscribeWs?.()
 	stopPollingFallback()
+	if (updatePollInterval) clearInterval(updatePollInterval)
 })
+
+function openUpdateDetails() {
+	showNotifications.value = false
+	showUpdateDetails.value = true
+}
+
+async function declineUpdate() {
+	showUpdateDetails.value = false
+	try { await updateStore.ignore() } catch (cause) { showError(cause) }
+}
+
+async function installUpdate() {
+	try {
+		await updateStore.install()
+		showUpdateDetails.value = false
+		success({message: '正在下载更新，完成后 TaskTrace 将关闭并重新启动。'})
+	} catch (cause) {
+		showError(cause)
+	}
+}
+
+function displayReleaseDate(value?: string) {
+	if (!value) return '发布日期未知'
+	const date = new Date(value)
+	return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
 
 function startPollingFallback() {
 	pollInterval = setInterval(async () => {
@@ -407,5 +472,31 @@ async function clearAll() {
 			}
 		}
 	}
+
+	.update-release-notification {
+		inline-size: 100%;
+		border: 0;
+		background: transparent;
+		font: inherit;
+		text-align: start;
+		color: var(--grey-800);
+		cursor: pointer;
+
+		.detail {
+			display: grid;
+			gap: .125rem;
+		}
+	}
+
+}
+
+.release-notes {
+	max-block-size: 16rem;
+	overflow: auto;
+	white-space: pre-wrap;
+	font: inherit;
+	background: var(--grey-100);
+	border-radius: $radius;
+	padding: .75rem;
 }
 </style>

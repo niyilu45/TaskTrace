@@ -1,5 +1,13 @@
 # 本机体验版验证记录
 
+## 2026-09-18 GitHub Releases 自动更新
+
+- 程序启动时及按配置间隔检查 GitHub Releases，默认 60 分钟；更新设置页和系统托盘均可手动检查。
+- 完整界面通知显示新版本、发布日期和发布说明；拒绝后记录该版本，后续自动检查不再重复提醒，手动检查仍可查看。
+- 下载使用 Windows 系统代理；确认关闭后由临时独立更新器替换程序文件、保留数据与配置并自动重启。发布包存在 `SHA256SUMS.txt` 时会先校验。
+- 构建脚本自动生成 `Releases/RELEASE-NOTES.md`，发布脚本用该内容更新 GitHub Release，并覆盖上传 ZIP 与校验文件。
+- 后端更新状态/设置单元测试、API v2 路由编译测试、API 集成测试、前端生产构建、Windows C# 编译、PowerShell 语法检查、隔离包原生自检及更新器替换/数据保留自检通过。
+
 日期：2026-09-16
 
 已生成 dist/TaskTrace-local-windows-x64.zip，面向 Windows x64。

@@ -410,6 +410,29 @@ export type ColumnMapping = {
     column_name?: string;
 };
 
+export type Command = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Desktop update action to execute.
+     */
+    action?: 'check' | 'install';
+    /**
+     * Time the command was queued.
+     */
+    readonly created_at?: string;
+    /**
+     * Unique command identifier.
+     */
+    readonly id?: string;
+    /**
+     * Release version to install.
+     */
+    version?: string;
+};
+
 export type ConnectionSettings = {
     /**
      * A URL to the JSON Schema for this object.
@@ -1975,6 +1998,21 @@ export type Session = {
     readonly refresh_token?: string;
 };
 
+export type Settings = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Minutes between automatic GitHub release checks. Defaults to 60.
+     */
+    check_interval_minutes?: number;
+    /**
+     * Release version the user declined. Automatic checks do not notify for this version.
+     */
+    ignored_version?: string;
+};
+
 export type ShareCounts = {
     /**
      * Number of link shares across all projects.
@@ -1988,6 +2026,61 @@ export type ShareCounts = {
      * Number of user-project shares.
      */
     readonly user_shares?: number;
+};
+
+export type State = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * GitHub API download URL for the portable Windows archive.
+     */
+    readonly asset_url?: string;
+    /**
+     * Whether a release newer than the running version is available.
+     */
+    readonly available?: boolean;
+    /**
+     * Time the desktop process completed the latest check.
+     */
+    readonly checked_at?: string;
+    /**
+     * GitHub API download URL for SHA256SUMS.txt when present.
+     */
+    readonly checksum_url?: string;
+    /**
+     * Version of the running TaskTrace package.
+     */
+    readonly current_version?: string;
+    /**
+     * Last update error suitable for display to the local user.
+     */
+    readonly error?: string;
+    /**
+     * Newest compatible GitHub release version found by the desktop process.
+     */
+    readonly latest_version?: string;
+    /**
+     * Whether the full interface should show the new-version notification.
+     */
+    readonly notify?: boolean;
+    /**
+     * GitHub publication time for the newest release.
+     */
+    readonly published_at?: string;
+    /**
+     * Release notes supplied by the GitHub release.
+     */
+    readonly release_notes?: string;
+    /**
+     * GitHub page for the release.
+     */
+    readonly release_url?: string;
+    /**
+     * Current updater state: idle, checking, downloading, ready, or error.
+     */
+    readonly status?: string;
 };
 
 export type Status = {
@@ -2182,7 +2275,7 @@ export type Task = {
     /**
      * The TaskTrace workflow state: to-do, doing, done, or hold.
      */
-    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    status?: string;
     /**
      * The requesting user's subscription to this task. Read-only here; use the subscription endpoints to change it. Only present when reading a single task.
      */
@@ -2523,7 +2616,7 @@ export type TaskReadOneBody = {
     /**
      * The TaskTrace workflow state: to-do, doing, done, or hold.
      */
-    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    status?: string;
     /**
      * The requesting user's subscription to this task. Read-only here; use the subscription endpoints to change it. Only present when reading a single task.
      */
@@ -2665,6 +2758,28 @@ export type TasktraceUndoCreateRequest = {
      * Latest journal entry ID read from undo status.
      */
     id?: number;
+};
+
+export type TasktraceUpdateIgnoreRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Release version the user declined.
+     */
+    version?: string;
+};
+
+export type TasktraceUpdateInstallRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Release version confirmed by the user.
+     */
+    version?: string;
 };
 
 export type Team = {
@@ -3772,6 +3887,17 @@ export type CallbackWritable = {
     totp_passcode?: string;
 };
 
+export type CommandWritable = {
+    /**
+     * Desktop update action to execute.
+     */
+    action?: 'check' | 'install';
+    /**
+     * Release version to install.
+     */
+    version?: string;
+};
+
 export type ConnectionSettingsWritable = {
     /**
      * Absolute URL of the streamable HTTP endpoint.
@@ -4502,6 +4628,17 @@ export type SavedFilterReadBodyWritable = {
     title?: string;
 };
 
+export type SettingsWritable = {
+    /**
+     * Minutes between automatic GitHub release checks. Defaults to 60.
+     */
+    check_interval_minutes?: number;
+    /**
+     * Release version the user declined. Automatic checks do not notify for this version.
+     */
+    ignored_version?: string;
+};
+
 export type TaskWritable = {
     /**
      * The bucket the task is in. Only populated when the task is accessed via a view with buckets. To move a task between buckets, the new bucket must be in the same view as the old one.
@@ -4545,7 +4682,7 @@ export type TaskWritable = {
     /**
      * The TaskTrace workflow state: to-do, doing, done, or hold.
      */
-    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    status?: string;
     /**
      * The task title. This is what you'll see in the project.
      */
@@ -4650,7 +4787,7 @@ export type TaskReadOneBodyWritable = {
     /**
      * The TaskTrace workflow state: to-do, doing, done, or hold.
      */
-    status?: 'to-do' | 'doing' | 'done' | 'hold';
+    status?: string;
     /**
      * The task title. This is what you'll see in the project.
      */
@@ -4710,6 +4847,20 @@ export type TasktraceUndoCreateRequestWritable = {
      * Latest journal entry ID read from undo status.
      */
     id?: number;
+};
+
+export type TasktraceUpdateIgnoreRequestWritable = {
+    /**
+     * Release version the user declined.
+     */
+    version?: string;
+};
+
+export type TasktraceUpdateInstallRequestWritable = {
+    /**
+     * Release version confirmed by the user.
+     */
+    version?: string;
 };
 
 export type TeamWritable = {
@@ -10063,6 +10214,181 @@ export type TasktraceUndoCreateResponses = {
 };
 
 export type TasktraceUndoCreateResponse = TasktraceUndoCreateResponses[keyof TasktraceUndoCreateResponses];
+
+export type TasktraceUpdateStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update';
+};
+
+export type TasktraceUpdateStatusErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateStatusError = TasktraceUpdateStatusErrors[keyof TasktraceUpdateStatusErrors];
+
+export type TasktraceUpdateStatusResponses = {
+    /**
+     * OK
+     */
+    200: State;
+};
+
+export type TasktraceUpdateStatusResponse = TasktraceUpdateStatusResponses[keyof TasktraceUpdateStatusResponses];
+
+export type TasktraceUpdateCheckData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/check';
+};
+
+export type TasktraceUpdateCheckErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateCheckError = TasktraceUpdateCheckErrors[keyof TasktraceUpdateCheckErrors];
+
+export type TasktraceUpdateCheckResponses = {
+    /**
+     * Created
+     */
+    201: Command;
+};
+
+export type TasktraceUpdateCheckResponse = TasktraceUpdateCheckResponses[keyof TasktraceUpdateCheckResponses];
+
+export type TasktraceUpdateIgnoreData = {
+    body: TasktraceUpdateIgnoreRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/ignore';
+};
+
+export type TasktraceUpdateIgnoreErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateIgnoreError = TasktraceUpdateIgnoreErrors[keyof TasktraceUpdateIgnoreErrors];
+
+export type TasktraceUpdateIgnoreResponses = {
+    /**
+     * Created
+     */
+    201: State;
+};
+
+export type TasktraceUpdateIgnoreResponse = TasktraceUpdateIgnoreResponses[keyof TasktraceUpdateIgnoreResponses];
+
+export type TasktraceUpdateInstallData = {
+    body: TasktraceUpdateInstallRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/install';
+};
+
+export type TasktraceUpdateInstallErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateInstallError = TasktraceUpdateInstallErrors[keyof TasktraceUpdateInstallErrors];
+
+export type TasktraceUpdateInstallResponses = {
+    /**
+     * Created
+     */
+    201: Command;
+};
+
+export type TasktraceUpdateInstallResponse = TasktraceUpdateInstallResponses[keyof TasktraceUpdateInstallResponses];
+
+export type TasktraceUpdateSettingsReadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/settings';
+};
+
+export type TasktraceUpdateSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateSettingsReadError = TasktraceUpdateSettingsReadErrors[keyof TasktraceUpdateSettingsReadErrors];
+
+export type TasktraceUpdateSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: Settings;
+};
+
+export type TasktraceUpdateSettingsReadResponse = TasktraceUpdateSettingsReadResponses[keyof TasktraceUpdateSettingsReadResponses];
+
+export type PatchTasktraceUpdateSettingsReadData = {
+    body: Array<JsonPatchOp> | null;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/settings';
+};
+
+export type PatchTasktraceUpdateSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type PatchTasktraceUpdateSettingsReadError = PatchTasktraceUpdateSettingsReadErrors[keyof PatchTasktraceUpdateSettingsReadErrors];
+
+export type PatchTasktraceUpdateSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: Settings;
+};
+
+export type PatchTasktraceUpdateSettingsReadResponse = PatchTasktraceUpdateSettingsReadResponses[keyof PatchTasktraceUpdateSettingsReadResponses];
+
+export type TasktraceUpdateSettingsWriteData = {
+    body: SettingsWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/update/settings';
+};
+
+export type TasktraceUpdateSettingsWriteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceUpdateSettingsWriteError = TasktraceUpdateSettingsWriteErrors[keyof TasktraceUpdateSettingsWriteErrors];
+
+export type TasktraceUpdateSettingsWriteResponses = {
+    /**
+     * OK
+     */
+    200: Settings;
+};
+
+export type TasktraceUpdateSettingsWriteResponse = TasktraceUpdateSettingsWriteResponses[keyof TasktraceUpdateSettingsWriteResponses];
 
 export type TeamsListData = {
     body?: never;

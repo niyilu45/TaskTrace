@@ -180,8 +180,10 @@ internal sealed partial class FloatingWindow : Form {
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
+        menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
+        InitializeUpdates();
         InitializeAutoRefresh();
         Shown += async delegate { await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }

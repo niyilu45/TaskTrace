@@ -1,7 +1,8 @@
-﻿param([switch]$SkipFrontend, [string]$PackageDirectory = 'Releases/TaskTrace-local')
+﻿param([switch]$SkipFrontend, [string]$PackageDirectory = 'Releases/TaskTrace-local', [string]$Version = 'v0.1.0-beta.10')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
+if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Version must be a semantic version such as v0.1.0-beta.11.' }
 function Assert-Exit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }
@@ -32,21 +33,39 @@ try {
     try {
         $env:CGO_ENABLED = '1'
         $env:CC = 'gcc'
-        & go build -tags 'osusergo,timetzdata' -ldflags '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=tasktrace-local' -o (Join-Path $packageRoot 'TaskTrace-server.exe') .
+        $ldflags = '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=' + $Version
+        & go build -tags 'osusergo,timetzdata' -ldflags $ldflags -o (Join-Path $packageRoot 'TaskTrace-server.exe') .
         Assert-Exit 'Windows server build'
     } finally { $env:CGO_ENABLED = $oldCGO; $env:CC = $oldCC }
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-floating.exe')) (Join-Path $repoRoot 'portable/FloatingWindow.cs') (Join-Path $repoRoot 'portable/FloatingInteractions.cs') (Join-Path $repoRoot 'portable/FloatingUndo.cs') (Join-Path $repoRoot 'portable/FloatingProgressReferences.cs') (Join-Path $repoRoot 'portable/FloatingProgressDatePicker.cs') (Join-Path $repoRoot 'portable/FloatingSimpleMode.cs') (Join-Path $repoRoot 'portable/FloatingPriorityFilter.cs') (Join-Path $repoRoot 'portable/FloatingPriorityLinks.cs') (Join-Path $repoRoot 'portable/FloatingSimpleDetails.cs') (Join-Path $repoRoot 'portable/FloatingTaskRefresh.cs') (Join-Path $repoRoot 'portable/FloatingAutoRefresh.cs')
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-floating.exe')) (Join-Path $repoRoot 'portable/FloatingWindow.cs') (Join-Path $repoRoot 'portable/FloatingInteractions.cs') (Join-Path $repoRoot 'portable/FloatingUndo.cs') (Join-Path $repoRoot 'portable/FloatingProgressReferences.cs') (Join-Path $repoRoot 'portable/FloatingProgressDatePicker.cs') (Join-Path $repoRoot 'portable/FloatingSimpleMode.cs') (Join-Path $repoRoot 'portable/FloatingPriorityFilter.cs') (Join-Path $repoRoot 'portable/FloatingPriorityLinks.cs') (Join-Path $repoRoot 'portable/FloatingSimpleDetails.cs') (Join-Path $repoRoot 'portable/FloatingTaskRefresh.cs') (Join-Path $repoRoot 'portable/FloatingAutoRefresh.cs') (Join-Path $repoRoot 'portable/FloatingUpdates.cs')
     Assert-Exit 'Floating window build'
     & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace.exe')) (Join-Path $repoRoot 'portable/Launcher.cs')
     Assert-Exit 'Launcher build'
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-updater.exe')) (Join-Path $repoRoot 'portable/TaskTraceUpdater.cs')
+    Assert-Exit 'Updater build'
     Copy-Item -LiteralPath 'portable/Configure-TaskTrace.cmd','portable/Configure-TaskTrace.ps1','portable/tasktrace-settings.example.json','portable/Launch-TaskTrace.ps1','portable/README.md','LICENSE' -Destination $packageRoot -Force
     '5f3504827990df58bef84b3a5d8c6ab398534c0b' | Set-Content -LiteralPath (Join-Path $packageRoot 'UPSTREAM-COMMIT.txt') -Encoding ASCII
     New-Item -ItemType Directory -Path (Join-Path $repoRoot 'Releases') -Force | Out-Null
-    & git rev-parse HEAD | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-COMMIT.txt') -Encoding ASCII
+    $sourceCommit = (& git rev-parse HEAD).Trim()
     Assert-Exit 'Source revision'
+    $sourceCommit | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-COMMIT.txt') -Encoding ASCII
+    $Version | Set-Content -LiteralPath (Join-Path $packageRoot 'VERSION.txt') -Encoding ASCII
+    $releaseItems = @(& git log ($Version + '..HEAD') --pretty=format:'- %s' --no-merges 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $releaseItems.Count -eq 0) { $releaseItems = @('- 程序更新和问题修复') }
+    $releaseNotes = @(
+        ('# TaskTrace ' + $Version)
+        ''
+        ('发布日期：' + (Get-Date -Format 'yyyy-MM-dd'))
+        ''
+        '## 更新内容'
+        ''
+    )
+    $releaseNotes += $releaseItems
+    $releaseNotes += @('', '## 版本对应', '', ('- 源代码提交：' + $sourceCommit))
+    $releaseNotes | Set-Content -LiteralPath (Join-Path $repoRoot 'Releases/RELEASE-NOTES.md') -Encoding UTF8
     # Only package public application files. Never include runtime data.
-    $packageFiles = @('TaskTrace.exe','Configure-TaskTrace.cmd','Configure-TaskTrace.ps1','tasktrace-settings.example.json','TaskTrace-server.exe','TaskTrace-floating.exe','Launch-TaskTrace.ps1','README.md','LICENSE','UPSTREAM-COMMIT.txt','SOURCE-COMMIT.txt') | ForEach-Object { Join-Path $packageRoot $_ }
+    $packageFiles = @('TaskTrace.exe','TaskTrace-updater.exe','Configure-TaskTrace.cmd','Configure-TaskTrace.ps1','tasktrace-settings.example.json','TaskTrace-server.exe','TaskTrace-floating.exe','Launch-TaskTrace.ps1','README.md','LICENSE','UPSTREAM-COMMIT.txt','SOURCE-COMMIT.txt','VERSION.txt') | ForEach-Object { Join-Path $packageRoot $_ }
     Compress-Archive -LiteralPath $packageFiles -DestinationPath (Join-Path $repoRoot 'Releases/TaskTrace-local-windows-x64.zip') -Force
     # Retire the old entry point when rebuilding an existing package.
     foreach ($obsoleteName in @('Start-Floating.cmd', 'Start-TaskTrace.cmd')) {

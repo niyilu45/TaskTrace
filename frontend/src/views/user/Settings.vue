@@ -34,6 +34,10 @@ const navigationItems = computed(() => {
 			routeName: 'user.settings.general',
 		},
 		{
+			title: '更新设置',
+			routeName: 'user.settings.updates',
+		},
+		{
 			title: t('user.settings.newPasswordTitle'),
 			routeName: 'user.settings.password-update',
 			condition: isLocalUser.value,

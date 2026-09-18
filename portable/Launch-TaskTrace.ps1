@@ -13,6 +13,7 @@ $serverError = $null
 $serverOutputCopy = $null
 $serverErrorCopy = $null
 $exitCode = 0
+$updateRequested = $false
 # One lock for all package/data directories in the current Windows desktop session.
 # Keep these helpers independent of workspace initialization so duplicate launches never touch data.
 function Enter-TaskTraceInstanceLock([string]$Name = 'Local\TaskTrace.Desktop.SingleInstance') {
@@ -192,6 +193,8 @@ public sealed class TaskTraceProcessJob : IDisposable {
     $processJob = New-Object TaskTraceProcessJob
 
     $stage = 'Start local server'
+    $env:TASKTRACE_PACKAGE_ROOT = $packageRoot
+    $env:TASKTRACE_DATA_ROOT = $dataRoot
     $serverStart = New-Object Diagnostics.ProcessStartInfo
     $serverStart.FileName = $binary
     $serverStart.Arguments = '--config "' + $configFile + '"'
@@ -245,7 +248,8 @@ public sealed class TaskTraceProcessJob : IDisposable {
         $processJob.Attach($window.Handle)
         $stage = 'Wait for floating window exit'
         $window.WaitForExit()
-        if ($window.ExitCode -ne 0) { throw 'Floating window exited with an error.' }
+        if ($window.ExitCode -eq 10) { $updateRequested = $true }
+        elseif ($window.ExitCode -ne 0) { throw 'Floating window exited with an error.' }
     }
     elseif (!$NoBrowser) { Start-Process $launchUrl }
     if ($Floating) {}
@@ -337,5 +341,26 @@ public sealed class TaskTraceProcessJob : IDisposable {
     if ($null -ne $processJob) { $processJob.Dispose() }
     if ($null -ne $sessionLock) { $sessionLock.Dispose() }
     if ($null -ne $instanceLock) { try { $instanceLock.ReleaseMutex() } finally { $instanceLock.Dispose() } }
+}
+if ($updateRequested) {
+    try {
+        $readyFile = Join-Path $dataRoot 'update-ready.json'
+        $ready = [IO.File]::ReadAllText($readyFile) | ConvertFrom-Json
+        $updaterSource = Join-Path $packageRoot 'TaskTrace-updater.exe'
+        if (!(Test-Path -LiteralPath $updaterSource -PathType Leaf)) { throw 'TaskTrace-updater.exe is missing.' }
+        $updaterCopy = Join-Path ([IO.Path]::GetTempPath()) ('TaskTrace-updater-' + [Guid]::NewGuid().ToString('N') + '.exe')
+        Copy-Item -LiteralPath $updaterSource -Destination $updaterCopy -Force
+        $updateStart = New-Object Diagnostics.ProcessStartInfo
+        $updateStart.FileName = $updaterCopy
+        $updateStart.Arguments = '"' + [string]$ready.archive + '" "' + [string]$ready.install_root + '"'
+        $updateStart.WorkingDirectory = [IO.Path]::GetTempPath()
+        $updateStart.UseShellExecute = $false
+        $updateStart.CreateNoWindow = $true
+        [void][Diagnostics.Process]::Start($updateStart)
+        Remove-Item -LiteralPath $readyFile -Force -ErrorAction SilentlyContinue
+    } catch {
+        try { Add-Type -AssemblyName System.Windows.Forms; [void][Windows.Forms.MessageBox]::Show(('无法启动更新程序。' + [Environment]::NewLine + $_.Exception.Message), 'TaskTrace · 更新失败', 'OK', 'Error') } catch {}
+        $exitCode = 1
+    }
 }
 exit $exitCode
