@@ -51,7 +51,12 @@ try {
     Assert-Exit 'Source revision'
     $sourceCommit | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-COMMIT.txt') -Encoding ASCII
     $Version | Set-Content -LiteralPath (Join-Path $packageRoot 'VERSION.txt') -Encoding ASCII
-    $releaseItems = @(& git log ($Version + '..HEAD') --pretty=format:'- %s' --no-merges 2>$null)
+    $previousTag = (& git describe --tags --abbrev=0 HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($previousTag)) {
+        $releaseItems = @(& git log ($previousTag.Trim() + '..HEAD') --pretty=format:'- %s' --no-merges)
+    } else {
+        $releaseItems = @(& git log -1 --pretty=format:'- %s' --no-merges)
+    }
     if ($LASTEXITCODE -ne 0 -or $releaseItems.Count -eq 0) { $releaseItems = @('- 程序更新和问题修复') }
     $releaseNotes = @(
         ('# TaskTrace ' + $Version)
