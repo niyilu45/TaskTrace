@@ -13,14 +13,17 @@
 			<span class="team-import-text">导入任务链接</span>
 		</BaseButton>
 		<BaseButton
-			v-if="teamStore.conflictCount || teamStore.notificationCount"
-			class="team-import-button"
+			class="team-import-button team-activity-button"
 			:aria-label="badgeLabel"
 			:title="badgeLabel"
 			@click="showActivity = true"
 		>
 			<Icon :icon="['far', 'bell']" />
-			<span class="team-badge">{{ teamStore.conflictCount + teamStore.notificationCount }}</span>
+			<span
+				v-if="teamStore.activityCount"
+				class="team-badge"
+				:aria-label="`${teamStore.activityCount} 条未读团队消息`"
+			>{{ teamStore.activityCount > 99 ? '99+' : teamStore.activityCount }}</span>
 		</BaseButton>
 
 		<Modal
@@ -28,10 +31,15 @@
 			@close="closeImport"
 			@submit="importTask"
 		>
-			<template #header>导入团队任务链接</template>
+			<template #header>
+				导入团队任务链接
+			</template>
 			<template #text>
 				<div class="field">
-					<label class="label" for="team-task-link">任务链接</label>
+					<label
+						class="label"
+						for="team-task-link"
+					>任务链接</label>
 					<textarea
 						id="team-task-link"
 						v-model="link"
@@ -39,10 +47,15 @@
 						rows="4"
 						placeholder="粘贴以 tasktrace-team:// 开头的链接"
 					/>
-					<p class="help">链接只会导入共享任务及其子任务，不会导入对方的父任务或其他事项。</p>
+					<p class="help">
+						链接只会导入共享任务及其子任务，不会导入对方的父任务或其他事项。
+					</p>
 				</div>
 				<div class="field">
-					<label class="label" for="team-repository-override">共享目录地址（可选）</label>
+					<label
+						class="label"
+						for="team-repository-override"
+					>共享目录地址（可选）</label>
 					<input
 						id="team-repository-override"
 						v-model="repositoryOverride"
@@ -73,29 +86,80 @@
 			:enabled="showActivity"
 			@close="showActivity = false"
 		>
-			<template #header>团队协作通知与冲突</template>
+			<template #header>
+				团队协作通知与冲突
+			</template>
 			<template #text>
-				<div v-if="teamStore.status.notifications?.length" class="team-notifications">
+				<div class="team-profile">
+					<img
+						v-if="avatarFor(teamStore.status.username || '')"
+						:src="avatarFor(teamStore.status.username || '')"
+						alt=""
+						class="team-avatar"
+					>
+					<span
+						v-else
+						class="team-avatar team-avatar--fallback"
+					>{{ initials(teamStore.status.username || '') }}</span>
+					<div>
+						<strong>{{ teamStore.status.username }}</strong>
+						<p class="has-text-grey">
+							这是其他协作成员看到的身份。
+						</p>
+					</div>
+					<BaseButton
+						class="team-avatar-link"
+						:to="{name: 'user.settings.avatar'}"
+						@click="showActivity = false"
+					>
+						设置我的头像
+					</BaseButton>
+				</div>
+				<div
+					v-if="teamStore.status.notifications?.length"
+					class="team-notifications"
+				>
 					<div class="team-notification-heading">
 						<h3>成员更新</h3>
-						<BaseButton @click="dismissNotifications">全部标为已读</BaseButton>
+						<BaseButton @click="dismissNotifications">
+							全部标为已读
+						</BaseButton>
 					</div>
-					<p
+					<div
 						v-for="notice in teamStore.status.notifications"
 						:key="notice.id"
+						class="team-notification"
 					>
-						<strong>{{ notice.actor }}</strong> 更新了“{{ notice.task_title }}”
-						<span class="has-text-grey"> · {{ formatDisplayDate(notice.created) }}</span>
-					</p>
+						<img
+							v-if="avatarFor(notice.actor || '', notice.avatar)"
+							:src="avatarFor(notice.actor || '', notice.avatar)"
+							alt=""
+							class="team-avatar team-avatar--small"
+						>
+						<span
+							v-else
+							class="team-avatar team-avatar--small team-avatar--fallback"
+						>{{ initials(notice.actor || '') }}</span>
+						<div class="team-notification__content">
+							<p><strong>{{ notice.actor }}</strong> 更新了“{{ notice.task_title }}”</p>
+							<span class="has-text-grey">{{ formatDisplayDate(notice.created) }}</span>
+						</div>
+					</div>
 				</div>
-				<div v-if="teamStore.status.conflicts?.length" class="team-conflicts">
+				<div
+					v-if="teamStore.status.conflicts?.length"
+					class="team-conflicts"
+				>
 					<h3>需要处理的冲突</h3>
 					<div
 						v-for="conflict in teamStore.status.conflicts"
 						:key="conflict.id"
 						class="team-conflict"
 					>
-						<label class="label" :for="`team-conflict-${conflict.id}`">
+						<label
+							class="label"
+							:for="`team-conflict-${conflict.id}`"
+						>
 							{{ conflict.task_title }} · {{ fieldLabel(conflict.field) }}
 						</label>
 						<select
@@ -103,7 +167,9 @@
 							v-model="resolutions[conflict.id || '']"
 							class="input"
 						>
-							<option :value="conflict.base">保留上次同步值：{{ displayValue(conflict.field, conflict.base) }}</option>
+							<option :value="conflict.base">
+								保留上次同步值：{{ displayValue(conflict.field, conflict.base) }}
+							</option>
 							<option
 								v-for="option in conflict.options"
 								:key="`${option.author}-${option.value}`"
@@ -117,9 +183,13 @@
 						variant="primary"
 						:loading="teamStore.loading"
 						@click="resolveConflicts"
-					>一次性应用所选结果</XButton>
+					>
+						一次性应用所选结果
+					</XButton>
 				</div>
-				<p v-if="!teamStore.status.notifications?.length && !teamStore.status.conflicts?.length">当前没有新的团队通知或冲突。</p>
+				<p v-if="!teamStore.status.notifications?.length && !teamStore.status.conflicts?.length">
+					当前没有新的团队通知或冲突。
+				</p>
 			</template>
 		</Modal>
 	</div>
@@ -148,9 +218,17 @@ const resolutions = reactive<Record<string, string>>({})
 let timer: ReturnType<typeof setInterval> | null = null
 
 const badgeLabel = computed(() => {
-	const count = teamStore.conflictCount + teamStore.notificationCount
-	return count ? `导入任务链接，另有 ${count} 条团队通知` : '导入团队任务链接'
+	const count = teamStore.activityCount
+	return count ? `团队通知，${count} 条未读消息或冲突` : '团队通知'
 })
+
+function avatarFor(username: string, preferred = '') {
+	return preferred || teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+}
+
+function initials(username: string) {
+	return username.trim().slice(0, 2).toUpperCase() || '?'
+}
 
 watch(() => teamStore.status.conflicts, conflicts => {
 	for (const conflict of conflicts ?? []) {
@@ -229,12 +307,133 @@ async function dismissNotifications() {
 </script>
 
 <style scoped lang="scss">
-.team-center { display: flex; align-items: stretch; }
-.team-import-button { position: relative; padding-inline: .75rem; color: var(--grey-500); }
-.team-import-text { margin-inline-start: .4rem; font-size: .85rem; font-weight: 600; }
-.team-badge { position: absolute; inset-block-start: .35rem; inset-inline-end: .2rem; min-width: 1.1rem; padding: 0 .25rem; border-radius: 1rem; background: var(--danger); color: white; font-size: .65rem; text-align: center; }
-.team-notifications, .team-conflicts { margin-block-end: 1.5rem; }
-.team-notification-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.team-conflict { padding: .75rem; margin-block-end: .75rem; border: 1px solid var(--grey-200); border-radius: 8px; background: var(--grey-50); }
-@media screen and (max-width: $tablet) { .team-import-text { display: none; } .team-import-button { padding-inline: .5rem; } }
+.team-center {
+	display: flex;
+	align-items: stretch;
+}
+
+.team-import-button {
+	position: relative;
+	padding-inline: .75rem;
+	color: var(--grey-500);
+}
+
+.team-import-text {
+	margin-inline-start: .4rem;
+	font-size: .85rem;
+	font-weight: 600;
+}
+
+.team-badge {
+	position: absolute;
+	inset-block-start: .35rem;
+	inset-inline-end: .2rem;
+	min-inline-size: 1.1rem;
+	padding: 0 .25rem;
+	border-radius: 1rem;
+	background: var(--danger);
+	color: white;
+	font-size: .65rem;
+	text-align: center;
+}
+
+.team-profile {
+	display: flex;
+	align-items: center;
+	gap: .75rem;
+	padding: .75rem;
+	margin-block-end: 1rem;
+	border: 1px solid var(--grey-200);
+	border-radius: 10px;
+	background: var(--grey-50);
+}
+
+.team-profile p {
+	margin: .1rem 0 0;
+	font-size: .8rem;
+}
+
+.team-avatar-link {
+	margin-inline-start: auto;
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.team-avatar {
+	inline-size: 40px;
+	block-size: 40px;
+	flex: 0 0 40px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.team-avatar--small {
+	inline-size: 32px;
+	block-size: 32px;
+	flex-basis: 32px;
+}
+
+.team-avatar--fallback {
+	display: grid;
+	place-items: center;
+	background: var(--primary);
+	color: var(--white);
+	font-weight: 700;
+	font-size: .75rem;
+}
+
+.team-notifications,
+.team-conflicts {
+	margin-block-end: 1.5rem;
+}
+
+.team-notification-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.team-notification {
+	display: flex;
+	align-items: flex-start;
+	gap: .75rem;
+	padding: .75rem;
+	margin-block-end: .5rem;
+	border: 1px solid var(--grey-200);
+	border-radius: 10px;
+	background: var(--white);
+	box-shadow: var(--shadow-xs);
+}
+
+.team-notification__content {
+	min-inline-size: 0;
+}
+
+.team-notification__content p {
+	margin: 0 0 .2rem;
+	overflow-wrap: anywhere;
+}
+
+.team-notification__content span {
+	font-size: .8rem;
+}
+
+.team-conflict {
+	padding: .75rem;
+	margin-block-end: .75rem;
+	border: 1px solid var(--grey-200);
+	border-radius: 8px;
+	background: var(--grey-50);
+}
+
+@media screen and (max-width: $tablet) {
+	.team-import-text {
+		display: none;
+	}
+
+	.team-import-button {
+		padding-inline: .5rem;
+	}
+}
 </style>

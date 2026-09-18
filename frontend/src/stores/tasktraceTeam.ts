@@ -75,6 +75,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)
 	const notificationCount = computed(() => status.value.notifications?.length ?? 0)
+	const activityCount = computed(() => conflictCount.value + notificationCount.value)
 
-	return {status, loading, loaded, conflictCount, notificationCount, refresh, sync, share, importLink, configure, resolve, dismissNotifications, bindingForTask}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, resolve, dismissNotifications, bindingForTask}
 })

@@ -2773,8 +2773,14 @@ export type TaskTraceTeamImportRequest = {
     project_id?: number;
 };
 
+export type TaskTraceTeamMemberProfile = {
+    avatar?: string;
+    username?: string;
+};
+
 export type TaskTraceTeamNotification = {
     actor?: string;
+    avatar?: string;
     created?: string;
     id?: string;
     share_id?: string;
@@ -2819,6 +2825,7 @@ export type TaskTraceTeamStatus = {
     conflicts?: Array<TaskTraceTeamConflict> | null;
     enabled?: boolean;
     notifications?: Array<TaskTraceTeamNotification> | null;
+    profiles?: Array<TaskTraceTeamMemberProfile> | null;
     repository?: TaskTraceTeamRepositoryInfo;
     username?: string;
 };
@@ -4967,6 +4974,7 @@ export type TaskTraceTeamStatusWritable = {
     conflicts?: Array<TaskTraceTeamConflict> | null;
     enabled?: boolean;
     notifications?: Array<TaskTraceTeamNotification> | null;
+    profiles?: Array<TaskTraceTeamMemberProfile> | null;
     repository?: TaskTraceTeamRepositoryInfo;
     username?: string;
 };

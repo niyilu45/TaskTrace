@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 package models
 
 import (
@@ -62,6 +63,51 @@ func TestTaskTraceTeamCombinesComputersWithSameUsername(t *testing.T) {
 	require.Len(t, combined, 1)
 	require.Equal(t, "new", combined[0].Tasks[0].Title)
 	require.Len(t, combined[0].Tasks[0].Comments, 2)
+}
+
+func TestTaskTraceTeamSnapshotHashIgnoresSyncTimeAndAvatar(t *testing.T) {
+	base := TaskTraceTeamSnapshot{
+		Schema:   taskTraceTeamSchema,
+		ShareID:  "share",
+		Actor:    "alice",
+		DeviceID: "device",
+		Updated:  time.Now().UTC(),
+		Avatar:   "data:image/png;base64,one",
+		Tasks:    []TaskTraceTeamTask{{NodeID: "node", Title: "work"}},
+	}
+	changedPresentation := base
+	changedPresentation.Updated = base.Updated.Add(time.Hour)
+	changedPresentation.Avatar = "data:image/png;base64,two"
+	require.Equal(t, taskTraceTeamSnapshotHash(base), taskTraceTeamSnapshotHash(changedPresentation))
+
+	changedTask := base
+	changedTask.Tasks = []TaskTraceTeamTask{{NodeID: "node", Title: "changed"}}
+	require.NotEqual(t, taskTraceTeamSnapshotHash(base), taskTraceTeamSnapshotHash(changedTask))
+}
+
+func TestTaskTraceTeamSafeAvatarRejectsActiveContent(t *testing.T) {
+	require.Equal(t, "data:image/png;base64,AAAA", taskTraceTeamSafeAvatar("data:image/png;base64,AAAA"))
+	require.Empty(t, taskTraceTeamSafeAvatar("data:image/svg+xml;base64,AAAA"))
+	require.Empty(t, taskTraceTeamSafeAvatar("javascript:alert(1)"))
+}
+
+func TestTaskTraceTeamUnmarkedCommentUsesExportedIdentity(t *testing.T) {
+	created := time.Now().UTC().Truncate(time.Second)
+	comment := &TaskComment{ID: 42, Comment: "<p>one progress</p>", Created: created}
+	id := taskTraceTeamCommentID("share", "node", comment, "alice")
+	shared := taskTraceTeamAddMarker(comment.Comment, id, "alice")
+	marker, ok := taskTraceTeamReadMarker(shared)
+	require.True(t, ok)
+	require.Equal(t, id, marker.ID)
+	require.Equal(t, id, taskTraceTeamCommentID("share", "node", comment, "alice"))
+	indexed, duplicates := taskTraceTeamLocalCommentsByID(&TaskTraceTeamBinding{ShareID: "share"}, "node", "alice", []*TaskComment{comment})
+	require.Same(t, comment, indexed[id])
+	require.Empty(t, duplicates)
+
+	markedCopy := &TaskComment{ID: 43, Comment: shared, Created: created, Updated: comment.Updated}
+	indexed, duplicates = taskTraceTeamLocalCommentsByID(&TaskTraceTeamBinding{ShareID: "share"}, "node", "alice", []*TaskComment{comment, markedCopy})
+	require.Same(t, markedCopy, indexed[id])
+	require.Equal(t, []*TaskComment{comment}, duplicates)
 }
 
 func TestTaskTraceTeamOutstandingItemsMergeIndependently(t *testing.T) {

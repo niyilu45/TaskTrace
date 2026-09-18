@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 package models
 
 import (
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"code.vikunja.io/api/pkg/modules/avatar"
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 
@@ -86,6 +88,7 @@ type TaskTraceTeamSnapshot struct {
 	Actor          string              `json:"actor"`
 	DeviceID       string              `json:"device_id"`
 	Updated        time.Time           `json:"updated"`
+	Avatar         string              `json:"avatar,omitempty"`
 	ResolutionAcks map[string]string   `json:"resolution_acks,omitempty"`
 	Tasks          []TaskTraceTeamTask `json:"tasks"`
 }
@@ -193,8 +196,14 @@ type TaskTraceTeamNotification struct {
 	ID        string    `json:"id"`
 	ShareID   string    `json:"share_id"`
 	Actor     string    `json:"actor"`
+	Avatar    string    `json:"avatar,omitempty"`
 	TaskTitle string    `json:"task_title"`
 	Created   time.Time `json:"created"`
+}
+
+type TaskTraceTeamMemberProfile struct {
+	Username string `json:"username"`
+	Avatar   string `json:"avatar,omitempty"`
 }
 
 type TaskTraceTeamStatus struct {
@@ -204,6 +213,7 @@ type TaskTraceTeamStatus struct {
 	Bindings      []TaskTraceTeamBindingStatus `json:"bindings"`
 	Conflicts     []TaskTraceTeamConflict      `json:"conflicts"`
 	Notifications []TaskTraceTeamNotification  `json:"notifications"`
+	Profiles      []TaskTraceTeamMemberProfile `json:"profiles"`
 }
 
 type taskTraceTeamLink struct {
@@ -637,7 +647,7 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 	for key, value := range binding.ResolutionAcks {
 		acks[key] = value
 	}
-	snapshot := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), ResolutionAcks: acks, Tasks: []TaskTraceTeamTask{}}
+	snapshot := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), Avatar: taskTraceTeamAvatarDataURI(s, actor), ResolutionAcks: acks, Tasks: []TaskTraceTeamTask{}}
 	for _, taskID := range ids {
 		task, err := GetTaskByIDSimple(s, taskID)
 		if err != nil {
@@ -673,10 +683,39 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 	return snapshot, nil
 }
 
+func taskTraceTeamAvatarDataURI(s *xorm.Session, username string) string {
+	data, mime, err := avatar.GetAvatarForUsername(s, username, 64)
+	if err != nil || len(data) == 0 || !taskTraceTeamAvatarMime[mime] {
+		return ""
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+}
+
+var taskTraceTeamAvatarMime = map[string]bool{
+	"image/bmp":  true,
+	"image/gif":  true,
+	"image/jpeg": true,
+	"image/png":  true,
+	"image/tiff": true,
+}
+
+func taskTraceTeamSafeAvatar(value string) string {
+	for mime := range taskTraceTeamAvatarMime {
+		if strings.HasPrefix(value, "data:"+mime+";base64,") {
+			return value
+		}
+	}
+	return ""
+}
+
 func taskTraceTeamSnapshotHash(snapshot TaskTraceTeamSnapshot) string {
-	copy := snapshot
-	copy.Updated = time.Time{}
-	b, _ := json.Marshal(copy)
+	normalized := snapshot
+	normalized.Updated = time.Time{}
+	normalized.Avatar = ""
+	b, err := json.Marshal(normalized)
+	if err != nil {
+		return ""
+	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -967,22 +1006,56 @@ func taskTraceTeamUpsertOutstanding(s *xorm.Session, a web.Auth, taskID int64, b
 	return (&TaskComment{TaskID: taskID, Comment: body}).Create(s, a)
 }
 
-func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, taskID int64, remote []TaskTraceTeamComment) error {
+func taskTraceTeamLocalCommentsByID(binding *TaskTraceTeamBinding, nodeID, actor string, comments []*TaskComment) (map[string]*TaskComment, []*TaskComment) {
+	byID := map[string]*TaskComment{}
+	duplicates := []*TaskComment{}
+	for _, comment := range comments {
+		id := ""
+		if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok {
+			id = marker.ID
+		} else {
+			// A newly-created local comment has no team marker yet. Its exported id is
+			// deterministic, so index it the same way before reading our own snapshot.
+			// This lets the first sync attach the marker instead of creating a duplicate.
+			id = taskTraceTeamCommentID(binding.ShareID, nodeID, comment, actor)
+		}
+		previous := byID[id]
+		if previous == nil {
+			byID[id] = comment
+			continue
+		}
+		// Releases before the identity fix could create a marked copy beside the
+		// original comment. Keep the newest copy (the marked one on a tie) and let
+		// the next merge attach a marker if the original wins.
+		_, commentMarked := taskTraceTeamReadMarker(comment.Comment)
+		_, previousMarked := taskTraceTeamReadMarker(previous.Comment)
+		if comment.Updated.After(previous.Updated) || (comment.Updated.Equal(previous.Updated) && commentMarked && !previousMarked) {
+			duplicates = append(duplicates, previous)
+			byID[id] = comment
+		} else {
+			duplicates = append(duplicates, comment)
+		}
+	}
+	return byID, duplicates
+}
+
+func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, nodeID, actor string, taskID int64, remote []TaskTraceTeamComment) error {
 	var local []*TaskComment
 	if err := s.Where("task_id = ?", taskID).Find(&local); err != nil {
 		return err
 	}
-	byID := map[string]*TaskComment{}
-	for _, comment := range local {
-		if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok {
-			byID[marker.ID] = comment
+	byID, duplicates := taskTraceTeamLocalCommentsByID(binding, nodeID, actor, local)
+	for _, duplicate := range duplicates {
+		if _, err := s.ID(duplicate.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+			return err
 		}
 	}
 	sort.Slice(remote, func(i, j int) bool { return remote[i].Created.Before(remote[j].Created) })
 	for _, shared := range remote {
 		body := taskTraceTeamAddMarker(shared.Body, shared.ID, shared.Author)
 		if existing := byID[shared.ID]; existing != nil {
-			if existing.Comment != body && shared.Updated.After(existing.Updated) {
+			_, marked := taskTraceTeamReadMarker(existing.Comment)
+			if !marked || (existing.Comment != body && shared.Updated.After(existing.Updated)) {
 				existing.Comment = body
 				if err := existing.Update(s, a); err != nil {
 					return err
@@ -1155,6 +1228,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		return err
 	}
 	localHash := taskTraceTeamSnapshotHash(local)
+	localChanged := binding.LastSnapshotHash != "" && binding.LastSnapshotHash != localHash
 	if err := taskTraceTeamWriteSnapshot(binding, local); err != nil {
 		return err
 	}
@@ -1192,7 +1266,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if err != nil {
 			return err
 		}
-		title, description, done, status, outstanding := base.Title, base.Description, base.Done, base.Status, base.Outstanding
+		title, done, status, outstanding := base.Title, base.Done, base.Status, base.Outstanding
 		fields := []string{"title", "done", "status"}
 		outstandingItems, outstandingOrder := taskTraceTeamOutstandingItems(base.Outstanding)
 		outstandingIDs := map[string]bool{}
@@ -1252,7 +1326,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		attachments := taskTraceTeamAllAttachments(rows)
-		description = taskTraceTeamRewriteAttachments(latest.Description, taskID, attachments, binding)
+		description := taskTraceTeamRewriteAttachments(latest.Description, taskID, attachments, binding)
 		outstanding = taskTraceTeamRewriteAttachments(outstanding, taskID, attachments, binding)
 		if status == "" {
 			if done {
@@ -1284,7 +1358,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		for _, comment := range commentByID {
 			comments = append(comments, comment)
 		}
-		if err := taskTraceTeamMergeComments(s, a, taskID, comments); err != nil {
+		if err := taskTraceTeamMergeComments(s, a, binding, node, actor, taskID, comments); err != nil {
 			return err
 		}
 		binding.Base[node] = TaskTraceTeamBase{Title: title, Description: description, Done: done, Status: status, Outstanding: outstanding}
@@ -1292,7 +1366,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	binding.Conflicts = conflicts
 	binding.LastSync = time.Now().UTC()
 	binding.LastError = ""
-	if binding.Notify && binding.LastSnapshotHash != "" && binding.LastSnapshotHash != localHash {
+	if binding.Notify && localChanged {
 		rootTitle := "团队任务"
 		if root, err := GetTaskByIDSimple(s, binding.RootTaskID); err == nil {
 			rootTitle = root.Title
@@ -1301,12 +1375,21 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			if strings.EqualFold(member, actor) {
 				continue
 			}
-			notice := TaskTraceTeamNotification{ID: uuid.NewString(), ShareID: binding.ShareID, Actor: actor, TaskTitle: rootTitle, Created: time.Now().UTC()}
+			notice := TaskTraceTeamNotification{ID: uuid.NewString(), ShareID: binding.ShareID, Actor: actor, Avatar: local.Avatar, TaskTitle: rootTitle, Created: time.Now().UTC()}
 			path := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "notifications", strings.ToLower(member), notice.ID+".json")
 			_ = taskTraceTeamWriteJSON(path, &notice)
 		}
 	}
-	binding.LastSnapshotHash = localHash
+	// Rebuild after merging. The next sync must compare against the state the user
+	// now sees, otherwise a collaborator's imported change is reported as our own.
+	final, err := taskTraceTeamBuildSnapshot(s, binding, actor, state.DeviceID)
+	if err != nil {
+		return err
+	}
+	if err := taskTraceTeamWriteSnapshot(binding, final); err != nil {
+		return err
+	}
+	binding.LastSnapshotHash = taskTraceTeamSnapshotHash(final)
 	return nil
 }
 
@@ -1633,10 +1716,36 @@ func taskTraceTeamNotifications(binding *TaskTraceTeamBinding, username string) 
 		}
 		var notice TaskTraceTeamNotification
 		if taskTraceTeamReadJSON(filepath.Join(dir, entry.Name()), &notice) == nil {
+			notice.Avatar = taskTraceTeamSafeAvatar(notice.Avatar)
 			result = append(result, notice)
 		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Created.After(result[j].Created) })
+	return result
+}
+
+func taskTraceTeamProfiles(binding *TaskTraceTeamBinding) []TaskTraceTeamMemberProfile {
+	profiles := map[string]TaskTraceTeamMemberProfile{}
+	for _, member := range binding.Members {
+		profiles[strings.ToLower(member)] = TaskTraceTeamMemberProfile{Username: member}
+	}
+	snapshots, err := taskTraceTeamReadSnapshots(binding)
+	if err == nil {
+		for _, snapshot := range taskTraceTeamLatestActorSnapshots(snapshots) {
+			key := strings.ToLower(snapshot.Actor)
+			profile := profiles[key]
+			profile.Username = snapshot.Actor
+			if safe := taskTraceTeamSafeAvatar(snapshot.Avatar); safe != "" {
+				profile.Avatar = safe
+			}
+			profiles[key] = profile
+		}
+	}
+	result := make([]TaskTraceTeamMemberProfile, 0, len(profiles))
+	for _, profile := range profiles {
+		result = append(result, profile)
+	}
+	sort.Slice(result, func(i, j int) bool { return strings.ToLower(result[i].Username) < strings.ToLower(result[j].Username) })
 	return result
 }
 
@@ -1646,7 +1755,10 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		return TaskTraceTeamStatus{}, err
 	}
 	root := taskTraceTeamRoot()
-	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}}
+	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
+	profiles := map[string]TaskTraceTeamMemberProfile{
+		strings.ToLower(u.Username): {Username: u.Username, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
+	}
 	for _, binding := range state.Bindings {
 		ids := make([]int64, 0, len(binding.NodeTasks))
 		for _, id := range binding.NodeTasks {
@@ -1664,6 +1776,28 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		status.Bindings = append(status.Bindings, row)
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(&binding, u.Username)...)
+		for _, profile := range taskTraceTeamProfiles(&binding) {
+			key := strings.ToLower(profile.Username)
+			if current := profiles[key]; current.Avatar != "" && profile.Avatar == "" {
+				continue
+			}
+			profiles[key] = profile
+		}
+	}
+	for _, profile := range profiles {
+		status.Profiles = append(status.Profiles, profile)
+	}
+	sort.Slice(status.Profiles, func(i, j int) bool {
+		return strings.ToLower(status.Profiles[i].Username) < strings.ToLower(status.Profiles[j].Username)
+	})
+	avatarByActor := map[string]string{}
+	for _, profile := range status.Profiles {
+		avatarByActor[strings.ToLower(profile.Username)] = profile.Avatar
+	}
+	for i := range status.Notifications {
+		if status.Notifications[i].Avatar == "" {
+			status.Notifications[i].Avatar = avatarByActor[strings.ToLower(status.Notifications[i].Actor)]
+		}
 	}
 	sort.Slice(status.Notifications, func(i, j int) bool { return status.Notifications[i].Created.After(status.Notifications[j].Created) })
 	return status, nil

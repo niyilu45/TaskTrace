@@ -10,21 +10,65 @@
 
 		<template v-if="binding">
 			<div class="team-summary">
-				<p><strong>协作成员：</strong>{{ binding.members?.join('、') }}</p>
-				<p v-if="binding.last_sync" class="has-text-grey">最近同步：{{ formatDisplayDate(binding.last_sync) }}</p>
-				<p v-if="binding.last_error" class="notification is-warning is-light">共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。</p>
+				<div class="team-members">
+					<strong>协作成员：</strong>
+					<span
+						v-for="member in binding.members"
+						:key="member"
+						class="team-member-chip"
+					>
+						<img
+							v-if="avatarFor(member)"
+							:src="avatarFor(member)"
+							alt=""
+							class="team-member-avatar"
+						>
+						<span
+							v-else
+							class="team-member-avatar team-member-avatar--fallback"
+						>{{ initials(member) }}</span>
+						{{ member }}
+					</span>
+				</div>
+				<p
+					v-if="binding.last_sync"
+					class="has-text-grey"
+				>
+					最近同步：{{ formatDisplayDate(binding.last_sync) }}
+				</p>
+				<p
+					v-if="binding.last_error"
+					class="notification is-warning is-light"
+				>
+					共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。
+				</p>
 			</div>
 			<div class="field">
-				<label class="label" :for="`team-link-${taskId}`">任务链接</label>
+				<label
+					class="label"
+					:for="`team-link-${taskId}`"
+				>任务链接</label>
 				<div class="field has-addons">
 					<div class="control is-expanded">
-						<input :id="`team-link-${taskId}`" class="input" :value="binding.link" readonly>
+						<input
+							:id="`team-link-${taskId}`"
+							class="input"
+							:value="binding.link"
+							readonly
+						>
 					</div>
 					<div class="control">
-						<XButton variant="secondary" @click="copyLink">复制链接</XButton>
+						<XButton
+							variant="secondary"
+							@click="copyLink"
+						>
+							复制链接
+						</XButton>
 					</div>
 				</div>
-				<p class="help">接收者通过完整界面的“导入任务链接”添加，只能看到此任务和它的子任务、进展及遗留事项。</p>
+				<p class="help">
+					接收者通过完整界面的“导入任务链接”添加，只能看到此任务和它的子任务、进展及遗留事项。
+				</p>
 			</div>
 			<label class="checkbox team-notify">
 				<input
@@ -34,38 +78,65 @@
 				>
 				更新后通知其他协作成员
 			</label>
-			<p v-if="binding.conflicts?.length" class="notification is-danger is-light">
+			<p
+				v-if="binding.conflicts?.length"
+				class="notification is-danger is-light"
+			>
 				检测到 {{ binding.conflicts.length }} 项冲突，请从顶部的团队通知入口一次性处理。
 			</p>
 		</template>
 
-		<form v-else @submit.prevent="shareTask">
+		<form
+			v-else
+			@submit.prevent="shareTask"
+		>
 			<p>把当前任务及其全部子任务加入 teamData。父任务、同级任务和个人优先级不会共享。</p>
-			<div v-if="candidateMembers.length" class="field">
+			<div
+				v-if="candidateMembers.length"
+				class="field"
+			>
 				<span class="label">从 teamData 文件夹权限中发现的成员</span>
 				<label
 					v-for="member in candidateMembers"
 					:key="member"
 					class="checkbox team-member"
 				>
-					<input v-model="selectedMembers" type="checkbox" :value="member">
+					<input
+						v-model="selectedMembers"
+						type="checkbox"
+						:value="member"
+					>
 					{{ member }}
 				</label>
 			</div>
 			<div class="field">
-				<label class="label" :for="`team-members-${taskId}`">其他成员用户名</label>
+				<label
+					class="label"
+					:for="`team-members-${taskId}`"
+				>其他成员用户名</label>
 				<input
 					:id="`team-members-${taskId}`"
 					v-model="manualMembers"
 					class="input"
 					placeholder="多个用户名用逗号分隔"
 				>
-				<p class="help">同一用户名在多台电脑上会被识别为同一个人。</p>
+				<p class="help">
+					同一用户名在多台电脑上会被识别为同一个人。
+				</p>
 			</div>
-			<div v-if="!teamStore.status.repository?.shared" class="notification is-warning is-light">
+			<div
+				v-if="!teamStore.status.repository?.shared"
+				class="notification is-warning is-light"
+			>
 				尚未检测到 Windows 共享。请先在 teamData 文件夹属性中授予成员访问权限；程序重启后会自动识别共享路径和候选成员。
 			</div>
-			<XButton type="submit" variant="primary" :loading="teamStore.loading">共享当前任务</XButton>
+			<XButton
+				type="submit"
+				variant="primary"
+				:loading="teamStore.loading"
+			>
+				共享当前任务
+			</XButton>
 		</form>
 	</section>
 </template>
@@ -86,6 +157,14 @@ const manualMembers = ref('')
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const candidateMembers = computed(() => (teamStore.status.repository?.candidates ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
+
+function avatarFor(username: string) {
+	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+}
+
+function initials(username: string) {
+	return username.trim().slice(0, 2).toUpperCase() || '?'
+}
 
 onMounted(() => {
 	if (!teamStore.loaded) teamStore.refresh().catch(() => undefined)
@@ -119,8 +198,63 @@ async function setNotify(notify: boolean) {
 </script>
 
 <style scoped lang="scss">
-.team-collaboration { padding: 1rem; border: 1px solid var(--grey-200); border-radius: 10px; background: var(--white); }
-.team-summary { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; }
-.team-member { display: inline-flex; align-items: center; gap: .35rem; margin-inline-end: 1rem; }
-.team-notify { display: inline-flex; gap: .45rem; align-items: center; margin-block: .5rem 1rem; }
+.team-collaboration {
+	padding: 1rem;
+	border: 1px solid var(--grey-200);
+	border-radius: 10px;
+	background: var(--white);
+}
+
+.team-summary {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .5rem 1.5rem;
+}
+
+.team-members {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: .45rem;
+}
+
+.team-member-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: .35rem;
+	padding: .2rem .5rem .2rem .25rem;
+	border: 1px solid var(--grey-200);
+	border-radius: 999px;
+	background: var(--grey-50);
+}
+
+.team-member-avatar {
+	inline-size: 24px;
+	block-size: 24px;
+	border-radius: 50%;
+	object-fit: cover;
+}
+
+.team-member-avatar--fallback {
+	display: grid;
+	place-items: center;
+	background: var(--primary);
+	color: var(--white);
+	font-size: .6rem;
+	font-weight: 700;
+}
+
+.team-member {
+	display: inline-flex;
+	align-items: center;
+	gap: .35rem;
+	margin-inline-end: 1rem;
+}
+
+.team-notify {
+	display: inline-flex;
+	gap: .45rem;
+	align-items: center;
+	margin-block: .5rem 1rem;
+}
 </style>
