@@ -36,6 +36,7 @@ Invoke with the `Skill` tool before writing code in these areas:
 - [Dev commands and configuration](.agents/docs/dev-commands.md)
 - [License system](.agents/docs/license.md)
 
-## TaskTrace test releases
-- The user wants testing updates to replace the existing v0.1.0-beta.10 release assets, not create new tags or release versions, unless explicitly requested.
-- Push source to main; replace the ZIP and SHA256SUMS.txt assets after validation. Record the built source commit in the release notes and SOURCE-COMMIT.txt. Never package local user/test data.
+## TaskTrace delivery
+- After completing and validating user-requested work, commit it and push the source to `origin/main` automatically.
+- Create or update a GitHub Release only when the user explicitly says “更新程序”, “发布程序”, or otherwise explicitly requests a release. An ordinary implementation request authorizes the source push, not a Release.
+- For an authorized Release, record the built source commit in the release notes and `SOURCE-COMMIT.txt`, upload the portable ZIP and `SHA256SUMS.txt`, and never package local user or test data.
