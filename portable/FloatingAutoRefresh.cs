@@ -61,6 +61,8 @@ internal sealed partial class FloatingWindow {
     async void AutoRefreshTimerTick(object sender,EventArgs e) {
         if(selfTest)return;
         try {
+            if(DateTime.UtcNow>=completedHideRefreshAfterUtc && Visible && !collapsed && !busy && !rendering && !dragging && !AutoRefreshInteractionActive())
+                await LoadTasks(true);
             if(!teamSyncRunning && DateTime.UtcNow>=teamSyncAfterUtc) {
                 teamSyncRunning=true;teamSyncAfterUtc=DateTime.UtcNow.AddSeconds(15);
                 try {await Api("POST","/tasktrace/team/sync",null);}

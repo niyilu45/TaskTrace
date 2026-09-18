@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -167,7 +167,7 @@ internal sealed partial class FloatingWindow {
         if(leaves.Count!=shared.Items.Count)return false;
         for(int index=0;index<leaves.Count;index++) {
             var leaf=leaves[index];var item=shared.Items[index];
-            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.Done!=item.Done || leaf.Priority!=item.Priority)return false;
+            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.Done!=item.Done || leaf.CompletedAt!=item.CompletedAt || leaf.Priority!=item.Priority)return false;
         }
         return true;
     }
@@ -220,9 +220,10 @@ internal sealed partial class FloatingWindow {
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf).ToArray())node.Nodes.Remove(child);
             for(int index=0;index<shared.Items.Count;index++) {
                 var item=shared.Items[index];
-                var leaf=new TreeNode((index+1)+". [P"+item.Priority+"] "+OutstandingText(item.Html)){
-                    Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html,Done=item.Done,Priority=item.Priority},Checked=item.Done,
-                    ForeColor=item.Done?Color.FromArgb(100,110,125):ForeColor,
+                int number=item.Number>0?item.Number:index+1;
+                var leaf=new TreeNode(number+". [P"+item.Priority+"] "+OutstandingText(item.Html)){
+                    Tag=new OutstandingLeaf{TaskId=id,Id=item.Id,Html=item.Html,Done=item.Done,CompletedAt=item.CompletedAt,Priority=item.Priority},Checked=item.Done,
+                    ForeColor=item.Done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
                     ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};
                 node.Nodes.Add(leaf);tasks.ReserveSimpleImageSpace(leaf);
             }

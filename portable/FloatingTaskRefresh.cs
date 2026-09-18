@@ -14,7 +14,23 @@ internal sealed partial class FloatingWindow {
     string TaskViewContext() {
         var selected=projects.SelectedItem as Project;
         return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,singleLine.Checked,
-            prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray()});
+            prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
+    }
+    static string FieldText(Dictionary<string,object> source,string key) {object value;return source!=null && source.TryGetValue(key,out value) && value!=null?Convert.ToString(value):"";}
+    bool HideCompleted(bool done,string completedAt,ref DateTime nextRefreshUtc) {
+        if(!done || showCompleted.Checked)return false;
+        if(completedHideDelayMinutes<=0)return true;
+        DateTimeOffset completed;if(!DateTimeOffset.TryParse(completedAt,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out completed))return true;
+        DateTime deadline=completed.UtcDateTime.AddMinutes(completedHideDelayMinutes);
+        if(deadline<=DateTime.UtcNow)return true;
+        if(deadline<nextRefreshUtc)nextRefreshUtc=deadline;
+        return false;
+    }
+    SharedList FilterCompletedOutstanding(SharedList source,ref DateTime nextRefreshUtc) {
+        if(source==null)return null;
+        var filtered=new SharedList {CommentId=source.CommentId};
+        for(int index=0;index<source.Items.Count;index++) {var item=source.Items[index];if(item.Number<=0)item.Number=index+1;if(!HideCompleted(item.Done,item.CompletedAt,ref nextRefreshUtc))filtered.Items.Add(item);}
+        return filtered;
     }
     bool TaskLoadCurrent(int version,string context,bool background) {
         return version==taskLoadVersion && !closing && !IsDisposed && context==TaskViewContext() &&
@@ -68,6 +84,7 @@ internal sealed partial class FloatingWindow {
         }
     }
     async Task<bool> LoadTasks(bool background=false) {
+        DateTime nextCompletionRefreshUtc=DateTime.MaxValue;
         int version=++taskLoadVersion;
         string context=TaskViewContext();
         var oldProject=projects.SelectedItem as Project;
@@ -109,11 +126,12 @@ internal sealed partial class FloatingWindow {
         var included=new HashSet<long>();var matches=new HashSet<long>();string query=search.Text.Trim();
         var sharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
         foreach(long id in ordered) {
-            if(!showCompleted.Checked && Convert.ToBoolean(all[id]["done"]))continue;
+            if(HideCompleted(Convert.ToBoolean(all[id]["done"]),FieldText(all[id],"done_at"),ref nextCompletionRefreshUtc))continue;
             if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
             candidates.Add(id);
         }
         if(PriorityFilterActive && visiblePriorities.Count>0)await ReadSharedLists(candidates,sharedLists);
+        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(sharedLists[id],ref nextCompletionRefreshUtc);
         if(!TaskLoadCurrent(version,context,background))return false;
         foreach(long id in candidates) {
             SharedList shared;bool outstandingMatch=sharedLists.TryGetValue(id,out shared) && shared.Items.Any(MatchesPriority);
@@ -127,7 +145,7 @@ internal sealed partial class FloatingWindow {
             if(!included.Contains(id))continue;bool done=Convert.ToBoolean(all[id]["done"]);
             string taskStatus=TaskStatusValue(all[id]);
             nodes[id]=new TaskNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
-                ForeColor=done?Color.FromArgb(100,110,125):ForeColor,
+                ForeColor=done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
                 ToolTipText=TaskStatusText(taskStatus)+" · "+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
         }
         foreach(long id in ordered) {
@@ -146,6 +164,7 @@ internal sealed partial class FloatingWindow {
             if(visibleRoots.Contains(ancestor))needed.Add((long)node.Tag);
         }
         await ReadSharedLists(needed.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
+        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(sharedLists[id],ref nextCompletionRefreshUtc);
         if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
@@ -202,6 +221,7 @@ internal sealed partial class FloatingWindow {
         }
         var restoredSelection=FindRefreshNode(selectedKey);if(restoredSelection!=null && tasks.SelectedNode!=restoredSelection)tasks.SelectedNode=restoredSelection;
         var restoredTop=FindRefreshNode(topKey);if(restoredTop!=null && tasks.TopNode!=restoredTop)tasks.TopNode=restoredTop;
+        completedHideRefreshAfterUtc=nextCompletionRefreshUtc;
         return version==taskLoadVersion;
     }
 }

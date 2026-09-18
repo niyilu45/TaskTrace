@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Drawing;
 using System.IO;
@@ -13,14 +13,25 @@ internal sealed partial class TaskTreeView {
     static readonly Regex PriorityPrefix=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+)(?<priority>\[P[0-9]\])(?=\s|$)");
     TreeNode pressedPriorityNode;
     bool swallowPriorityUp;
-    Font boldNodeFont;
+    Font boldNodeFont, strikeNodeFont, boldStrikeNodeFont;
+    internal bool StrikeCompleted;
 
     internal Font DisplayFont(TreeNode node) {
-        if(node==null || !(node.Tag is FloatingWindow.OutstandingLeaf))return node!=null && node.NodeFont!=null?node.NodeFont:Font;
-        if(boldNodeFont==null)boldNodeFont=new Font(Font,Font.Style|FontStyle.Bold);
-        return boldNodeFont;
+        bool outstanding=node!=null && node.Tag is FloatingWindow.OutstandingLeaf;
+        Font result=node!=null && node.NodeFont!=null?node.NodeFont:Font;
+        if(outstanding) {
+            if(boldNodeFont==null)boldNodeFont=new Font(Font,Font.Style|FontStyle.Bold);
+            result=boldNodeFont;
+        }
+        if(!StrikeCompleted || node==null || !node.Checked)return result;
+        if(outstanding) {
+            if(boldStrikeNodeFont==null)boldStrikeNodeFont=new Font(Font,Font.Style|FontStyle.Bold|FontStyle.Strikeout);
+            return boldStrikeNodeFont;
+        }
+        if(strikeNodeFont==null)strikeNodeFont=new Font(result,result.Style|FontStyle.Strikeout);
+        return strikeNodeFont;
     }
-    internal void DisposeDisplayFonts() {if(boldNodeFont!=null){boldNodeFont.Dispose();boldNodeFont=null;}}
+    internal void DisposeDisplayFonts() {foreach(var font in new[]{boldNodeFont,strikeNodeFont,boldStrikeNodeFont})if(font!=null)font.Dispose();boldNodeFont=strikeNodeFont=boldStrikeNodeFont=null;}
     protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);}
     internal string CurrentTaskText(TreeNode node) {
         var task=node as FloatingWindow.TaskNode;string text=node==null?"":node.Text.TrimEnd(' ');

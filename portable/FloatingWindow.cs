@@ -40,6 +40,10 @@ internal sealed partial class FloatingWindow : Form {
     bool autoSaveEnabled = true;
     int autoSaveSeconds = 30;
     int defaultPriority = 7;
+    bool grayCompleted = true;
+    bool strikeCompleted;
+    int completedHideDelayMinutes;
+    DateTime completedHideRefreshAfterUtc = DateTime.MaxValue;
     int page = 1, total, expandedHeight = 560;
     readonly bool selfTest;
     bool allowExit, simpleMode;
@@ -54,9 +58,9 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html; public bool Done; public int Priority=9; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, CompletedAt; public bool Done; public int Priority=9; }
     sealed class PendingItem {
-        public string Id, Html; public int Number; public bool Done; public int Priority=9;
+        public string Id, Html, CompletedAt; public int Number; public bool Done; public int Priority=9;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -99,7 +103,7 @@ internal sealed partial class FloatingWindow : Form {
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
-        LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
+        LoadBounds(); LoadAutoSaveSettings(); tasks.StrikeCompleted=strikeCompleted; LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 3, 0), WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var settingsButton = new Button { Text = "设置", AutoSize = true };
@@ -271,10 +275,11 @@ internal sealed partial class FloatingWindow : Form {
                 string attrs=match.Groups["attrs"].Value;
                 var id=Regex.Match(attrs,"\\bdata-id\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
                 if(!id.Success)continue;
+                var completedAt=Regex.Match(attrs,"\\bdata-completed-at\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
                 var done=Regex.Match(attrs,"\\bdata-done\\s*=\\s*\"(?<value>true|false)\"",RegexOptions.IgnoreCase);
                 var priority=Regex.Match(attrs,"\\bdata-priority\\s*=\\s*\"(?<value>[0-9])\"",RegexOptions.IgnoreCase);
                 int value=9;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
-                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=match.Groups["body"].Value,Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),Priority=Math.Max(0,Math.Min(9,value))});
+                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=match.Groups["body"].Value,Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,Priority=Math.Max(0,Math.Min(9,value))});
             }
         } else {
             var latest = DailyHistory(notes).FirstOrDefault();
@@ -287,7 +292,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\">"+item.Html+"</li>"))+"</ul>";
+        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+">"+item.Html+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }
@@ -809,10 +814,13 @@ internal sealed partial class FloatingWindow : Form {
             autoSaveEnabled = Convert.ToBoolean(settings["enabled"]);
             autoSaveSeconds = Math.Max(5, Math.Min(3600, Convert.ToInt32(settings["seconds"])));
             if(settings.ContainsKey("default_priority"))defaultPriority=Math.Max(0,Math.Min(9,Convert.ToInt32(settings["default_priority"])));
+            if(settings.ContainsKey("completed_gray"))grayCompleted=Convert.ToBoolean(settings["completed_gray"]);
+            if(settings.ContainsKey("completed_strikeout"))strikeCompleted=Convert.ToBoolean(settings["completed_strikeout"]);
+            if(settings.ContainsKey("completed_hide_delay_minutes"))completedHideDelayMinutes=Math.Max(0,Math.Min(525600,Convert.ToInt32(settings["completed_hide_delay_minutes"])));
         } catch { }
     }
     void ShowAutoSaveSettings(bool verify=false) {
-        using(var settings = DpiDialog(new Form { Text = "设置", ClientSize = new Size(470, 510), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false })) {
+        using(var settings = DpiDialog(new Form { Text = "设置", ClientSize = new Size(470, 625), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false })) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
@@ -826,29 +834,39 @@ internal sealed partial class FloatingWindow : Form {
             var selectNone = new Button { Text = "全不选", Location = new Point(320, 254), Size = new Size(110, 30) };
             selectAll.Click += delegate {for(int index=0;index<visibleChoices.Items.Count;index++)visibleChoices.SetItemChecked(index,true);};
             selectNone.Click += delegate {for(int index=0;index<visibleChoices.Items.Count;index++)visibleChoices.SetItemChecked(index,false);};
-            var apply = new Button { Text = "保存设置", Location = new Point(320, 326), Size = new Size(110, 32) };
+            var completedLabel = new Label { Text = "完成事项显示（同时作用于任务和遗留事项）", Location = new Point(18, 326), AutoSize = true };
+            var completedGray = new CheckBox { Text = "完成后字体变灰", Checked = grayCompleted, Location = new Point(18, 354), AutoSize = true, AccessibleName = "完成后字体变灰" };
+            var completedStrike = new CheckBox { Text = "完成后添加删除线", Checked = strikeCompleted, Location = new Point(190, 354), AutoSize = true, AccessibleName = "完成后添加删除线" };
+            var hideDelayLabel = new Label { Text = "未勾选“显示已完成”时，完成后延迟隐藏", Location = new Point(18, 390), AutoSize = true };
+            var hideDelay = new NumericUpDown { Minimum = 0, Maximum = 525600, Value = completedHideDelayMinutes, Location = new Point(18, 418), Width = 100, AccessibleName = "完成后延迟隐藏分钟数" };
+            var hideDelayUnit = new Label { Text = "分钟（0 为立即隐藏）", Location = new Point(128, 422), AutoSize = true };
+            var apply = new Button { Text = "保存设置", Location = new Point(320, 416), Size = new Size(110, 32) };
             settings.AcceptButton=apply;
-            apply.Click += delegate {
+            apply.Click += async delegate {
                 try {
-                    File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value }));
+                    File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value, completed_gray = completedGray.Checked, completed_strikeout = completedStrike.Checked, completed_hide_delay_minutes = (int)hideDelay.Value }));
                     autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority;
+                    grayCompleted=completedGray.Checked;strikeCompleted=completedStrike.Checked;completedHideDelayMinutes=(int)hideDelay.Value;tasks.StrikeCompleted=strikeCompleted;
                     ChangePrioritySelection(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
+                    await Reload();
                     settings.Close();
                 } catch { MessageBox.Show(settings, "设置保存失败，请检查目录写入权限。"); }
             };
-            var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 380), Size = new Size(430, 48), AutoEllipsis = true };
-            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 446), Size = new Size(250, 32) };
+            var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 495), Size = new Size(430, 48), AutoEllipsis = true };
+            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 568), Size = new Size(250, 32) };
             chooseData.Click += delegate {
                 try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -STA -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "Configure-TaskTrace.ps1") + "\"") { UseShellExecute = false, CreateNoWindow = true }); }
                 catch(Exception e) { MessageBox.Show(settings, e.Message); }
             };
-            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, apply, dataLabel, chooseData });
+            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, completedLabel, completedGray, completedStrike, hideDelayLabel, hideDelay, hideDelayUnit, apply, dataLabel, chooseData });
             Exception verificationError=null;
             if(verify)settings.Shown+=delegate {
                 try {
                     var checkedPriorities=new HashSet<int>(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
                     if((int)priority.Value!=defaultPriority || priority.AccessibleName!="默认新增任务优先级" || !priorityLabel.Text.Contains("0 最高，9 最低"))throw new Exception("Default priority setting is missing or incorrect");
                     if(visibleChoices.Items.Count!=10 || visibleChoices.AccessibleName!="悬浮窗展示优先级" || !checkedPriorities.SetEquals(visiblePriorities) || visibleChoices.Bottom>settings.ClientSize.Height || chooseData.Bottom>settings.ClientSize.Height)throw new Exception("Visible priority settings are missing, stale, or clipped");
+                    if(completedGray.Checked!=grayCompleted || completedStrike.Checked!=strikeCompleted || (int)hideDelay.Value!=completedHideDelayMinutes)throw new Exception("Completed item presentation settings are stale");
+                    if(completedGray.Bottom>settings.ClientSize.Height || completedStrike.Bottom>settings.ClientSize.Height || hideDelay.Bottom>settings.ClientSize.Height || apply.Bottom>settings.ClientSize.Height)throw new Exception("Completed item presentation settings are clipped");
                     selectNone.PerformClick();if(Enumerable.Range(0,10).Any(index=>visibleChoices.GetItemChecked(index)))throw new Exception("Select-none did not clear visible priorities");
                     selectAll.PerformClick();if(Enumerable.Range(0,10).Any(index=>!visibleChoices.GetItemChecked(index)))throw new Exception("Select-all did not restore visible priorities");
                     for(int index=0;index<10;index++)visibleChoices.SetItemChecked(index,visiblePriorities.Contains(index));
@@ -877,13 +895,13 @@ internal sealed partial class FloatingWindow : Form {
     async Task TestFlow() {
         try {
             string settingsPath=Path.Combine(data,"autosave.json");string savedSettings=File.Exists(settingsPath)?File.ReadAllText(settingsPath):null;
-            bool savedAutoEnabled=autoSaveEnabled;int savedAutoSeconds=autoSaveSeconds,savedDefaultPriority=defaultPriority;
+            bool savedAutoEnabled=autoSaveEnabled,savedGrayCompleted=grayCompleted,savedStrikeCompleted=strikeCompleted;int savedAutoSeconds=autoSaveSeconds,savedDefaultPriority=defaultPriority,savedHideDelay=completedHideDelayMinutes;
             try {
-                File.WriteAllText(settingsPath,json.Serialize(new{enabled=false,seconds=17,default_priority=4}));LoadAutoSaveSettings();
-                if(autoSaveEnabled || autoSaveSeconds!=17 || defaultPriority!=4)throw new Exception("Default priority setting did not load");
+                File.WriteAllText(settingsPath,json.Serialize(new{enabled=false,seconds=17,default_priority=4,completed_gray=false,completed_strikeout=true,completed_hide_delay_minutes=90}));LoadAutoSaveSettings();
+                if(autoSaveEnabled || autoSaveSeconds!=17 || defaultPriority!=4 || grayCompleted || !strikeCompleted || completedHideDelayMinutes!=90)throw new Exception("Floating settings did not load");
             } finally {
                 if(savedSettings==null){if(File.Exists(settingsPath))File.Delete(settingsPath);}else File.WriteAllText(settingsPath,savedSettings);
-                autoSaveEnabled=savedAutoEnabled;autoSaveSeconds=savedAutoSeconds;defaultPriority=savedDefaultPriority;entryPriority.SelectedIndex=defaultPriority;
+                autoSaveEnabled=savedAutoEnabled;autoSaveSeconds=savedAutoSeconds;defaultPriority=savedDefaultPriority;grayCompleted=savedGrayCompleted;strikeCompleted=savedStrikeCompleted;completedHideDelayMinutes=savedHideDelay;tasks.StrikeCompleted=strikeCompleted;entryPriority.SelectedIndex=defaultPriority;
             }
             Error(new Exception("Diagnostic test", new System.ComponentModel.Win32Exception(1155, "No default browser #tasktrace-local=TEST_PRIVATE_SESSION")));
             string diagnostic = File.ReadAllText(Path.Combine(data, "TaskTrace-window-error.log"));
@@ -939,14 +957,16 @@ internal sealed partial class FloatingWindow : Form {
             await Api("PATCH", "/tasks/" + childId, new { done = true });
             if(Convert.ToBoolean((await Api("GET", "/tasks/" + id, null))["done"])) throw new Exception("Child completion incorrectly completed parent");
             await Api("PATCH", "/tasks/" + childId, new { done = false });
-            var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二",Done=true,Priority=2});
+            bool styleGrayBeforeTest=grayCompleted,styleStrikeBeforeTest=strikeCompleted;int hideDelayBeforeTest=completedHideDelayMinutes;
+            grayCompleted=true;strikeCompleted=true;completedHideDelayMinutes=90;tasks.StrikeCompleted=true;
+            var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二",Done=true,CompletedAt=DateTimeOffset.UtcNow.ToString("o"),Priority=2});
             await WriteShared(childId,sharedTest);
             long oldDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第一条", "");
             long sameDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第二条", "");
             await SaveProgress(childId,DateTime.Today.AddDays(-2),"合并编辑", "",null,sameDay,"<p>合并编辑</p>",new List<long>{oldDay});
             var sharedHistory=await ReadHistory(childId);
             var parsedShared=ReadShared(sharedHistory);
-            if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=9 || !parsedShared.Items[1].Done || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding status, priority or merged history failed");
+            if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=9 || !parsedShared.Items[1].Done || String.IsNullOrWhiteSpace(parsedShared.Items[1].CompletedAt) || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding status, priority, completion time or merged history failed");
             sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
             TestSimpleModeRecovery();
@@ -961,7 +981,7 @@ internal sealed partial class FloatingWindow : Form {
             var sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();
             var sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
             var leafState=(OutstandingLeaf)sharedLeaf.Tag;
-            if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2 || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Full mode direct outstanding status, priority or bold font failed");
+            if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || String.IsNullOrWhiteSpace(leafState.CompletedAt) || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2 || !tasks.DisplayFont(sharedLeaf).Bold || !tasks.DisplayFont(sharedLeaf).Strikeout || sharedLeaf.ForeColor!=Color.FromArgb(100,110,125))throw new Exception("Full mode direct outstanding completion style, time, priority or bold font failed");
             if(singleLine.Parent!=projectRow || !singleLine.Visible || singleLine.AccessibleName!="任务单行显示")throw new Exception("Single-line checkbox is missing from full floating mode");
             rendering=true;singleLine.Checked=true;rendering=false;ApplyTaskTreeLayout();await LoadTasks();
             var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
@@ -982,6 +1002,8 @@ internal sealed partial class FloatingWindow : Form {
             SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(outstandingPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(outstandingPoint));
             bool outstandingReopened=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);var state=ReadShared(await ReadHistory(childId));if(state.Items.Count==1 && !state.Items[0].Done){outstandingReopened=true;break;}}
             if(!outstandingReopened)throw new Exception("Outstanding completion box click did not persist");while(busy)await Task.Delay(20);
+            var reopenedOutstanding=ReadShared(await ReadHistory(childId)).Items.Single();if(!String.IsNullOrWhiteSpace(reopenedOutstanding.CompletedAt))throw new Exception("Reopened outstanding item retained its completion time");
+            grayCompleted=styleGrayBeforeTest;strikeCompleted=styleStrikeBeforeTest;completedHideDelayMinutes=hideDelayBeforeTest;tasks.StrikeCompleted=strikeCompleted;
             await UpdateOutstandingState(childId,"test-two",null,4);var updatedShared=ReadShared(await ReadHistory(childId));
             if(updatedShared.Items.Count!=1 || updatedShared.Items[0].Done || updatedShared.Items[0].Priority!=4)throw new Exception("Outstanding completion or priority update failed");
             await LoadTasks();sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
@@ -1078,7 +1100,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: tray reset-to-center and persistent edge hide/hover restore, bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, bold outstanding items, persisted full/simple single-line task paths, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: tray reset-to-center and persistent edge hide/hover restore, bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, configurable completed gray/strikeout and delayed hide, bold outstanding items, persisted full/simple single-line task paths, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

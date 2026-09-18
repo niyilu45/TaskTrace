@@ -269,7 +269,11 @@ internal sealed partial class FloatingWindow {
     async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
         var shared=ReadShared(await ReadHistory(taskId));var item=shared.Items.FirstOrDefault(value=>value.Id==itemId);
         if(item==null)throw new Exception("这条遗留事项已被移动或移除，请刷新后重试。");
-        if(done.HasValue)item.Done=done.Value;
+        if(done.HasValue) {
+            if(done.Value && !item.Done)item.CompletedAt=DateTimeOffset.UtcNow.ToString("o");
+            else if(!done.Value)item.CompletedAt=null;
+            item.Done=done.Value;
+        }
         if(priority.HasValue)item.Priority=Math.Max(0,Math.Min(9,priority.Value));
         await WriteShared(taskId,shared);
     }
@@ -531,7 +535,7 @@ internal sealed partial class FloatingWindow {
         if(useSimpleMode)SetSimpleMode(false);
     }
     async Task TestInteractions(){
-        var project=projects.SelectedItem as Project;var created=new List<long>();
+        var project=projects.SelectedItem as Project;var created=new List<long>();bool originalShowCompleted=showCompleted.Checked;
         {
             for(int number=0;number<=9;number++)if(PriorityNumber(new Dictionary<string,object>{{"priority",10-number}})!=number)throw new Exception("Priority range mapping failed");
             if(PriorityNumber(new Dictionary<string,object>{{"priority",0}})!=9)throw new Exception("Default priority is not nine");
@@ -560,6 +564,7 @@ internal sealed partial class FloatingWindow {
             compactMove=MakeDropPlan(node(child),node(sibling),-1);if(compactMove==null || compactMove.ParentId!=b || compactMove.BeforeId!=sibling)throw new Exception("Compact sibling drop target was not resolved");await ExecuteDrop(compactMove);
             if(node(child).Parent!=node(b) || node(b).Nodes[0]!=node(child))throw new Exception("Compact child ordering did not survive reload");
             SetSimpleMode(false);
+            rendering=true;showCompleted.Checked=true;rendering=false;await LoadTasks();
             var pictures=new List<PastedImage>();using(var bitmap=new Bitmap(80,50)){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.SteelBlue);using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}
             string imageHtml=await UploadOutstandingPictures(a,pictures);var source=new SharedList();source.Items.Add(new PendingItem{Id="drag-image",Html="带图片的遗留事项"+imageHtml,Done=true,Priority=3});source.Items.Add(new PendingItem{Id="drag-text",Html="其他事项"});
             var target=new SharedList();target.Items.Add(new PendingItem{Id="existing",Html="已存在的遗留事项"});
@@ -602,7 +607,7 @@ internal sealed partial class FloatingWindow {
         }
         {
             foreach(long id in created.AsEnumerable().Reverse())try{await Api("DELETE","/tasks/"+id,null);}catch{}
-            rendering=true;prioritySort.Checked=false;rendering=false;await LoadTasks();
+            rendering=true;prioritySort.Checked=false;showCompleted.Checked=originalShowCompleted;rendering=false;await LoadTasks();
         }
     }
 }
