@@ -21,6 +21,8 @@ internal sealed partial class FloatingWindow {
     bool autoRefreshDatabaseVersionKnown,autoRefreshDatabaseFailed;
     DateTime autoRefreshDatabaseRetryAfterUtc;
     string autoRefreshDatabaseError="";
+    DateTime teamSyncAfterUtc=DateTime.MinValue;
+    bool teamSyncRunning;
 
     [DllImport("winsqlite3.dll",EntryPoint="sqlite3_open_v2",ExactSpelling=true,CallingConvention=CallingConvention.Cdecl)]
     static extern int AutoRefreshSqliteOpen(byte[] path,out IntPtr database,int flags,IntPtr vfs);
@@ -58,7 +60,15 @@ internal sealed partial class FloatingWindow {
 
     async void AutoRefreshTimerTick(object sender,EventArgs e) {
         if(selfTest)return;
-        try {await ProcessAutoRefresh();}
+        try {
+            if(!teamSyncRunning && DateTime.UtcNow>=teamSyncAfterUtc) {
+                teamSyncRunning=true;teamSyncAfterUtc=DateTime.UtcNow.AddSeconds(15);
+                try {await Api("POST","/tasktrace/team/sync",null);}
+                catch {teamSyncAfterUtc=DateTime.UtcNow.AddSeconds(15);}
+                finally {teamSyncRunning=false;}
+            }
+            await ProcessAutoRefresh();
+        }
         catch {DeferAutoRefreshFailure();}
     }
 

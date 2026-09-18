@@ -90,7 +90,8 @@
 				:key="note.id"
 				class="history-entry"
 			>
-				<time>{{ note.date }}：</time><ReadonlyRichText :html="note.progress" />
+				<time>{{ note.date }}<template v-if="showAuthors(note.date)"> · {{ authorsByDate[note.date].join('、') }}</template>：</time>
+				<strong v-if="showAuthors(note.date)" class="progress-author">{{ note.author }}：</strong><ReadonlyRichText :html="note.progress" />
 				<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
 			</div>
 			<button
@@ -117,15 +118,30 @@ import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
+import {useAuthStore} from '@/stores/auth'
 const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number}>()
 defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()
+const authStore = useAuthStore()
 const history = ref<TaskComment[]>([])
 const allNotes = computed(() => sortProgressNotes(history.value))
 const progressBacklinkMap = computed(() => progressBacklinks(history.value))
 const limitedNotes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
 const showAllProgress = ref(false)
 const notes = computed(() => showAllProgress.value ? allNotes.value : limitedNotes.value)
+const authorsByDate = computed<Record<string, string[]>>(() => {
+	const result: Record<string, string[]> = {}
+	for (const note of allNotes.value) {
+		if (!note.author) continue
+		const authors = result[note.date] ||= []
+		if (!authors.includes(note.author)) authors.push(note.author)
+	}
+	return result
+})
+const showAuthors = (date: string) => {
+	const authors = authorsByDate.value[date] ?? []
+	return authors.length > 1 || (authors.length === 1 && authors[0].toLowerCase() !== (authStore.info?.username || '').toLowerCase())
+}
 const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
 watch(() => props.progressDays, () => { showAllProgress.value = false })
 // The latest daily record replaces earlier outstanding items, including clearing them.
@@ -234,5 +250,6 @@ onBeforeUnmount(() => { disposed = true })
  }
  time { font-weight: 600;
  }
+.progress-author { margin-inline-end: .25rem; }
 }
 </style>

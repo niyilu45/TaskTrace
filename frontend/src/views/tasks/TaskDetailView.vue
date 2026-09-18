@@ -371,6 +371,11 @@
 							@update:modelValue="Object.assign(task, $event)"
 						/>
 					</div>
+
+					<TeamCollaboration
+						v-if="canWrite"
+						:task-id="taskId"
+					/>
 					
 					<!-- Reactions -->
 					<Reactions
@@ -707,6 +712,7 @@ import Comments from '@/components/tasks/partials/Comments.vue'
 import CreatedUpdated from '@/components/tasks/partials/CreatedUpdated.vue'
 import Datepicker from '@/components/input/Datepicker.vue'
 import Description from '@/components/tasks/partials/Description.vue'
+import TeamCollaboration from '@/components/tasks/partials/TeamCollaboration.vue'
 import EditAssignees from '@/components/tasks/partials/EditAssignees.vue'
 import EditLabels from '@/components/tasks/partials/EditLabels.vue'
 import Heading from '@/components/tasks/partials/Heading.vue'

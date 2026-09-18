@@ -1,5 +1,6 @@
 import type {TaskComment} from '@/client/generated'
 import {splitProgressReferences, normalizeProgressReferences} from './progressReferences'
+import {teamCommentAuthor} from './tasktraceTeam'
 
 export function parseProgressNote(note: TaskComment) {
 	// Parse in an inert document; all returned HTML is sanitized by ReadonlyRichText before rendering.
@@ -24,7 +25,8 @@ export function parseProgressNote(note: TaskComment) {
 	}
 	const progress = doc.body.innerHTML
 	const {html: ownProgress, references} = splitProgressReferences(progress)
-	return {id: note.id, date, daily: !!match, progress, ownProgress, references, outstanding, created: Number.isNaN(+created) ? 0 : +created}
+	const fallbackAuthor = note.author?.username || note.author?.name || ''
+	return {id: note.id, date, daily: !!match, progress, ownProgress, references, outstanding, author: teamCommentAuthor(note.comment || '', fallbackAuthor), created: Number.isNaN(+created) ? 0 : +created}
 }
 
 export function sortProgressNotes(notes: TaskComment[]) {
@@ -71,8 +73,8 @@ export function progressBacklinks(history: TaskComment[]): Record<number, Progre
 	for (const items of Object.values(result)) items.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id)
 	return result
 }
-export function mergedDay(history: TaskComment[], date: string) {
-	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
+export function mergedDay(history: TaskComment[], date: string, author?: string) {
+	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date && (!author || note.author.toLowerCase() === author.toLowerCase())).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
 	const primary = notes.reduce<number | undefined>((id, note) => Math.max(id || 0, note.id || 0) || undefined, undefined)
 	const ids = new Set(notes.map(note => note.id).filter((id): id is number => !!id && id !== primary))
 	for (const note of history.filter(note => notes.some(active => active.id === note.id))) {

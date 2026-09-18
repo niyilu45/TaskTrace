@@ -60,6 +60,37 @@ try {
     if (![IO.Path]::IsPathRooted($configuredPath)) { $configuredPath = Join-Path $packageRoot $configuredPath }
     $dataRoot = [IO.Path]::GetFullPath($configuredPath)
     New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+    $teamRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'teamData'))
+    New-Item -ItemType Directory -Path $teamRoot -Force | Out-Null
+    # The folder's NTFS/share properties provide suggestions only. A task link is
+    # still authoritative, so collaboration keeps working with NAS shares and
+    # domain accounts which this machine cannot enumerate in advance.
+    $teamCandidates = @()
+    try {
+        $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $teamCandidates = @((Get-Acl -LiteralPath $teamRoot).Access | ForEach-Object { $_.IdentityReference.Value } | Where-Object {
+            $_ -and $_ -ne $currentIdentity -and $_ -notmatch '^(BUILTIN|NT AUTHORITY|CREATOR OWNER)\\'
+        } | ForEach-Object { ($_ -split '\\')[-1] } | Sort-Object -Unique)
+    } catch { $teamCandidates = @() }
+    $teamLinkPath = $teamRoot
+    $teamShareName = $null
+    try {
+        $resolvedTeamRoot = [IO.Path]::GetFullPath($teamRoot).TrimEnd('\')
+        $matchingShare = Get-CimInstance -ClassName Win32_Share -ErrorAction Stop | Where-Object {
+            $_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -eq $resolvedTeamRoot)
+        } | Select-Object -First 1
+        if ($null -ne $matchingShare) {
+            $teamShareName = [string]$matchingShare.Name
+            $teamLinkPath = '\\' + $env:COMPUTERNAME + '\' + $teamShareName
+        }
+    } catch { }
+    $repositoryInfo = [ordered]@{
+        path = $teamLinkPath
+        computer = [string]$env:COMPUTERNAME
+        candidates = @($teamCandidates)
+        shared = ($null -ne $teamShareName)
+    }
+    [IO.File]::WriteAllText((Join-Path $teamRoot 'repository-info.json'), ($repositoryInfo | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
     try {
         $sessionLock = [IO.File]::Open((Join-Path $dataRoot 'session.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
     } catch {
@@ -195,6 +226,7 @@ public sealed class TaskTraceProcessJob : IDisposable {
     $stage = 'Start local server'
     $env:TASKTRACE_PACKAGE_ROOT = $packageRoot
     $env:TASKTRACE_DATA_ROOT = $dataRoot
+    $env:TASKTRACE_TEAM_ROOT = $teamRoot
     $serverStart = New-Object Diagnostics.ProcessStartInfo
     $serverStart.FileName = $binary
     $serverStart.Arguments = '--config "' + $configFile + '"'

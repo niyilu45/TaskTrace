@@ -2726,6 +2726,103 @@ export type TaskTraceOutstandingMove = {
     readonly task_id?: number;
 };
 
+export type TaskTraceTeamBindingStatus = {
+    conflicts?: Array<TaskTraceTeamConflict> | null;
+    last_error?: string;
+    last_sync?: string;
+    link?: string;
+    members?: Array<string> | null;
+    notify?: boolean;
+    owner?: string;
+    root_task_id?: number;
+    share_id?: string;
+    task_ids?: Array<number> | null;
+};
+
+export type TaskTraceTeamConfigureRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    notify?: boolean;
+    share_id?: string;
+};
+
+export type TaskTraceTeamConflict = {
+    base?: string;
+    field?: string;
+    id?: string;
+    node_id?: string;
+    options?: Array<TaskTraceTeamConflictOption> | null;
+    share_id?: string;
+    task_id?: number;
+    task_title?: string;
+};
+
+export type TaskTraceTeamConflictOption = {
+    author?: string;
+    value?: string;
+};
+
+export type TaskTraceTeamImportRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    link?: string;
+    project_id?: number;
+};
+
+export type TaskTraceTeamNotification = {
+    actor?: string;
+    created?: string;
+    id?: string;
+    share_id?: string;
+    task_title?: string;
+};
+
+export type TaskTraceTeamNotificationsReadRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    ids?: Array<string> | null;
+};
+
+export type TaskTraceTeamRepositoryInfo = {
+    candidates?: Array<string> | null;
+    computer?: string;
+    path?: string;
+    shared?: boolean;
+};
+
+export type TaskTraceTeamResolution = {
+    conflict_id?: string;
+    value?: string;
+};
+
+export type TaskTraceTeamResolveRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    resolutions?: Array<TaskTraceTeamResolution> | null;
+    share_id?: string;
+};
+
+export type TaskTraceTeamStatus = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    bindings?: Array<TaskTraceTeamBindingStatus> | null;
+    conflicts?: Array<TaskTraceTeamConflict> | null;
+    enabled?: boolean;
+    notifications?: Array<TaskTraceTeamNotification> | null;
+    repository?: TaskTraceTeamRepositoryInfo;
+    username?: string;
+};
+
 export type TaskTraceUndo = {
     /**
      * A URL to the JSON Schema for this object.
@@ -2747,6 +2844,17 @@ export type TaskTraceUndo = {
      * Description of the newest undo step.
      */
     readonly label?: string;
+};
+
+export type TasksTeamShareRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Windows usernames allowed to collaborate.
+     */
+    members?: Array<string> | null;
 };
 
 export type TasktraceUndoCreateRequest = {
@@ -4835,11 +4943,46 @@ export type TaskTraceOutstandingMoveWritable = {
     target_task_id?: number;
 };
 
+export type TaskTraceTeamConfigureRequestWritable = {
+    notify?: boolean;
+    share_id?: string;
+};
+
+export type TaskTraceTeamImportRequestWritable = {
+    link?: string;
+    project_id?: number;
+};
+
+export type TaskTraceTeamNotificationsReadRequestWritable = {
+    ids?: Array<string> | null;
+};
+
+export type TaskTraceTeamResolveRequestWritable = {
+    resolutions?: Array<TaskTraceTeamResolution> | null;
+    share_id?: string;
+};
+
+export type TaskTraceTeamStatusWritable = {
+    bindings?: Array<TaskTraceTeamBindingStatus> | null;
+    conflicts?: Array<TaskTraceTeamConflict> | null;
+    enabled?: boolean;
+    notifications?: Array<TaskTraceTeamNotification> | null;
+    repository?: TaskTraceTeamRepositoryInfo;
+    username?: string;
+};
+
 export type TaskTraceUndoWritable = {
     /**
      * Latest journal entry ID. Undo requires the most recently read ID; zero means no history remains.
      */
     id?: number;
+};
+
+export type TasksTeamShareRequestWritable = {
+    /**
+     * Windows usernames allowed to collaborate.
+     */
+    members?: Array<string> | null;
 };
 
 export type TasktraceUndoCreateRequestWritable = {
@@ -10164,6 +10307,183 @@ export type TasksRelationsDeleteResponses = {
 };
 
 export type TasksRelationsDeleteResponse = TasksRelationsDeleteResponses[keyof TasksRelationsDeleteResponses];
+
+export type TasksTeamShareData = {
+    body: TasksTeamShareRequestWritable;
+    path: {
+        task: number;
+    };
+    query?: never;
+    url: '/tasks/{task}/team/share';
+};
+
+export type TasksTeamShareErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasksTeamShareError = TasksTeamShareErrors[keyof TasksTeamShareErrors];
+
+export type TasksTeamShareResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceTeamStatus;
+};
+
+export type TasksTeamShareResponse = TasksTeamShareResponses[keyof TasksTeamShareResponses];
+
+export type TasktraceTeamStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team';
+};
+
+export type TasktraceTeamStatusErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamStatusError = TasktraceTeamStatusErrors[keyof TasktraceTeamStatusErrors];
+
+export type TasktraceTeamStatusResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamStatusResponse = TasktraceTeamStatusResponses[keyof TasktraceTeamStatusResponses];
+
+export type TasktraceTeamConfigureData = {
+    body: TaskTraceTeamConfigureRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/configure';
+};
+
+export type TasktraceTeamConfigureErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamConfigureError = TasktraceTeamConfigureErrors[keyof TasktraceTeamConfigureErrors];
+
+export type TasktraceTeamConfigureResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamConfigureResponse = TasktraceTeamConfigureResponses[keyof TasktraceTeamConfigureResponses];
+
+export type TasktraceTeamResolveData = {
+    body: TaskTraceTeamResolveRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/conflicts/resolve';
+};
+
+export type TasktraceTeamResolveErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamResolveError = TasktraceTeamResolveErrors[keyof TasktraceTeamResolveErrors];
+
+export type TasktraceTeamResolveResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamResolveResponse = TasktraceTeamResolveResponses[keyof TasktraceTeamResolveResponses];
+
+export type TasktraceTeamImportData = {
+    body: TaskTraceTeamImportRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/import';
+};
+
+export type TasktraceTeamImportErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamImportError = TasktraceTeamImportErrors[keyof TasktraceTeamImportErrors];
+
+export type TasktraceTeamImportResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamImportResponse = TasktraceTeamImportResponses[keyof TasktraceTeamImportResponses];
+
+export type TasktraceTeamNotificationsReadData = {
+    body: TaskTraceTeamNotificationsReadRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/notifications/read';
+};
+
+export type TasktraceTeamNotificationsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamNotificationsReadError = TasktraceTeamNotificationsReadErrors[keyof TasktraceTeamNotificationsReadErrors];
+
+export type TasktraceTeamNotificationsReadResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamNotificationsReadResponse = TasktraceTeamNotificationsReadResponses[keyof TasktraceTeamNotificationsReadResponses];
+
+export type TasktraceTeamSyncData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/sync';
+};
+
+export type TasktraceTeamSyncErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamSyncError = TasktraceTeamSyncErrors[keyof TasktraceTeamSyncErrors];
+
+export type TasktraceTeamSyncResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamSyncResponse = TasktraceTeamSyncResponses[keyof TasktraceTeamSyncResponses];
 
 export type TasktraceUndoReadData = {
     body?: never;

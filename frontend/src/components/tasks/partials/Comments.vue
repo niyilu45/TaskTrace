@@ -30,6 +30,16 @@
 				<Icon :icon="commentSortOrder === 'asc' ? 'arrow-down-short-wide' : 'arrow-up-short-wide'" />
 				{{ commentSortOrder === 'asc' ? $t('task.comment.sortOldestFirst') : $t('task.comment.sortNewestFirst') }}
 			</BaseButton>
+			<label
+				v-if="commentAuthors.length > 1"
+				class="comment-author-filter"
+			>
+				<span>筛选用户</span>
+				<select v-model="selectedAuthor" class="input">
+					<option value="">全部用户</option>
+					<option v-for="author in commentAuthors" :key="author" :value="author">{{ author }}</option>
+				</select>
+			</label>
 		</h2>
 		<div class="comments">
 			<p
@@ -56,7 +66,7 @@
 				{{ $t('task.comment.loading') }}
 			</span>
 			<div
-				v-for="c in comments"
+				v-for="c in filteredComments"
 				:id="`comment-${c.id}`"
 				:key="c.id"
 				class="media comment"
@@ -78,7 +88,7 @@
 							:size="20"
 							class="image is-avatar d-print-none"
 						/>
-						<strong>{{ getDisplayName(c.author) }}</strong>
+						<strong>{{ commentAuthor(c) }}</strong>
 						<span
 							v-tooltip="formatDateLong(c.created)"
 							class="has-text-grey"
@@ -126,7 +136,7 @@
 					<template v-if="referencedDates[c.id]">
 						<ReadonlyRichText :html="c.comment" />
 						<div
-							v-if="canWrite && c.author.id === currentUserId"
+							v-if="canWrite && commentOwnedByCurrent(c)"
 							class="reference-comment-actions d-print-none"
 						>
 							<button
@@ -148,7 +158,7 @@
 					<Editor
 						v-else
 						v-model="c.comment"
-						:is-edit-enabled="canWrite && c.author.id === currentUserId"
+						:is-edit-enabled="canWrite && commentOwnedByCurrent(c)"
 						:upload-callback="attachmentUpload"
 						:upload-enabled="true"
 						:bottom-actions="actions[c.id]"
@@ -299,6 +309,7 @@ import {useAuthStore} from '@/stores/auth'
 import Reactions from '@/components/input/Reactions.vue'
 import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
 import {commentReplyContextKey, scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
+import {readTeamCommentMarker, teamCommentAuthor} from '@/helpers/tasktraceTeam'
 
 const props = withDefaults(defineProps<{
 	taskId: number,
@@ -354,6 +365,14 @@ const localSortOrder = ref<'asc' | 'desc' | null>(null)
 const commentSortOrder = computed(() => localSortOrder.value ?? authStore.settings.frontendSettings.commentSortOrder ?? 'asc')
 
 const comments = ref<ITaskComment[]>([])
+const selectedAuthor = ref('')
+const commentAuthor = (comment: ITaskComment) => teamCommentAuthor(comment.comment || '', getDisplayName(comment.author))
+const commentOwnedByCurrent = (comment: ITaskComment) => {
+	const marker = readTeamCommentMarker(comment.comment || '')
+	return marker ? marker.author.toLowerCase() === (authStore.info?.username || '').toLowerCase() : comment.author.id === currentUserId.value
+}
+const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
+const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
 const savedComments = reactive(new Map<number, string>())
 const uploading = ref(0)
 function rememberComments() {
@@ -373,7 +392,7 @@ const newCommentText = ref('')
 const saved = ref<ITask['id'] | null>(null)
 const saving = ref<ITask['id'] | null>(null)
 
-const currentUserId = computed(() => authStore.info.id)
+const currentUserId = computed(() => authStore.info?.id)
 const enabled = computed(() => configStore.taskCommentsEnabled)
 const actions = computed(() => {
 	if (!props.canWrite) {
@@ -384,7 +403,7 @@ const actions = computed(() => {
 			action: () => startReplyTo(comment),
 			title: t('task.comment.reply'),
 		}]
-		if (comment.author.id === currentUserId.value) {
+		if (commentOwnedByCurrent(comment)) {
 			list.push({
 				action: () => toggleDelete(comment.id),
 				title: t('misc.delete'),
@@ -731,7 +750,21 @@ function getCommentUrl(commentId: string) {
 .comments-heading {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
+	justify-content: flex-start;
+	gap: .75rem;
+	flex-wrap: wrap;
+
+	> :first-child { margin-inline-end: auto; }
+}
+
+.comment-author-filter {
+	display: inline-flex;
+	align-items: center;
+	gap: .4rem;
+	font-size: .75rem;
+	font-weight: 400;
+
+	.input { min-inline-size: 8rem; block-size: 2rem; }
 }
 
 .comment-sort-button {

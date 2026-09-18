@@ -62,3 +62,7 @@ plans/
 
 # Local portable programs, user data and release archives
 /Releases/
+
+# Runtime LAN collaboration repository. Keep its instructions, never commit tasks.
+/teamData/*
+!/teamData/README.md

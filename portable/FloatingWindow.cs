@@ -371,7 +371,7 @@ internal sealed partial class FloatingWindow : Form {
         using(var request = new HttpRequestMessage(new HttpMethod(method), url + "/api/v2" + path)) {
             string requestToken = token;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", requestToken);
-            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo";
+            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && path != "/tasktrace/team/sync";
             if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
             using(var response = await http.SendAsync(request)) {

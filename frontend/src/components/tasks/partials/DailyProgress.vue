@@ -218,8 +218,10 @@ import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {mergedDay, sortProgressNotes} from '@/helpers/progressNotes'
 import {createProgressReference, normalizeProgressReferences, serializeProgressReferences, type ProgressReference} from '@/helpers/progressReferences'
 import {useAutoSave} from '@/helpers/autoSave'
+import {useAuthStore} from '@/stores/auth'
 const props = defineProps<{taskId: number}>()
 const emit = defineEmits<{saved: []}>()
+const authStore = useAuthStore()
 const date = ref('')
 const progress = ref('')
 const {textarea: progressTextarea} = useAutoHeightTextarea(progress)
@@ -279,7 +281,7 @@ async function switchDate(value: string, initial = false) {
 		const history = await readTaskHistory(taskId)
 		if (request !== version || taskId !== props.taskId) return false
 		referenceHistory.value = history; showReferencePicker.value = false; selectedReferenceDates.value = []
-		const selected = mergedDay(history, value)
+		const selected = mergedDay(history, value, authStore.info?.username)
 		date.value = value; autoCommentId.value = selected.id; mergedIds.value = selected.mergedIds
 		originalHtml.value = selected.html; originalText.value = selected.text; existingImages.value = selected.images
 		progress.value = selected.text; images.value = []; references.value = normalizeProgressReferences(selected.references)
