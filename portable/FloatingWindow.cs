@@ -25,8 +25,8 @@ internal sealed partial class FloatingWindow : Form {
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新事项名称" };
     readonly ComboBox entryPriority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "新事项优先级" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "查找事项" };
-    readonly Button newTaskButton = new Button { Text = "新事项", AutoSize = true, AccessibleName = "添加新事项" };
-    readonly FlowLayoutPanel bottomActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = Padding.Empty };
+    readonly Button newTaskButton = new Button { Text = "新事项", AutoSize = false, Width = 66, AccessibleName = "添加新事项" };
+    readonly FlowLayoutPanel bottomActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, FlowDirection = FlowDirection.LeftToRight, Margin = Padding.Empty };
     readonly TaskTreeView tasks = new TaskTreeView { Dock = DockStyle.Fill, HideSelection = false, ShowLines = true, ShowRootLines = true, ShowPlusMinus = true, ShowNodeToolTips = true, Indent = 20, ItemHeight = 28, AccessibleName = "任务与子任务" };
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -43,7 +43,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly bool selfTest;
     bool allowExit, simpleMode;
     FlowLayoutPanel toolbar;
-    TableLayoutPanel addRow, searchRow;
+    TableLayoutPanel addRow, searchRow, projectRow;
     bool fullLayoutRefreshQueued;
     Rectangle fullBounds;
     Size simpleSize = new Size(300, 380);
@@ -112,13 +112,14 @@ internal sealed partial class FloatingWindow : Form {
                 if(!closing && node == hoverNode && node.TreeView == tasks) progressTip.Show(text, tasks, tasks.PointToClient(Cursor.Position).X + 12, tasks.PointToClient(Cursor.Position).Y + 18, 20000);
             } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }
         };
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        var projectRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        projectRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
         projectRow.Controls.Add(projects, 0, 0); projectRow.Controls.Add(showCompleted, 1, 0);
@@ -133,10 +134,13 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(searchRow, 0, 2);
         tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding();
         content.Controls.Add(tasks, 0, 3);
-        var progressButton = new Button { Text = "记录进展", AutoSize = true };
+        var progressButton = new Button { Text = "记录进展", AutoSize = false, Width = 72 };
         progressButton.Click += delegate { ShowProgress(); };
-        var childrenButton = new Button { Text = "新任务", AutoSize = true };
+        var childrenButton = new Button { Text = "新任务", AutoSize = false, Width = 66 };
         childrenButton.Click += async delegate { await ShowSubtasks(); };
+        fullAddOutstanding.AutoSize=false;fullAddOutstanding.Width=66;
+        foreach(Control action in new Control[] {progressButton,newTaskButton,childrenButton,fullAddOutstanding}) {action.Height=27;action.Margin=new Padding(0,3,6,3);}
+        fullAddOutstanding.Margin=new Padding(0,3,0,3);
         bottomActions.Controls.AddRange(new Control[] { progressButton, newTaskButton, childrenButton, fullAddOutstanding }); content.Controls.Add(bottomActions, 0, 4);
         content.Controls.Add(status, 0, 5); Controls.Add(content); Controls.Add(toolbar);
         full.Click += async delegate { await OpenFull(); };
@@ -320,19 +324,28 @@ internal sealed partial class FloatingWindow : Form {
     void TestResponsiveFullLayout() {
         var original=ClientSize;bool editorWasVisible=addRow.Visible;
         try {
+            int narrowWidth=Math.Max(334,MinimumSize.Width-16),wideWidth=Math.Max(640,original.Width),height=Math.Max(404,original.Height);
             ShowNewTaskEditor();
-            ClientSize=new Size(Math.Max(334,MinimumSize.Width-16),Math.Max(404,original.Height));RefreshFullLayout();
-            int narrowEntry=entry.Width,narrowSearch=search.Width;
+            ClientSize=new Size(narrowWidth,height);RefreshFullLayout();
+            int narrowEntry=entry.Width,narrowSearch=search.Width,narrowProject=projects.Width;
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-new-task-compact-test.png"));}
-            ClientSize=new Size(Math.Max(640,original.Width),Math.Max(404,original.Height));RefreshFullLayout();
-            if(entry.Width<=narrowEntry || search.Width<=narrowSearch)throw new Exception("Floating text fields did not expand after widening the window");
+            ClientSize=new Size(wideWidth,height);RefreshFullLayout();
+            if(entry.Width<=narrowEntry || search.Width<=narrowSearch || projects.Width<=narrowProject)throw new Exception("Floating fields did not expand after widening the window");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-new-task-wide-test.png"));}
-            ClientSize=new Size(Math.Max(334,MinimumSize.Width-16),Math.Max(404,original.Height));RefreshFullLayout();
-            ClientSize=new Size(Math.Max(640,original.Width),Math.Max(404,original.Height));RefreshFullLayout();
-            if(entry.Width<=narrowEntry || search.Width<=narrowSearch)throw new Exception("Floating text fields stayed narrow after repeated resizing");
+            ClientSize=new Size(narrowWidth,height);RefreshFullLayout();
+            if(Math.Abs(entry.Width-narrowEntry)>2 || Math.Abs(search.Width-narrowSearch)>2 || Math.Abs(projects.Width-narrowProject)>2)throw new Exception("Floating fields did not shrink back after widening the window");
+            HideNewTaskEditor();RefreshFullLayout();
+            int verticalGap=searchRow.Top-projectRow.Bottom;bottomActions.PerformLayout();
+            if(verticalGap>8 || projectRow.Height>34 || content.GetColumnWidths()[0]>content.ClientSize.Width-content.Padding.Horizontal+2)throw new Exception("Project and search layout retained excess space after resizing");
+            if(bottomActions.Controls.Cast<Control>().Any(action=>!action.Visible || action.Top!=3 || action.Right+action.Margin.Right>bottomActions.ClientSize.Width))throw new Exception("Bottom actions wrapped or were clipped at the minimum window width");
+            using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-full-resize-return-test.png"));}
+            ClientSize=new Size(wideWidth,height);RefreshFullLayout();
+            ClientSize=new Size(narrowWidth,height);RefreshFullLayout();
+            if(Math.Abs(search.Width-narrowSearch)>2 || Math.Abs(projects.Width-narrowProject)>2)throw new Exception("Repeated wide-to-narrow resizing left stale field widths");
         } finally {
             ClientSize=original;
-            if(!editorWasVisible)HideNewTaskEditor();else RefreshFullLayout();
+            if(editorWasVisible)ShowNewTaskEditor();else HideNewTaskEditor();
+            RefreshFullLayout();
         }
     }
     Dictionary<string, object> ReadObject(string value) { return json.Deserialize<Dictionary<string, object>>(value); }
@@ -742,31 +755,46 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void ShowAutoSaveSettings(bool verify=false) {
-        using(var settings = new Form { Text = "设置", Size = new Size(430, 405), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
+        using(var settings = new Form { Text = "设置", ClientSize = new Size(470, 510), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
-            var help = new Label { Text = "仅内容变化时保存；编辑期间更新同一条进展。\n设置保存在本机目录，网页设置需在网页中配置。", Location = new Point(18, 92), Size = new Size(335, 48) };
+            var help = new Label { Text = "仅内容变化时保存；编辑期间更新同一条进展。\n设置保存在本机目录，网页设置需在网页中配置。", Location = new Point(18, 92), Size = new Size(430, 48) };
             var priorityLabel = new Label { Text = "默认新增任务优先级（0 最高，9 最低）", Location = new Point(18, 150), AutoSize = true };
-            var priority = new NumericUpDown { Minimum = 0, Maximum = 9, Value = defaultPriority, Location = new Point(298, 147), Width = 55, AccessibleName = "默认新增任务优先级" };
-            var apply = new Button { Text = "保存设置", Location = new Point(253, 190), Width = 100 };
+            var priority = new NumericUpDown { Minimum = 0, Maximum = 9, Value = defaultPriority, Location = new Point(320, 147), Width = 55, AccessibleName = "默认新增任务优先级" };
+            var visibleLabel = new Label { Text = "悬浮窗展示哪些优先级（可多选）", Location = new Point(18, 190), AutoSize = true };
+            var visibleChoices = new CheckedListBox { Location = new Point(18, 216), Size = new Size(286, 96), MultiColumn = true, ColumnWidth = 92, CheckOnClick = true, IntegralHeight = false, AccessibleName = "悬浮窗展示优先级" };
+            for(int number=0;number<=9;number++)visibleChoices.Items.Add("P"+number+(number==0?"（最高）":number==9?"（最低）":""),visiblePriorities.Contains(number));
+            var selectAll = new Button { Text = "全选", Location = new Point(320, 216), Size = new Size(110, 30) };
+            var selectNone = new Button { Text = "全不选", Location = new Point(320, 254), Size = new Size(110, 30) };
+            selectAll.Click += delegate {for(int index=0;index<visibleChoices.Items.Count;index++)visibleChoices.SetItemChecked(index,true);};
+            selectNone.Click += delegate {for(int index=0;index<visibleChoices.Items.Count;index++)visibleChoices.SetItemChecked(index,false);};
+            var apply = new Button { Text = "保存设置", Location = new Point(320, 326), Size = new Size(110, 32) };
+            settings.AcceptButton=apply;
             apply.Click += delegate {
                 try {
                     File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value }));
-                    autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority; settings.Close();
+                    autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority;
+                    ChangePrioritySelection(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
+                    settings.Close();
                 } catch { MessageBox.Show(settings, "设置保存失败，请检查目录写入权限。"); }
             };
-            var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 235), Size = new Size(380, 48), AutoEllipsis = true };
-            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 295), Size = new Size(250, 32) };
+            var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 380), Size = new Size(430, 48), AutoEllipsis = true };
+            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 446), Size = new Size(250, 32) };
             chooseData.Click += delegate {
                 try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -STA -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "Configure-TaskTrace.ps1") + "\"") { UseShellExecute = false, CreateNoWindow = true }); }
                 catch(Exception e) { MessageBox.Show(settings, e.Message); }
             };
-            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, apply, dataLabel, chooseData });
+            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, apply, dataLabel, chooseData });
             Exception verificationError=null;
             if(verify)settings.Shown+=delegate {
                 try {
+                    var checkedPriorities=new HashSet<int>(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
                     if((int)priority.Value!=defaultPriority || priority.AccessibleName!="默认新增任务优先级" || !priorityLabel.Text.Contains("0 最高，9 最低"))throw new Exception("Default priority setting is missing or incorrect");
+                    if(visibleChoices.Items.Count!=10 || visibleChoices.AccessibleName!="悬浮窗展示优先级" || !checkedPriorities.SetEquals(visiblePriorities) || visibleChoices.Bottom>settings.ClientSize.Height || chooseData.Bottom>settings.ClientSize.Height)throw new Exception("Visible priority settings are missing, stale, or clipped");
+                    selectNone.PerformClick();if(Enumerable.Range(0,10).Any(index=>visibleChoices.GetItemChecked(index)))throw new Exception("Select-none did not clear visible priorities");
+                    selectAll.PerformClick();if(Enumerable.Range(0,10).Any(index=>!visibleChoices.GetItemChecked(index)))throw new Exception("Select-all did not restore visible priorities");
+                    for(int index=0;index<10;index++)visibleChoices.SetItemChecked(index,visiblePriorities.Contains(index));
                     using(var bitmap=new Bitmap(settings.Width,settings.Height)){settings.DrawToBitmap(bitmap,new Rectangle(Point.Empty,settings.Size));bitmap.Save(Path.Combine(data,"floating-settings-priority-test.png"));}
                 }catch(Exception e){verificationError=e;}finally{settings.Close();}
             };

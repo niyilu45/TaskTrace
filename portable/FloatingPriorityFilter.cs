@@ -17,7 +17,7 @@ internal sealed partial class FloatingWindow {
     long priorityFilterRevision;
 
     bool PriorityFilterActive { get { return visiblePriorities.Count != 10; } }
-    string PriorityFilterEmptyMessage { get { return visiblePriorities.Count == 0 ? "尚未选择任何优先级，请在“按优先级”菜单中选择或全选。" : "没有符合所选优先级的事项，可在“按优先级”菜单中全选。"; } }
+    string PriorityFilterEmptyMessage { get { return visiblePriorities.Count == 0 ? "尚未选择任何优先级，请在“设置”中选择要展示的优先级。" : "没有符合所选优先级的事项，可在“设置”中调整展示优先级。"; } }
     bool MatchesPriority(Dictionary<string,object> task) { return task != null && visiblePriorities.Contains(PriorityNumber(task)); }
     bool MatchesPriority(PendingItem item) { return item != null && visiblePriorities.Contains(Math.Max(0,Math.Min(9,item.Priority))); }
     SharedList FilterOutstandingPriorities(SharedList source) {
