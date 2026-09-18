@@ -168,6 +168,7 @@
 							editComment()
 						}"
 					/>
+					<ProgressBacklinks :items="progressBacklinkMap[c.id] || []" />
 					<Reactions 
 						v-model="c.reactions"
 						class="mbs-2 d-print-none"
@@ -271,8 +272,9 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {useI18n} from 'vue-i18n'
 import {useRoute} from 'vue-router'
 import {taskCommentsRead, type TaskComment} from '@/client/generated'
-import {parseProgressNote} from '@/helpers/progressNotes'
+import {parseProgressNote, progressBacklinks} from '@/helpers/progressNotes'
 import ReadonlyRichText from './ReadonlyRichText.vue'
+import ProgressBacklinks from './ProgressBacklinks.vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
@@ -317,6 +319,7 @@ const referencedDates = computed<Record<number, string>>(() => Object.fromEntrie
 	const note = parseProgressNote({comment: comment.comment})
 	return note.daily && note.references.length ? [[comment.id, note.date]] : []
 })))
+const progressBacklinkMap = computed(() => progressBacklinks(comments.value as unknown as TaskComment[]))
 async function editDailyProgress(date: string) {
 	if (!await dailyProgress.value?.switchDate(date)) return
 	const input = document.getElementById(`progress-text-${props.taskId}`)

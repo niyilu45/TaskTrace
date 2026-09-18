@@ -37,38 +37,17 @@
 			:disabled="saving || restoring"
 		/>
 		<div class="reference-picker">
-			<label :for="`reference-date-${taskId}`">引用历史进展</label>
-			<div class="reference-picker-actions">
-				<div class="select">
-					<select
-						:id="`reference-date-${taskId}`"
-						v-model="referenceDate"
-						aria-label="选择要引用的进展日期"
-						:disabled="saving || restoring || referenceLoading"
-					>
-						<option value="">
-							选择历史日期
-						</option>
-						<option
-							v-for="day in referenceDates"
-							:key="day"
-							:value="day"
-						>
-							{{ day }}
-						</option>
-					</select>
-				</div>
-				<button
-					type="button"
-					class="button"
-					:disabled="!referenceDate || saving || restoring || referenceLoading"
-					@click="addReference"
-				>
-					{{ referenceLoading ? '正在读取…' : '添加引用' }}
-				</button>
-			</div>
+			<label>引用历史进展</label>
+			<button
+				type="button"
+				class="button"
+				:disabled="saving || restoring || referenceLoading || referenceDates.length === 0"
+				@click="openReferencePicker"
+			>
+				{{ referenceLoading ? '正在读取…' : '引用历史进展' }}
+			</button>
 			<p class="reference-hint">
-				选择更早日期的进展，在“今日进展”中填写更正。引用保留当时内容，原记录不变。
+				在表格中勾选一个或多个更早日期。引用保留当时内容，原记录不变。
 			</p>
 		</div>
 		<section
@@ -76,32 +55,109 @@
 			aria-label="已引用的历史进展"
 			class="progress-references"
 		>
-			<article
-				v-for="reference in references"
-				:key="reference.id"
-				class="progress-reference"
-				:data-reference-date="reference.date"
+			<button
+				type="button"
+				class="reference-toggle"
+				:aria-expanded="referencesExpanded"
+				@click="referencesExpanded = !referencesExpanded"
 			>
-				<div class="reference-heading">
-					<strong>引用 {{ reference.date }} 的进展</strong>
-					<a
-						:href="`/tasks/${reference.taskId}#comment-${Math.max(...reference.commentIds)}`"
-						target="_blank"
-						rel="noopener noreferrer"
-					>查看原记录</a>
+				{{ referencesExpanded ? '收起引用的历史进展' : `展开引用的历史进展（${references.length}）` }}
+			</button>
+			<template v-if="referencesExpanded">
+				<article
+					v-for="reference in references"
+					:key="reference.id"
+					class="progress-reference"
+					:data-reference-date="reference.date"
+				>
+					<div class="reference-heading">
+						<strong>引用 {{ reference.date }} 的进展</strong>
+						<a
+							:href="`/tasks/${reference.taskId}#comment-${Math.max(...reference.commentIds)}`"
+							target="_blank"
+							rel="noopener noreferrer"
+						>查看原记录</a>
+						<button
+							type="button"
+							class="button is-small"
+							:aria-label="`移除 ${reference.date} 的引用`"
+							:disabled="saving || restoring || referenceLoading"
+							@click="references = references.filter(item => item.id !== reference.id)"
+						>
+							移除引用
+						</button>
+					</div>
+					<ReadonlyRichText :html="reference.html" />
+				</article>
+			</template>
+		</section>
+		<Modal
+			:enabled="showReferencePicker"
+			aria-label="引用历史进展"
+			wide
+			@close="cancelReferencePicker"
+		>
+			<section
+				class="reference-dialog"
+				aria-labelledby="reference-dialog-title"
+			>
+				<h2 id="reference-dialog-title">
+					引用历史进展
+				</h2>
+				<p>勾选需要引用的历史进展，可同时选择多个日期。</p>
+				<div class="reference-table-wrap">
+					<table class="reference-table">
+						<thead>
+							<tr>
+								<th scope="col">
+									选择
+								</th><th scope="col">
+									日期
+								</th><th scope="col">
+									历史进展信息
+								</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr
+								v-for="candidate in referenceCandidates"
+								:key="candidate.date"
+							>
+								<td>
+									<input
+										v-model="selectedReferenceDates"
+										type="checkbox"
+										:value="candidate.date"
+										:aria-label="`引用 ${candidate.date} 的进展`"
+									>
+								</td>
+								<th scope="row">
+									{{ candidate.date }}
+								</th>
+								<td><ReadonlyRichText :html="candidate.html" /></td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				<div class="reference-dialog__actions">
 					<button
 						type="button"
-						class="button is-small"
-						:aria-label="`移除 ${reference.date} 的引用`"
-						:disabled="saving || restoring || referenceLoading"
-						@click="references = references.filter(item => item.id !== reference.id)"
+						class="button"
+						@click="cancelReferencePicker"
 					>
-						移除引用
+						取消
+					</button>
+					<button
+						type="button"
+						class="button is-primary"
+						:disabled="selectedReferenceDates.length === 0 || referenceLoading"
+						@click="confirmReferences"
+					>
+						{{ referenceLoading ? '正在添加…' : '确定' }}
 					</button>
 				</div>
-				<ReadonlyRichText :html="reference.html" />
-			</article>
-		</section>
+			</section>
+		</Modal>
 		<SharedOutstanding
 			:task-id="taskId"
 			:disabled="saving || referenceLoading"
@@ -176,7 +232,9 @@ const autoCommentId = ref<number>()
 const saving = ref(false)
 const sharedBusy = ref(false)
 const references = ref<ProgressReference[]>([])
-const referenceDate = ref('')
+const showReferencePicker = ref(false)
+const selectedReferenceDates = ref<string[]>([])
+const referencesExpanded = ref(false)
 const referenceLoading = ref(false)
 const referenceHistory = ref<Awaited<ReturnType<typeof readTaskHistory>>>([])
 const progressDates = computed(() => {
@@ -187,6 +245,7 @@ const progressDates = computed(() => {
 const referenceDates = computed(() => [...new Set(sortProgressNotes(referenceHistory.value)
 	.filter(note => note.daily && note.date < date.value && !references.value.some(reference => reference.date === note.date))
 	.map(note => note.date))].sort().reverse())
+const referenceCandidates = computed(() => referenceDates.value.map(day => ({date: day, html: mergedDay(referenceHistory.value, day).html})))
 const restoring = ref(true)
 const message = ref('')
 const lastSaved = ref('')
@@ -219,7 +278,7 @@ async function switchDate(value: string, initial = false) {
 	try {
 		const history = await readTaskHistory(taskId)
 		if (request !== version || taskId !== props.taskId) return false
-		referenceHistory.value = history; referenceDate.value = ''
+		referenceHistory.value = history; showReferencePicker.value = false; selectedReferenceDates.value = []
 		const selected = mergedDay(history, value)
 		date.value = value; autoCommentId.value = selected.id; mergedIds.value = selected.mergedIds
 		originalHtml.value = selected.html; originalText.value = selected.text; existingImages.value = selected.images
@@ -252,9 +311,8 @@ watch(() => props.taskId, async () => {
 	await switchDate(today, true)
 }, {immediate: true})
 watch([progress, images, references], stash, {deep: true})
-async function addReference() {
-	if (saving.value || restoring.value || referenceLoading.value || !referenceDate.value) return
-	const sourceDate = referenceDate.value
+async function openReferencePicker() {
+	if (saving.value || restoring.value || referenceLoading.value) return
 	const taskId = props.taskId
 	const request = version
 	referenceLoading.value = true
@@ -262,11 +320,39 @@ async function addReference() {
 		const history = await readTaskHistory(taskId)
 		if (request !== version || taskId !== props.taskId) return
 		referenceHistory.value = history
-		const reference = createProgressReference(taskId, sourceDate, date.value, mergedDay(history, sourceDate))
-		if (!reference) { message.value = '该日期已无可引用的进展，请选择其他日期。'; return }
-		if (!references.value.some(item => item.date === sourceDate)) references.value.push(reference)
-		referenceDate.value = ''
-		message.value = '已添加引用，请在今日进展中填写更正说明。'
+		selectedReferenceDates.value = []
+		showReferencePicker.value = true
+	} catch { message.value = '历史进展读取失败，请重试。' }
+	finally { referenceLoading.value = false }
+}
+function cancelReferencePicker() {
+	showReferencePicker.value = false
+	selectedReferenceDates.value = []
+}
+async function confirmReferences() {
+	if (saving.value || restoring.value || referenceLoading.value || selectedReferenceDates.value.length === 0) return
+	const taskId = props.taskId
+	const request = version
+	const selected = [...selectedReferenceDates.value]
+	referenceLoading.value = true
+	try {
+		const history = await readTaskHistory(taskId)
+		if (request !== version || taskId !== props.taskId) return
+		referenceHistory.value = history
+		let added = 0
+		for (const sourceDate of selected) {
+			if (references.value.some(item => item.date === sourceDate)) continue
+			const reference = createProgressReference(taskId, sourceDate, date.value, mergedDay(history, sourceDate))
+			if (reference) { references.value.push(reference); added++ }
+		}
+		showReferencePicker.value = false
+		selectedReferenceDates.value = []
+		if (added) {
+			referencesExpanded.value = true
+			message.value = `已添加 ${added} 条引用，请在今日进展中填写更正说明。`
+		} else {
+			message.value = '所选日期已无可引用的进展，请重新选择。'
+		}
 	} catch { message.value = '引用读取失败，现有内容已保留，请重试。' }
 	finally { referenceLoading.value = false }
 }
@@ -330,11 +416,12 @@ onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.valu
 .daily-progress__textarea {
 	resize: none;
 }
-.reference-picker-actions, .reference-heading {
+.reference-heading {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
 	gap: .65rem;
+	font-size: .875rem;
 }
 .reference-picker label {
 	display: block;
@@ -354,7 +441,61 @@ onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.valu
 	padding: .5rem .75rem;
 	background: var(--grey-50);
 }
-.reference-heading { font-size: .875rem; }
+.reference-toggle {
+	justify-self: start;
+	border: 0;
+	padding: 0;
+	background: transparent;
+	color: var(--primary);
+	font: inherit;
+	cursor: pointer;
+	text-decoration: underline;
+	text-underline-offset: .15em;
+}
+.reference-table-wrap {
+	max-block-size: min(55vh, 30rem);
+	overflow: auto;
+	border: 1px solid var(--grey-200);
+	border-radius: $radius;
+}
+.reference-table {
+	inline-size: 100%;
+	border-collapse: collapse;
+	th, td {
+		padding: .65rem;
+		border-block-end: 1px solid var(--grey-200);
+		text-align: start;
+		vertical-align: top;
+	}
+	thead th {
+		position: sticky;
+		inset-block-start: 0;
+		z-index: 1;
+		background: var(--grey-50);
+	}
+	tbody tr:last-child > * { border-block-end: 0; }
+	tbody th { white-space: nowrap; }
+	input {
+		inline-size: 1rem;
+		block-size: 1rem;
+	}
+}
+.reference-dialog {
+	inline-size: min(60rem, calc(100vw - 3rem));
+	max-block-size: calc(100vh - 4rem);
+	padding: 1.25rem;
+	border-radius: $radius;
+	background: var(--white);
+	overflow: auto;
+
+	h2 { margin-block: 0 .5rem; }
+}
+.reference-dialog__actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: .65rem;
+	margin-block-start: 1rem;
+}
 .progress-images {
     display: flex;
     flex-wrap: wrap;

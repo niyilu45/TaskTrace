@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes} from './progressNotes'
+import {parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes, progressBacklinks} from './progressNotes'
 import {serializeProgressReferences, type ProgressReference} from './progressReferences'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
@@ -126,5 +126,13 @@ describe('progress reference isolation', () => {
 		const saved = {...history[2], comment: '<h3 data-tasktrace-merged="90">每日进展 · 2026-09-18</h3>' + merged.html + serializeProgressReferences(merged.references)}
 		expect(sortProgressNotes([history[0], history[1], saved]).map(note => note.id)).toEqual([91, 55])
 		expect(mergedDay([history[0], history[1], saved], '2026-09-18').references).toEqual(merged.references)
+	})
+	it('links source records back to the progress entries that cite them', () => {
+		const history = [
+			{id: 55, comment: daily('2026-09-17', '历史原记录')},
+			{id: 90, comment: daily('2026-09-18', '更正内容') + serializeProgressReferences([ref])},
+		]
+		expect(progressBacklinks(history)[55]).toEqual([{id: 90, date: '2026-09-18', html: '<p>更正内容</p>'}])
+		expect(progressBacklinks(history)[90]).toBeUndefined()
 	})
 })

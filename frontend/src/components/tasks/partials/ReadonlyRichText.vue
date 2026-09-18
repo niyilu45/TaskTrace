@@ -20,6 +20,21 @@ watch(() => props.html, async value => {
 		anchor.setAttribute('rel', 'noopener noreferrer')
 		if (anchor.closest('blockquote[data-tasktrace-reference="1"]') && /^\/tasks\/\d+#comment-\d+$/.test(anchor.getAttribute('href') || '')) anchor.setAttribute('target', '_blank')
 	}
+	for (const quote of Array.from(doc.querySelectorAll('blockquote[data-tasktrace-reference="1"]'))) {
+		const date = quote.getAttribute('data-date') || '历史日期'
+		const details = doc.createElement('details')
+		details.className = 'progress-reference-details'
+		const summary = doc.createElement('summary')
+		const closed = doc.createElement('span')
+		closed.className = 'reference-summary-closed'
+		closed.textContent = `展开引用的历史进展（${date}）`
+		const opened = doc.createElement('span')
+		opened.className = 'reference-summary-open'
+		opened.textContent = `收起引用的历史进展（${date}）`
+		summary.append(closed, opened)
+		quote.replaceWith(details)
+		details.append(summary, quote)
+	}
 	const images = Array.from(doc.querySelectorAll('img'))
 	await Promise.all(images.map(async image => {
 		const source = image.getAttribute('data-src') || image.getAttribute('src') || ''
@@ -47,6 +62,21 @@ onBeforeUnmount(() => version++)
 		border-inline-start: 3px solid var(--grey-300);
 		background: var(--grey-50);
 		font-size: .9em;
+	}
+	:deep(.progress-reference-details) {
+		margin-block: .5rem;
+
+		summary {
+			color: var(--primary);
+			cursor: pointer;
+			text-decoration: underline;
+			text-underline-offset: .15em;
+		}
+		.reference-summary-open { display: none; }
+		&[open] {
+			.reference-summary-closed { display: none; }
+			.reference-summary-open { display: inline; }
+		}
 	}
 	:deep(img) {
 	max-inline-size: 100%;

@@ -54,6 +54,23 @@ export function limitProgressNotes(notes: ReturnType<typeof sortProgressNotes>, 
 		return date === null || date >= earliest
 	})
 }
+
+export type ProgressBacklink = {id: number, date: string, html: string}
+
+export function progressBacklinks(history: TaskComment[]): Record<number, ProgressBacklink[]> {
+	const result: Record<number, ProgressBacklink[]> = {}
+	for (const note of sortProgressNotes(history)) {
+		if (!note.daily || !note.id || !note.references.length) continue
+		for (const reference of note.references) {
+			for (const sourceId of reference.commentIds) {
+				const items = result[sourceId] ||= []
+				if (!items.some(item => item.id === note.id)) items.push({id: note.id, date: note.date, html: note.ownProgress})
+			}
+		}
+	}
+	for (const items of Object.values(result)) items.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id)
+	return result
+}
 export function mergedDay(history: TaskComment[], date: string) {
 	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
 	const primary = notes.reduce<number | undefined>((id, note) => Math.max(id || 0, note.id || 0) || undefined, undefined)

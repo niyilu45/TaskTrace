@@ -47,4 +47,19 @@ describe('CalendarMonth progress markers', () => {
 		expect(wrapper.findAll('[data-month]').map(month => month.attributes('data-month')))
 			.toEqual(['2026-07', '2026-08', '2026-09'])
 	})
+
+	it('closes without changing the date when the user clicks outside', async () => {
+		const wrapper = mount(ProgressDatePicker, {
+			attachTo: document.body,
+			props: {id: 'progress-date-outside', modelValue: '2026-09-18', markedDates: ['2026-09-18']},
+			global: {plugins: [i18n], stubs: {Icon: true}, directives: {tooltip: () => undefined}},
+		})
+		await wrapper.get('.progress-date-picker__trigger').trigger('click')
+		expect(wrapper.find('.progress-date-picker__popup').exists()).toBe(true)
+		document.body.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true}))
+		await wrapper.vm.$nextTick()
+		expect(wrapper.find('.progress-date-picker__popup').exists()).toBe(false)
+		expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+		wrapper.unmount()
+	})
 })

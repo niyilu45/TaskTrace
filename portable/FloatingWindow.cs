@@ -461,7 +461,7 @@ internal sealed partial class FloatingWindow : Form {
             var history = await ReadHistory(id);
             using(var dialog=new Form {Text="每日进展 · "+taskTitle,Size=new Size(560,700),MinimumSize=new Size(420,580),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,180));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正",AccessibleDescription="当天进展与更正"};
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
@@ -471,24 +471,25 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceGroup=new GroupBox {Text="引用历史进展",Dock=DockStyle.Fill,Padding=new Padding(8)};
                 var referenceLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
                 referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));
-                var choiceRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,86));
-                var referenceDay=new ComboBox {Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="选择要引用的历史日期"};
-                var addReference=new Button {Text="添加引用",Dock=DockStyle.Fill};choiceRow.Controls.Add(referenceDay);choiceRow.Controls.Add(addReference);
+                var choiceRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));
+                var chooseReferences=new Button {Text="引用历史进展",Dock=DockStyle.Fill,AccessibleName="打开历史进展多选表格"};
+                var toggleReferences=new LinkLabel {Text="",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,Visible=false,AccessibleName="展开或收起已引用的历史进展"};choiceRow.Controls.Add(chooseReferences);choiceRow.Controls.Add(toggleReferences);
                 var referenceList=new ListBox {Dock=DockStyle.Fill,HorizontalScrollbar=true,IntegralHeight=false,AccessibleName="已引用的历史进展"};
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
                 layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(sharedButton);layout.Controls.Add(save);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false;
+                string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false,referenceExpanded=false;
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count,references=SerializeProgressReferences(references)});};
                 Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Text=progress.Text,Pictures=new List<PastedImage>(pictures),References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action refreshReferences=delegate {
                     var selected=referenceList.SelectedItem as ProgressReference;referenceList.BeginUpdate();referenceList.Items.Clear();foreach(var reference in references)referenceList.Items.Add(reference);referenceList.EndUpdate();
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
-                    referenceDay.Items.Clear();foreach(string date in DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date)).OrderByDescending(date=>date))referenceDay.Items.Add(date);
-                    if(referenceDay.Items.Count>0)referenceDay.SelectedIndex=0;referenceDay.Enabled=referenceDay.Items.Count>0;addReference.Enabled=referenceDay.Items.Count>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
-                    referenceGroup.Text=references.Count==0?"引用历史进展（可选）":"引用历史进展（"+references.Count+"）";
+                    int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
+                    toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?180:52;
+                    referenceGroup.Text="引用历史进展";
                 };
                 Action loadDay=delegate {
                     selectedDay=day.Value.ToString("yyyy-MM-dd");
@@ -502,19 +503,21 @@ internal sealed partial class FloatingWindow : Form {
                     refreshReferences();feedback.Text=records.Count==0?"此日期尚无进展。支持 Ctrl+V 粘贴图片。":"已载入当天合并内容；正文、原图片和引用分别保留。";
                 };
                 loadDay();day.ValueChanged+=delegate {if(!submitting){stash();loadDay();}};
+                toggleReferences.LinkClicked+=delegate{referenceExpanded=!referenceExpanded;refreshReferences();};
                 referenceList.SelectedIndexChanged+=delegate{previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;};
-                Func<Task> addSelectedReference=async delegate {
-                    if(submitting || referenceDay.SelectedItem==null)return;
-                    string sourceDay=(string)referenceDay.SelectedItem,targetDay=selectedDay;if(references.Any(item=>item.Date==sourceDay))return;
+                Func<bool,Task> selectReferences=async delegate(bool verifyPicker) {
+                    if(submitting)return;string targetDay=selectedDay;
                     submitting=true;day.Enabled=false;save.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;feedback.Text="正在读取所选日期的最新进展…";
                     try {
                         var latest=await ReadHistory(id);
                         if(dialog.IsDisposed || selectedDay!=targetDay)return;
-                        history=latest;references.Add(ReferenceForDay(id,sourceDay,targetDay,history));refreshReferences();referenceList.SelectedIndex=references.Count-1;feedback.Text="已添加引用。请在上方填写当天更正，保存后原记录不变。";
+                        history=latest;var selected=SelectProgressReferences(id,targetDay,history,references,dialog,verifyPicker);int added=0;
+                        foreach(string sourceDay in selected)if(!references.Any(item=>item.Date==sourceDay)){references.Add(ReferenceForDay(id,sourceDay,targetDay,history));added++;}
+                        if(added>0){referenceExpanded=true;refreshReferences();referenceList.SelectedIndex=references.Count-1;feedback.Text="已添加 "+added+" 条引用。请在上方填写当天更正，保存后原记录不变。";}else {refreshReferences();feedback.Text="未添加引用。";}
                     } catch(Exception e){if(!dialog.IsDisposed)feedback.Text=e.Message;}
                     finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;}}
                 };
-                addReference.Click+=async delegate {await addSelectedReference();};
+                chooseReferences.Click+=async delegate {await selectReferences(false);};
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};
                 Func<bool,Task> write=async delegate(bool finish) {
@@ -546,17 +549,20 @@ internal sealed partial class FloatingWindow : Form {
                         autoTimer.Stop();
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
                         using(var calendar=day.RenderCalendarForTest())calendar.Save(Path.Combine(data,"floating-progress-calendar-test.png"));
-                        if(referenceDay.Items.Count<2 || referenceDay.Items.Cast<string>().Any(date=>String.CompareOrdinal(date,selectedDay)>=0))throw new Exception("Reference date choices are not earlier than selected day");
-                        string first=(string)referenceDay.Items[0],second=(string)referenceDay.Items[1];
+                        DateTime beforeOutside=day.Value;day.OpenCalendarForTest();if(!day.CalendarVisibleForTest())throw new Exception("Progress calendar did not open modelessly");day.SimulateCalendarOutsideClickForTest();if(day.CalendarVisibleForTest() || day.Value!=beforeOutside)throw new Exception("Clicking outside progress calendar did not cancel selection");
+                        var choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date)).OrderByDescending(date=>date).ToList();
+                        if(choices.Count<2 || choices.Any(date=>String.CompareOrdinal(date,selectedDay)>=0))throw new Exception("Reference table choices are not earlier than selected day");
+                        string first=choices[0],second=choices[1];
                         var sourceRecord=DailyHistory(history).First(note=>DayOf(note)==first);string sourceOriginal=(string)sourceRecord["comment"];
                         await Api("PUT","/tasks/"+id+"/comments/"+sourceRecord["id"],new {comment=sourceOriginal+"<p>引用时的最新内容</p>"});
-                        await addSelectedReference();if(references.Count!=1 || !references[0].Html.Contains("引用时的最新内容"))throw new Exception("Adding a reference used stale source history");
+                        await selectReferences(true);if(references.Count!=2 || !references.Any(item=>item.Date==first && item.Html.Contains("引用时的最新内容")) || !references.Any(item=>item.Date==second))throw new Exception("Multi-select reference table did not use latest source history");
                         await Api("PUT","/tasks/"+id+"/comments/"+sourceRecord["id"],new {comment=sourceOriginal});
-                        referenceDay.SelectedItem=second;await addSelectedReference();if(!references[0].Html.Contains("引用时的最新内容"))throw new Exception("Reference snapshot changed when its source changed");
-                        if(references.Count!=2 || referenceDay.Items.Contains(first) || referenceDay.Items.Contains(second))throw new Exception("Multiple references or duplicate prevention failed");
+                        if(!references.Any(item=>item.Date==first && item.Html.Contains("引用时的最新内容")))throw new Exception("Reference snapshot changed when its source changed");
+                        if(DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date)).Contains(first))throw new Exception("Duplicate reference prevention failed");
                         progress.Text="本日更正：以新结论为准";string draftSnapshot=snapshot();day.Value=DateTime.Today.AddDays(1);if(references.Count!=0)throw new Exception("Reference draft leaked to other date");day.Value=DateTime.Today;if(snapshot()!=draftSnapshot)throw new Exception("Reference date draft did not restore");
                         await write(false);if(snapshot()!=lastSaved)throw new Exception("Reference automatic save failed: "+feedback.Text);
                         var saved=SplitProgressReferences((string)(await ReadHistory(id)).First(note=>Convert.ToInt64(note["id"])==commentId)["comment"],id);if(saved.References.Count!=2 || Plain(ProgressBody(saved.Body,id))!=progress.Text)throw new Exception("Reference save mixed snapshot text into body");
+                        var citationHistory=await ReadHistory(id);var citations=ProgressCitationsForDay(id,first,citationHistory);if(!citations.Any(item=>item.Date==selectedDay && Plain(item.Html).Contains("本日更正")))throw new Exception("Referenced source did not expose citing progress");
                         day.Value=DateTime.Today.AddDays(-1);day.Value=DateTime.Today;if(references.Count!=2 || progress.Text!="本日更正：以新结论为准")throw new Exception("Saved references failed date roundtrip");
                         progress.Text="本日更正：再次确认";await write(true);if(references.Count!=2)throw new Exception("Ordinary edit lost references");
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-references-test.png"));}

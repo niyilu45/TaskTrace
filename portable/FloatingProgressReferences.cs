@@ -92,6 +92,43 @@ internal sealed partial class FloatingWindow {
         if(String.IsNullOrWhiteSpace(snapshot))throw new Exception("该日期没有可引用的正文或图片。");
         return new ProgressReference {Id="r"+Guid.NewGuid().ToString("N"),TaskId=taskId,Date=sourceDay,Html=snapshot,CommentIds=notes.Select(note=>Convert.ToInt64(note["id"])).Concat(notes.SelectMany(note=>MergedIds((string)note["comment"]))).Distinct().OrderBy(value=>value).ToList()};
     }
+    sealed class ProgressCitation { public long Id;public string Date,Html; }
+    sealed class ProgressReferenceCandidate { public string Date,Html;public List<ProgressCitation> Citations=new List<ProgressCitation>(); }
+    List<ProgressCitation> ProgressCitationsForDay(long taskId,string sourceDay,List<Dictionary<string,object>> history) {
+        var sourceIds=new HashSet<long>(DailyHistory(history).Where(note=>DayOf(note)==sourceDay).Select(note=>Convert.ToInt64(note["id"])).Concat(DailyHistory(history).Where(note=>DayOf(note)==sourceDay).SelectMany(note=>MergedIds((string)note["comment"]))));
+        var result=new List<ProgressCitation>();var seen=new HashSet<long>();
+        foreach(var note in DailyHistory(history)) {
+            long id=Convert.ToInt64(note["id"]);var parts=SplitProgressReferences((string)note["comment"],taskId);
+            if(parts.References.Any(reference=>reference.CommentIds.Any(sourceIds.Contains)) && seen.Add(id))result.Add(new ProgressCitation {Id=id,Date=DayOf(note),Html=ProgressDisplayBody(parts.Body)});
+        }
+        return result.OrderByDescending(item=>item.Date).ThenByDescending(item=>item.Id).ToList();
+    }
+    List<string> SelectProgressReferences(long taskId,string targetDay,List<Dictionary<string,object>> history,IEnumerable<ProgressReference> existing,Form owner,bool verify=false) {
+        var used=new HashSet<string>((existing??Enumerable.Empty<ProgressReference>()).Select(item=>item.Date));
+        var candidates=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(day=>String.CompareOrdinal(day,targetDay)<0 && !used.Contains(day)).OrderByDescending(day=>day).Select(day=>new ProgressReferenceCandidate {
+            Date=day,Html=ProgressSnapshotHtml(String.Join("",DailyHistory(history).Where(note=>DayOf(note)==day).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>ProgressBody((string)note["comment"],taskId))),taskId),Citations=ProgressCitationsForDay(taskId,day,history)
+        }).Where(item=>!String.IsNullOrWhiteSpace(item.Html)).ToList();
+        using(var dialog=new Form {Text="引用历史进展",Size=new Size(760,500),MinimumSize=new Size(560,390),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=4};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
+            layout.Controls.Add(new Label {Text="勾选一个或多个历史日期，然后点击确定。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft});
+            var table=new DataGridView {Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,AutoGenerateColumns=false,RowHeadersVisible=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=false,AccessibleName="历史进展多选表格"};
+            table.Columns.Add(new DataGridViewCheckBoxColumn {HeaderText="选择",Width=54,FlatStyle=FlatStyle.Standard});table.Columns.Add(new DataGridViewTextBoxColumn {HeaderText="日期",Width=100,ReadOnly=true});table.Columns.Add(new DataGridViewTextBoxColumn {HeaderText="历史进展信息",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true});table.Columns.Add(new DataGridViewButtonColumn {HeaderText="引用方",Width=116,ReadOnly=true,FlatStyle=FlatStyle.Standard});
+            foreach(var item in candidates){int index=table.Rows.Add(false,item.Date,Plain(item.Html).Replace("\r\n"," ").Replace("\n"," "),item.Citations.Count==0?"无引用方":"查看引用方（"+item.Citations.Count+"）");table.Rows[index].Tag=item;}
+            layout.Controls.Add(table);
+            var citationDetails=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Visible=false,AccessibleName="引用方的进展信息"};layout.Controls.Add(citationDetails);
+            ProgressReferenceCandidate shown=null;
+            table.CellContentClick+=delegate(object sender,DataGridViewCellEventArgs e){
+                if(e.RowIndex<0 || e.ColumnIndex!=3)return;var item=table.Rows[e.RowIndex].Tag as ProgressReferenceCandidate;if(item==null || item.Citations.Count==0)return;
+                if(Object.ReferenceEquals(shown,item) && citationDetails.Visible){shown=null;citationDetails.Visible=false;layout.RowStyles[2].Height=0;table.Rows[e.RowIndex].Cells[3].Value="查看引用方（"+item.Citations.Count+"）";return;}
+                foreach(DataGridViewRow row in table.Rows){var other=row.Tag as ProgressReferenceCandidate;if(other!=null && other.Citations.Count>0)row.Cells[3].Value="查看引用方（"+other.Citations.Count+"）";}
+                shown=item;citationDetails.Text=String.Join(Environment.NewLine+Environment.NewLine,item.Citations.Select(citation=>citation.Date+"："+Plain(citation.Html)));citationDetails.Visible=true;layout.RowStyles[2].Height=120;table.Rows[e.RowIndex].Cells[3].Value="收起引用方";
+            };
+            var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Padding=new Padding(0,6,0,0)};var confirm=new Button {Text="确定",DialogResult=DialogResult.OK,AutoSize=true};var cancel=new Button {Text="取消",DialogResult=DialogResult.Cancel,AutoSize=true};actions.Controls.Add(confirm);actions.Controls.Add(cancel);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=confirm;dialog.CancelButton=cancel;
+            if(verify)dialog.Shown+=delegate{if(table.Rows.Count<2)throw new Exception("Reference picker table lacks historical rows");table.Rows[0].Cells[0].Value=true;table.Rows[1].Cells[0].Value=true;table.CurrentCell=null;table.ClearSelection();table.Refresh();Application.DoEvents();using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-reference-picker-test.png"));}dialog.DialogResult=DialogResult.OK;dialog.Close();};
+            if(dialog.ShowDialog(owner)!=DialogResult.OK)return new List<string>();table.EndEdit();return table.Rows.Cast<DataGridViewRow>().Where(row=>Convert.ToBoolean(row.Cells[0].Value)).Select(row=>((ProgressReferenceCandidate)row.Tag).Date).ToList();
+        }
+    }
     async Task ShowReferenceSnapshot(ProgressReference reference,Form owner,bool verify=false) {
         using(var dialog=new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
@@ -144,7 +181,7 @@ internal sealed partial class FloatingWindow {
             correction=(await ReadHistory(taskId)).First(note=>Convert.ToInt64(note["id"])==correctionId);if(SplitProgressReferences((string)correction["comment"],taskId).References.Count!=1)throw new Exception("Default save lost existing references");
             await ShowImageGallery(taskId,serialized,this,"引用快照验收");
             if((await DownloadImage("/api/v1/tasks/"+taskId+"/attachments/"+images[0].Id)).Length==0)throw new Exception("Referenced image became inaccessible");
-            File.WriteAllText(Path.Combine(data,"floating-progress-references-test.txt"),"PASS: earlier same-task dates, multi-reference add and duplicate prevention, same-date distinct snapshots retained, merged source IDs, immutable source records, snapshot text/images, no nested reference content, malformed markup retained, own body isolation, date draft roundtrip, autosave/edit/remove persistence, marked progress dates, calendar screenshot, reference preview and image download, minimum-size dialog layout.");
+            File.WriteAllText(Path.Combine(data,"floating-progress-references-test.txt"),"PASS: checkbox table multi-select with confirm/cancel, earlier same-task dates, duplicate prevention, same-date distinct snapshots retained, merged source IDs, immutable source records, expandable snapshots and citing progress, snapshot text/images, no nested reference content, malformed markup retained, own body isolation, date draft roundtrip, autosave/edit/remove persistence, marked progress dates, calendar screenshot, reference preview and image download, minimum-size dialog layout.");
         } finally {undoRecording=recordingBefore;}
         if(taskId>0){undoRecording=false;await Api("DELETE","/tasks/"+taskId,null);undoRecording=recordingBefore;}
     }

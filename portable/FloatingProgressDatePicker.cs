@@ -8,6 +8,7 @@ using System.Windows.Forms;
 internal sealed class ProgressDatePicker : UserControl {
     readonly Button open=new Button {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="记录日期",UseVisualStyleBackColor=true};
     readonly HashSet<DateTime> marked=new HashSet<DateTime>();
+    ProgressCalendarPopup popup;
     DateTime value=DateTime.Today;
     internal event EventHandler ValueChanged;
 
@@ -24,13 +25,16 @@ internal sealed class ProgressDatePicker : UserControl {
     void UpdateText(){open.Text=value.ToString("yyyy-MM-dd")+(marked.Contains(value.Date)?"    ●":"    选择日期");open.ForeColor=marked.Contains(value.Date)?Color.FromArgb(36,94,210):SystemColors.ControlText;}
     void OpenCalendar() {
         if(!Enabled)return;
-        using(var popup=new ProgressCalendarPopup(value,marked)) {
-            popup.DatePicked+=delegate(DateTime date){Value=date;popup.Close();};
-            var screen=PointToScreen(new Point(0,Height));var area=Screen.FromControl(this).WorkingArea;
-            popup.Location=new Point(Math.Max(area.Left,Math.Min(screen.X,area.Right-popup.Width)),Math.Max(area.Top,Math.Min(screen.Y,area.Bottom-popup.Height)));
-            popup.ShowDialog(FindForm());
-        }
+        if(popup!=null && !popup.IsDisposed){popup.Close();return;}
+        popup=new ProgressCalendarPopup(value,marked);var active=popup;
+        active.DatePicked+=delegate(DateTime date){Value=date;active.Close();};
+        active.FormClosed+=delegate{active.Dispose();if(Object.ReferenceEquals(popup,active))popup=null;};
+        active.Deactivate+=delegate{if(!active.IsDisposed && active.Visible)active.BeginInvoke(new Action(active.Close));};
+        var screen=PointToScreen(new Point(0,Height));var area=Screen.FromControl(this).WorkingArea;
+        active.Location=new Point(Math.Max(area.Left,Math.Min(screen.X,area.Right-active.Width)),Math.Max(area.Top,Math.Min(screen.Y,area.Bottom-active.Height)));
+        active.Show(FindForm());active.Activate();
     }
+    protected override void Dispose(bool disposing){if(disposing && popup!=null && !popup.IsDisposed)popup.Close();base.Dispose(disposing);}
     internal Bitmap RenderCalendarForTest() {
         using(var popup=new ProgressCalendarPopup(value,marked)) {
             popup.Location=new Point(-10000,-10000);popup.Show();Application.DoEvents();
@@ -38,6 +42,9 @@ internal sealed class ProgressDatePicker : UserControl {
         }
     }
     internal int VisibleMarkedDatesForTest(){using(var popup=new ProgressCalendarPopup(value,marked))return popup.VisibleMarkedDates;}
+    internal void OpenCalendarForTest(){OpenCalendar();Application.DoEvents();}
+    internal bool CalendarVisibleForTest(){return popup!=null && !popup.IsDisposed && popup.Visible;}
+    internal void SimulateCalendarOutsideClickForTest(){if(popup!=null && !popup.IsDisposed){popup.SimulateDeactivateForTest();Application.DoEvents();}}
 }
 
 internal sealed class ProgressCalendarPopup : Form {
@@ -48,6 +55,7 @@ internal sealed class ProgressCalendarPopup : Form {
     DateTime month;
     internal event Action<DateTime> DatePicked;
     internal int VisibleMarkedDates {get;private set;}
+    internal void SimulateDeactivateForTest(){OnDeactivate(EventArgs.Empty);}
 
     internal ProgressCalendarPopup(DateTime selected,IEnumerable<DateTime> markedDates) {
         this.selected=selected.Date;marked=new HashSet<DateTime>((markedDates??Enumerable.Empty<DateTime>()).Select(date=>date.Date));month=new DateTime(selected.Year,selected.Month,1);

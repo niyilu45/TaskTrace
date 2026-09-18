@@ -91,6 +91,7 @@
 				class="history-entry"
 			>
 				<time>{{ note.date }}：</time><ReadonlyRichText :html="note.progress" />
+				<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
 			</div>
 			<button
 				v-if="hiddenNotesCount > 0"
@@ -111,15 +112,17 @@ import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
 import {outstandingHtml} from '@/helpers/sharedOutstanding'
-import {sortProgressNotes, limitProgressNotes} from '@/helpers/progressNotes'
+import {sortProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
+import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number}>()
 defineEmits<{toggle: []}>()
 const element = ref<HTMLElement>()
 const history = ref<TaskComment[]>([])
 const allNotes = computed(() => sortProgressNotes(history.value))
+const progressBacklinkMap = computed(() => progressBacklinks(history.value))
 const limitedNotes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
 const showAllProgress = ref(false)
 const notes = computed(() => showAllProgress.value ? allNotes.value : limitedNotes.value)
