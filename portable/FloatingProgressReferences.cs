@@ -141,6 +141,31 @@ internal sealed partial class FloatingWindow {
             if(dialog.ShowDialog(owner)!=DialogResult.OK)return new List<string>();table.EndEdit();return table.Rows.Cast<DataGridViewRow>().Where(row=>Convert.ToBoolean(row.Cells[0].Value)).Select(row=>((ProgressReferenceCandidate)row.Tag).Date).ToList();
         }
     }
+    sealed class ProgressHistoryRow {public string Date,Html,Text;public int ImageCount;}
+    async Task ShowProgressHistory(long taskId,string taskTitle,List<Dictionary<string,object>> history,Form owner,bool verify=false) {
+        var rows=DailyHistory(history).GroupBy(note=>DayOf(note)).OrderByDescending(group=>group.Key).Select(group=>{
+            var ordered=group.OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
+            string own=String.Join("",ordered.Select(note=>ProgressBody((string)note["comment"],taskId)));
+            var references=ordered.SelectMany(note=>SplitProgressReferences((string)note["comment"],taskId).References).GroupBy(item=>item.Id).Select(items=>items.First()).ToList();
+            string referenceHtml=String.Join("",references.Select(item=>item.Html));string displayHtml=own+referenceHtml;
+            string text=Plain(own);int imageCount=Regex.Matches(displayHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
+            if(imageCount>0)text+=(text.Length==0?"":"\r\n")+"（含 "+imageCount+" 张图片）";
+            if(references.Count>0)text+=(text.Length==0?"":"\r\n\r\n")+"引用历史进展：\r\n"+String.Join("\r\n",references.Select(item=>item.Date+"："+Plain(item.Html).Replace("\r\n"," ").Replace("\n"," ")));
+            return new ProgressHistoryRow{Date=group.Key,Html=displayHtml,Text=group.Key+"："+(String.IsNullOrWhiteSpace(text)?"（仅包含无法直接显示的内容）":text),ImageCount=imageCount};
+        }).ToList();
+        using(var dialog=DpiDialog(new Form{Text="所有进展 · "+taskTitle,Size=new Size(760,540),MinimumSize=new Size(480,330),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=2};layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            layout.Controls.Add(new Label{Text=rows.Count==0?"暂无每日进展。":"全部每日进展 · 日期越新越靠前",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="历史进展说明"},0,0);
+            var table=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=true,AutoGenerateColumns=false,RowHeadersVisible=false,ReadOnly=true,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=false,AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCellsExceptHeaders,AccessibleName="所有历史进展"};
+            table.DefaultCellStyle.WrapMode=DataGridViewTriState.True;table.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="日期：进展",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true});table.Columns.Add(new DataGridViewButtonColumn{HeaderText="图片",Width=110,ReadOnly=true,FlatStyle=FlatStyle.Standard});
+            foreach(var item in rows){int index=table.Rows.Add(item.Text,item.ImageCount>0?"查看图片（"+item.ImageCount+"）":"无图片");table.Rows[index].Tag=item;table.Rows[index].MinimumHeight=42;}
+            table.CellContentClick+=async delegate(object sender,DataGridViewCellEventArgs e){if(e.RowIndex<0 || e.ColumnIndex!=1)return;var item=table.Rows[e.RowIndex].Tag as ProgressHistoryRow;if(item!=null && item.ImageCount>0)await ShowImageGallery(taskId,item.Html,dialog,"每日进展 · "+item.Date);};
+            layout.Controls.Add(table,0,1);dialog.Controls.Add(layout);
+            if(verify)dialog.Shown+=delegate{if(rows.Count<3 || !rows.SequenceEqual(rows.OrderByDescending(item=>item.Date)) || table.Rows.Count!=rows.Count || !Convert.ToString(table.Rows[0].Cells[0].Value).StartsWith(rows[0].Date+"："))throw new Exception("All-progress history is missing, unordered, or not formatted as date: progress");using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-history-test.png"));}dialog.Close();};
+            dialog.ShowDialog(owner);
+        }
+        await Task.FromResult(0);
+    }
     async Task ShowReferenceSnapshot(ProgressReference reference,Form owner,bool verify=false) {
         using(var dialog=DpiDialog(new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};

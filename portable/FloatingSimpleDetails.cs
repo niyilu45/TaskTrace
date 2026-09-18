@@ -5,6 +5,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -32,7 +33,9 @@ internal sealed partial class TaskTreeView {
         if(bounds.Height<=0)return Rectangle.Empty;
         Font font=DisplayFont(node);
         int width=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width;
-        return new Rectangle(bounds.Left+2,bounds.Top,width+4,bounds.Height);
+        var numbered=TaskPriorityMatch(node);
+        int left=bounds.Left+2+(numbered.Success?PriorityTextAdvance(numbered.Groups["prefix"].Value,font):0);
+        return new Rectangle(left,bounds.Top,width+4,bounds.Height);
     }
     internal void ReserveSimpleImageSpace(TreeNode node) {
         if(!simpleImageLinks || SimpleImageAvailable==null || !SimpleImageAvailable(node))return;
@@ -290,6 +293,7 @@ internal sealed partial class FloatingWindow {
                 } finally {tasks.Invalidated-=invalidated;}
                 Rectangle imageLink=tasks.SimpleImageBounds(image);
                 if(imageLink.IsEmpty || !tasks.SimpleImageBounds(plain).IsEmpty || !tasks.SimpleImageBounds(child).IsEmpty)throw new Exception("Both layouts must expose image links only on image leaves");
+                if(imageLink.Left<=image.Bounds.Left+2)throw new Exception("Outstanding image link must be placed after its sequence number");
                 Rectangle taskCheck=tasks.CompletionBounds(child),leafSpace=tasks.CompletionBounds(image);
                 if(taskCheck.IsEmpty || leafSpace.IsEmpty || taskCheck.Left!=leafSpace.Left || taskCheck.Width!=leafSpace.Width)throw new Exception("Task completion box and outstanding row are misaligned");
                 var originalCompletion=tasks.CompletionClicked;int completions=0;TreeNode completionNode=null;
@@ -311,10 +315,12 @@ internal sealed partial class FloatingWindow {
                     SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(coordinates));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(coordinates));
                     SendSimpleMessage(tasks.Handle,0x203,new IntPtr(1),new IntPtr(coordinates));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(coordinates));
                     if(clicks!=1 || checks!=0 || drags!=0 || doubleClicks!=0)throw new Exception("Shared image link leaked into checkbox, drag, or progress/editor actions");
-                    var point=new Point(imageLink.Right+8,imageLink.Top+imageLink.Height/2);
+                    var priorityLink=tasks.PriorityLinkBounds(image);
+                    var point=new Point(priorityLink.Right+8,imageLink.Top+imageLink.Height/2);
                     var down=Message.Create(tasks.Handle,0x201,new IntPtr(1),new IntPtr((point.Y<<16)|(point.X&0xffff)));
                     if(tasks.HandleSimpleImageMessage(ref down))throw new Exception("Image leaf text lost normal drag handling");
-                    int titleEnd=imageLink.Right+6+TextRenderer.MeasureText(image.Text.TrimEnd(' '),tasks.Font,Size.Empty,TextFormatFlags.NoPadding).Width;
+                    string remainingTitle=Regex.Replace(image.Text.TrimEnd(' '),@"^[0-9]+(?:\.[0-9]+)*\.\s+","");
+                    int titleEnd=imageLink.Right+6+TextRenderer.MeasureText(remainingTitle,tasks.Font,Size.Empty,TextFormatFlags.NoPadding).Width;
                     var hit=tasks.HitTest(new Point(titleEnd-3,imageLink.Top+imageLink.Height/2));
                     if(titleEnd>image.Bounds.Right || hit.Node!=image || (hit.Location&TreeViewHitTestLocations.Label)==0)throw new Exception("Shared image title extends beyond its native drag/select target");
                     var move=MakeDropPlan(image,empty,0);var order=MakeDropPlan(image,plain,1);

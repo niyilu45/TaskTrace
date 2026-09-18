@@ -119,7 +119,14 @@ try {
     $binary = Join-Path $packageRoot 'TaskTrace-server.exe'
     if (!(Test-Path -LiteralPath $binary)) { throw 'TaskTrace-server.exe is missing. Extract the complete package first.' }
     # Isolate this local launch from inherited Vikunja server settings.
-    Get-ChildItem Env: | Where-Object { $_.Name -like 'VIKUNJA_*' } | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_.Name) }
+    # PowerShell 5's Env: provider throws when Windows contains environment
+    # names which differ only by case. Read the process environment through
+    # .NET so those unrelated duplicates cannot prevent TaskTrace from starting.
+    foreach ($environmentName in @([Environment]::GetEnvironmentVariables().Keys)) {
+        if ([string]$environmentName -like 'VIKUNJA_*') {
+            [Environment]::SetEnvironmentVariable([string]$environmentName, $null, [EnvironmentVariableTarget]::Process)
+        }
+    }
     $secretFile = Join-Path $dataRoot 'secret.txt'
     if (!(Test-Path -LiteralPath $secretFile)) {
         $bytes = New-Object byte[] 32

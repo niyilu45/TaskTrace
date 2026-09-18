@@ -3,6 +3,7 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
@@ -15,6 +16,18 @@ internal sealed partial class TaskTreeView {
     bool swallowPriorityUp;
     Font boldNodeFont, strikeNodeFont, boldStrikeNodeFont;
     internal bool StrikeCompleted;
+    [DllImport("user32.dll")] static extern int GetScrollPos(IntPtr handle,int bar);
+    [DllImport("user32.dll")] static extern int SetScrollPos(IntPtr handle,int bar,int position,bool redraw);
+    [DllImport("user32.dll",EntryPoint="SendMessage")] static extern IntPtr SendTreeMessage(IntPtr handle,uint message,IntPtr wParam,IntPtr lParam);
+
+    internal Point NativeScrollPosition() {return IsHandleCreated?new Point(GetScrollPos(Handle,0),GetScrollPos(Handle,1)):Point.Empty;}
+    internal void RestoreNativeScroll(Point position) {
+        if(!IsHandleCreated)return;
+        Update();
+        SetScrollPos(Handle,0,Math.Max(0,position.X),true);SendTreeMessage(Handle,0x114,new IntPtr(4|((Math.Max(0,position.X)&0xffff)<<16)),IntPtr.Zero);
+        SetScrollPos(Handle,1,Math.Max(0,position.Y),true);SendTreeMessage(Handle,0x115,new IntPtr(4|((Math.Max(0,position.Y)&0xffff)<<16)),IntPtr.Zero);
+        Invalidate();
+    }
 
     internal Font DisplayFont(TreeNode node) {
         bool outstanding=node!=null && node.Tag is FloatingWindow.OutstandingLeaf;
@@ -51,7 +64,7 @@ internal sealed partial class TaskTreeView {
     }
     int NodeTextLeft(TreeNode node,Rectangle bounds) {
         if(SingleLinePaths && node.Tag is long)return CompletionVisualBounds(node).Right+6;
-        var image=SimpleImageBounds(node);return image.IsEmpty?bounds.Left+2:image.Right+6;
+        return bounds.Left+2;
     }
     internal Rectangle PriorityLinkBounds(TreeNode node) {
         if(node==null || node.TreeView!=this)return Rectangle.Empty;
@@ -59,7 +72,8 @@ internal sealed partial class TaskTreeView {
         if(!match.Success || bounds.Height<=0)return Rectangle.Empty;
         Font font=DisplayFont(node);
         int textLeft=NodeTextLeft(node,bounds);
-        int left=textLeft+PriorityTextAdvance(match.Groups["prefix"].Value,font);
+        var image=SimpleImageBounds(node);
+        int left=image.IsEmpty?textLeft+PriorityTextAdvance(match.Groups["prefix"].Value,font):image.Right+6;
         int width=PriorityTextAdvance(match.Groups["priority"].Value,font);
         return new Rectangle(left,bounds.Top,width,bounds.Height);
     }
@@ -88,9 +102,15 @@ internal sealed partial class TaskTreeView {
             CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(box.Left+1,box.Top+Math.Max(0,(box.Height-14)/2)),checkState);
         }
         if(!image.IsEmpty)using(var underline=new Font(font,font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
-        var text=new Rectangle(textLeft,bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),bounds.Height);
         string current=CurrentTaskText(e.Node),ancestors=AncestorTaskText(e.Node);
         var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
+        if(!image.IsEmpty) {
+            string prefix=match.Groups["prefix"].Value;
+            int prefixWidth=PriorityTextAdvance(prefix,font);
+            TextRenderer.DrawText(e.Graphics,prefix,font,new Rectangle(textLeft,bounds.Top,prefixWidth+2,bounds.Height),foreground,flags);
+            current=current.Substring(Math.Min(prefix.Length,current.Length));textLeft=image.Right+6;
+        }
+        var text=new Rectangle(textLeft,bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),bounds.Height);
         int currentWidth=Math.Min(text.Width,PriorityTextAdvance(current,font)+2);
         TextRenderer.DrawText(e.Graphics,current,font,new Rectangle(text.Left,text.Top,currentWidth,text.Height),foreground,flags);
         if(ancestors.Length>0 && currentWidth<text.Width) {

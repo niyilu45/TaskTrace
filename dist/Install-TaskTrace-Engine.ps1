@@ -36,8 +36,47 @@ function Add-DependencyIssue([string]$Problem, [string]$Hint) {
     if (![string]::IsNullOrWhiteSpace($Hint) -and !$hints.Contains($Hint)) { $hints.Add($Hint) }
 }
 
-function Find-Command([string]$Name) {
-    return Get-Command $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+function Find-Command([string]$Name, [string[]]$Candidates = @()) {
+    $command = Get-Command ($Name + '.cmd') -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $command) { $command = Get-Command ($Name + '.exe') -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($null -eq $command) { $command = Get-Command $Name -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($null -ne $command) { return $command }
+    foreach ($candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        if (Test-Path -LiteralPath $expanded -PathType Leaf) { return [pscustomobject]@{ Source = [IO.Path]::GetFullPath($expanded) } }
+    }
+    return $null
+}
+
+function Register-CommandPath($Command) {
+    if ($null -eq $Command -or [string]::IsNullOrWhiteSpace($Command.Source)) { return }
+    $directory = Split-Path $Command.Source -Parent
+    $entries = @($env:Path -split ';' | Where-Object { ![string]::IsNullOrWhiteSpace($_) })
+    if (!($entries | Where-Object { [string]::Equals($_.TrimEnd('\'), $directory.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) })) {
+        $env:Path = $directory + ';' + $env:Path
+    }
+}
+
+function Join-OptionalPath([string]$Base, [string]$Child) {
+    if ([string]::IsNullOrWhiteSpace($Base)) { return '' }
+    return Join-Path $Base $Child
+}
+
+function Find-CompatibleCommand([string]$Name, [string[]]$Candidates, [string[]]$Arguments, [Version]$MinimumVersion) {
+    $commands = New-Object 'System.Collections.Generic.List[object]'
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $pathCommand = Find-Command $Name
+    if ($null -ne $pathCommand -and $seen.Add([IO.Path]::GetFullPath($pathCommand.Source))) { $commands.Add($pathCommand) }
+    foreach ($candidate in $Candidates) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        if ((Test-Path -LiteralPath $expanded -PathType Leaf) -and $seen.Add([IO.Path]::GetFullPath($expanded))) { $commands.Add([pscustomobject]@{ Source = [IO.Path]::GetFullPath($expanded) }) }
+    }
+    foreach ($command in $commands) {
+        try { if ((Read-Version (Read-CommandText $command.Source $Arguments)) -ge $MinimumVersion) { return $command } } catch { }
+    }
+    return $commands | Select-Object -First 1
 }
 
 function Read-Version([string]$Text) {
@@ -65,41 +104,68 @@ try {
     if (![Environment]::Is64BitOperatingSystem) {
         Add-DependencyIssue '当前不是 64 位 Windows，TaskTrace 目前只生成 Windows x64 程序。' '请在 64 位 Windows 10/11 上运行此工具。'
     }
-    if (!(Test-Path -LiteralPath (Join-Path $root '.git'))) {
-        Add-DependencyIssue '源码目录缺少 .git 信息，无法记录成品对应的源码提交。' '请使用 git clone 获取仓库，不要使用 GitHub 的 Source code ZIP。'
-    }
     foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1')) {
         if (!(Test-Path -LiteralPath (Join-Path $root $requiredFile))) {
-            Add-DependencyIssue ('源码不完整，缺少：' + $requiredFile) '请重新克隆完整的 TaskTrace 仓库。'
+            Add-DependencyIssue ('源码不完整，缺少：' + $requiredFile) '请重新下载或解压完整的 TaskTrace 源码。'
         }
     }
 
-    $git = Find-Command 'git'
-    if ($null -eq $git) {
-        Add-DependencyIssue '未找到 Git。' '安装 Git for Windows：https://git-scm.com/download/win'
-    } else {
-        try { Write-InstallLine ('Git：' + (Read-CommandText $git.Source @('--version'))) } catch { Add-DependencyIssue ('Git 无法运行：' + $_.Exception.Message) '重新安装 Git for Windows：https://git-scm.com/download/win' }
-    }
+    Write-InstallLine 'Git 和 .git 信息不是生成免安装程序的必要条件。'
 
     if (!$SkipFrontend) {
-        $node = Find-Command 'node'
+        $nodeCandidates = @(
+            (Join-Path $env:ProgramFiles 'nodejs\node.exe'),
+            (Join-OptionalPath ${env:ProgramFiles(x86)} 'nodejs\node.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Volta\bin\node.exe'),
+            (Join-Path $env:USERPROFILE 'scoop\apps\nodejs\current\node.exe'),
+            (Join-Path $env:USERPROFILE 'scoop\apps\nodejs-lts\current\node.exe'),
+            (Join-OptionalPath $env:NVM_SYMLINK 'node.exe')
+        )
+        foreach ($registryKey in @('HKLM:\SOFTWARE\Node.js', 'HKCU:\SOFTWARE\Node.js')) {
+            try { $installPath = (Get-ItemProperty -LiteralPath $registryKey -ErrorAction Stop).InstallPath; if ($installPath) { $nodeCandidates += (Join-Path $installPath 'node.exe') } } catch { }
+        }
+        $node = Find-CompatibleCommand 'node' $nodeCandidates @('--version') ([Version]'24.0.0')
         if ($null -eq $node) {
-            Add-DependencyIssue '未找到 Node.js。' '安装 Node.js 24 或更新版本：https://nodejs.org/'
+            Add-DependencyIssue '未找到 Node.js；已检查 PATH、Node.js 安装目录、Volta、Scoop 和 NVM_SYMLINK。' '安装 Node.js 24 或更新版本；安装完成后可直接重试，无需重启电脑：https://nodejs.org/'
         } else {
             try {
+                Register-CommandPath $node
                 $nodeText = Read-CommandText $node.Source @('--version'); $nodeVersion = Read-Version $nodeText
-                Write-InstallLine ('Node.js：' + $nodeText)
+                Write-InstallLine ('Node.js：' + $nodeText + ' · ' + $node.Source)
                 if ($null -eq $nodeVersion -or $nodeVersion -lt [Version]'24.0.0') { Add-DependencyIssue ('Node.js 版本过低：' + $nodeText + '，要求 24.0.0 或更新版本。') '安装 Node.js 24 或更新版本：https://nodejs.org/' }
             } catch { Add-DependencyIssue ('Node.js 无法运行：' + $_.Exception.Message) '重新安装 Node.js 24 或更新版本：https://nodejs.org/' }
         }
 
-        $pnpm = Find-Command 'pnpm'
+        $pnpmCandidates = @(
+            (Join-OptionalPath $env:PNPM_HOME 'pnpm.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'pnpm\pnpm.cmd'),
+            (Join-Path $env:APPDATA 'npm\pnpm.cmd'),
+            (Join-Path $env:ProgramFiles 'nodejs\pnpm.cmd')
+        )
+        if ($null -ne $node) { $pnpmCandidates += (Join-Path (Split-Path $node.Source -Parent) 'pnpm.cmd') }
+        $pnpm = Find-CompatibleCommand 'pnpm' $pnpmCandidates @('--version') ([Version]'11.26.0')
         if ($null -eq $pnpm) {
-            Add-DependencyIssue '未找到 pnpm。' '安装 pnpm 11.26.0：npm install -g pnpm@11.26.0'
+            $corepackCandidates = @((Join-Path $env:ProgramFiles 'nodejs\corepack.cmd'))
+            if ($null -ne $node) { $corepackCandidates += (Join-Path (Split-Path $node.Source -Parent) 'corepack.cmd') }
+            $corepack = Find-Command 'corepack' $corepackCandidates
+            if ($null -ne $corepack) {
+                try {
+                    $corepackText = Read-CommandText $corepack.Source @('pnpm', '--version')
+                    $shimDirectory = Join-Path $env:TEMP 'TaskTrace-build-tools'; New-Item -ItemType Directory -Path $shimDirectory -Force | Out-Null
+                    $shim = Join-Path $shimDirectory 'pnpm.cmd'; [IO.File]::WriteAllText($shim, "@echo off`r`n`"$($corepack.Source)`" pnpm %*`r`n", [Text.Encoding]::ASCII)
+                    $pnpm = [pscustomobject]@{ Source = $shim }
+                    Write-InstallLine ('pnpm 由 Corepack 提供：' + $corepackText + ' · ' + $corepack.Source)
+                } catch { }
+            }
+        }
+        if ($null -eq $pnpm) {
+            Add-DependencyIssue '未找到 pnpm；已检查 PATH、PNPM_HOME、AppData npm/pnpm 和 Node.js Corepack。' '安装 pnpm 11.26.0：npm install -g pnpm@11.26.0'
         } else {
             try {
+                Register-CommandPath $pnpm
                 $pnpmText = Read-CommandText $pnpm.Source @('--version'); $pnpmVersion = Read-Version $pnpmText
-                Write-InstallLine ('pnpm：' + $pnpmText)
+                Write-InstallLine ('pnpm：' + $pnpmText + ' · ' + $pnpm.Source)
                 if ($null -eq $pnpmVersion -or $pnpmVersion -lt [Version]'11.26.0') { Add-DependencyIssue ('pnpm 版本过低：' + $pnpmText + '，要求 11.26.0 或更新版本。') '升级 pnpm：npm install -g pnpm@11.26.0' }
             } catch { Add-DependencyIssue ('pnpm 无法运行：' + $_.Exception.Message) '重新安装 pnpm：npm install -g pnpm@11.26.0' }
         }
@@ -107,24 +173,28 @@ try {
         Write-InstallLine '已选择跳过前端构建；仅适用于 frontend/dist 已由本仓库成功构建的开发环境。' Yellow
     }
 
-    $go = Find-Command 'go'
+    $goCandidates = @((Join-Path $env:ProgramFiles 'Go\bin\go.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\Go\bin\go.exe'),(Join-OptionalPath $env:GOROOT 'bin\go.exe'),(Join-Path $env:USERPROFILE 'scoop\apps\go\current\bin\go.exe'))
+    $go = Find-CompatibleCommand 'go' $goCandidates @('version') ([Version]'1.27.0')
     if ($null -eq $go) {
         Add-DependencyIssue '未找到 Go。' '安装 Go 1.27.0 或更新版本：https://go.dev/dl/'
     } else {
         try {
+            Register-CommandPath $go
             $goText = Read-CommandText $go.Source @('version'); $goVersion = Read-Version $goText
-            Write-InstallLine ('Go：' + $goText)
+            Write-InstallLine ('Go：' + $goText + ' · ' + $go.Source)
             if ($null -eq $goVersion -or $goVersion -lt [Version]'1.27.0') { Add-DependencyIssue ('Go 版本过低：' + $goText + '，要求 1.27.0 或更新版本。') '安装 Go 1.27.0 或更新版本：https://go.dev/dl/' }
         } catch { Add-DependencyIssue ('Go 无法运行：' + $_.Exception.Message) '重新安装 Go：https://go.dev/dl/' }
     }
 
-    $gcc = Find-Command 'gcc'
+    $gccCandidates = @('C:\msys64\ucrt64\bin\gcc.exe','C:\msys64\mingw64\bin\gcc.exe',(Join-Path $env:USERPROFILE 'scoop\apps\gcc\current\bin\gcc.exe'))
+    $gcc = Find-Command 'gcc' $gccCandidates
     if ($null -eq $gcc) {
         Add-DependencyIssue '未找到 x64 GCC，Go 的 SQLite 静态编译需要它。' '安装 MSYS2 UCRT64 GCC：https://www.msys2.org/，并把 mingw64\bin 或 ucrt64\bin 加入 PATH。'
     } else {
         try {
+            Register-CommandPath $gcc
             $gccTarget = Read-CommandText $gcc.Source @('-dumpmachine')
-            Write-InstallLine ('GCC 目标：' + $gccTarget)
+            Write-InstallLine ('GCC 目标：' + $gccTarget + ' · ' + $gcc.Source)
             if ($gccTarget -notmatch 'x86_64.*(mingw|windows)') { Add-DependencyIssue ('GCC 目标不兼容：' + $gccTarget + '，要求 Windows x64 GCC。') '安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
         } catch { Add-DependencyIssue ('GCC 无法运行：' + $_.Exception.Message) '重新安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
     }

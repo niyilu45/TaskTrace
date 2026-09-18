@@ -280,7 +280,7 @@ internal sealed partial class FloatingWindow {
     async Task ShowPriority(){
         if(busy || closing)return;var selected=tasks.SelectedNode;long id=SelectedTaskId();var leaf=selected==null?null:selected.Tag as OutstandingLeaf;
         if(id==0 || selected==null || (!(selected.Tag is long) && leaf==null)){status.Text="请先选中一个任务或遗留事项。";return;}
-        SetBusy(true);timer.Stop();
+        Point viewport=tasks.NativeScrollPosition();bool saved=false;SetBusy(true);timer.Stop();
         try {
             var current=leaf==null?await Api("GET","/tasks/"+id,null):null;
             string title=leaf==null?(string)current["title"]:OutstandingText(leaf.Html);int selectedPriority=leaf==null?PriorityNumber(current):leaf.Priority;
@@ -290,10 +290,10 @@ internal sealed partial class FloatingWindow {
                 var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(PriorityChoiceText(value)+(value==defaultPriority?" · 新增默认":""));choice.SelectedIndex=selectedPriority;
                 var save=new Button{Text="保存优先级",AutoSize=true};bool writing=false;
                 layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；当前新增默认 "+defaultPriority+"。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；当前新增默认 "+defaultPriority+"。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
-                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
+                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);saved=true;writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
-            await LoadTasks();
+            if(saved){await LoadTasks();tasks.RestoreNativeScroll(viewport);}
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
 
@@ -510,6 +510,7 @@ internal sealed partial class FloatingWindow {
         if(useSimpleMode){SetSimpleMode(true);await RefreshSimpleOutstanding();}
         var target=tasks.Nodes.Find(targetId.ToString(),true).First();
         tasks.SelectedNode=tasks.Nodes.Find(otherId.ToString(),true).First();target.EnsureVisible();
+        SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);tasks.Refresh();Point viewport=tasks.NativeScrollPosition();
         bool saved=false;Form opened=null;
         using(var driver=new Timer{Interval=25}) {
             driver.Tick+=delegate {
@@ -532,6 +533,7 @@ internal sealed partial class FloatingWindow {
         var otherAfter=await Api("GET","/tasks/"+otherId,null);
         if(PriorityNumber(updated)!=priority || PriorityNumber(otherBefore)!=PriorityNumber(otherAfter))throw new Exception("Priority click edited the wrong task or was not persisted");
         if(!tasks.Nodes.Find(targetId.ToString(),true).First().Text.Contains("[P"+priority+"]"))throw new Exception("Saved priority did not refresh its task label");
+        if(tasks.NativeScrollPosition()!=viewport)throw new Exception("Priority edit changed the task tree scroll position");
         if(useSimpleMode)SetSimpleMode(false);
     }
     async Task TestInteractions(){
@@ -556,6 +558,7 @@ internal sealed partial class FloatingWindow {
             if((long)tasks.Nodes[0].Tag!=b || (long)tasks.Nodes[1].Tag!=a || (long)tasks.Nodes[2].Tag!=c || !node(b).Text.Contains("[P0]"))throw new Exception("Lower displayed priority did not sort first");
             if(node(child).Parent!=node(b))throw new Exception("Priority sorting detached children");
             var preference=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));if(!Convert.ToBoolean(preference["priority"]))throw new Exception("Sort preference not persisted");
+            await Api("PATCH","/tasks/"+child,new{title="可拖动子任务 "+new string('长',120)});await LoadTasks();
             await TestInlinePriorityEdit(child,b,3,false);await TestInlinePriorityEdit(child,b,9,true);
             await ExecuteDrop(MakeDropPlan(node(c),node(a),-1));if(prioritySort.Checked)throw new Exception("Manual drag did not restore manual ordering");
             SetSimpleMode(true);await LoadTasks();

@@ -6,6 +6,16 @@ if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Version 
 function Assert-Exit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }
+function Source-Identifier {
+    if (![string]::IsNullOrWhiteSpace($env:TASKTRACE_SOURCE_COMMIT)) { return $env:TASKTRACE_SOURCE_COMMIT.Trim() }
+    $saved = Join-Path $repoRoot 'SOURCE-COMMIT.txt'
+    if (Test-Path -LiteralPath $saved -PathType Leaf) { $value = [IO.File]::ReadAllText($saved).Trim(); if ($value) { return $value } }
+    if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+        $value = (& git -C $repoRoot rev-parse HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    }
+    return ('source-archive-' + $Version.TrimStart('v'))
+}
 Push-Location $repoRoot
 try {
     if (!$SkipFrontend) {
@@ -46,17 +56,19 @@ try {
     Assert-Exit 'Updater build'
     Copy-Item -LiteralPath 'portable/Configure-TaskTrace.cmd','portable/Configure-TaskTrace.ps1','portable/tasktrace-settings.example.json','portable/Launch-TaskTrace.ps1','portable/README.md','LICENSE' -Destination $packageRoot -Force
     '5f3504827990df58bef84b3a5d8c6ab398534c0b' | Set-Content -LiteralPath (Join-Path $packageRoot 'UPSTREAM-COMMIT.txt') -Encoding ASCII
-    $sourceCommit = (& git rev-parse HEAD).Trim()
-    Assert-Exit 'Source revision'
+    $sourceCommit = Source-Identifier
     $sourceCommit | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-COMMIT.txt') -Encoding ASCII
     $Version | Set-Content -LiteralPath (Join-Path $packageRoot 'VERSION.txt') -Encoding ASCII
     if (!$SkipArchive) {
         New-Item -ItemType Directory -Path (Join-Path $repoRoot 'Releases') -Force | Out-Null
-        $previousTag = (& git describe --tags --abbrev=0 HEAD 2>$null)
-        if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($previousTag)) {
-            $releaseItems = @(& git log ($previousTag.Trim() + '..HEAD') --pretty=format:'- %s' --no-merges)
-        } else {
-            $releaseItems = @(& git log -1 --pretty=format:'- %s' --no-merges)
+        $releaseItems = @()
+        if ((Test-Path -LiteralPath (Join-Path $repoRoot '.git')) -and (Get-Command git -ErrorAction SilentlyContinue)) {
+            $previousTag = (& git -C $repoRoot describe --tags --abbrev=0 HEAD 2>$null)
+            if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($previousTag)) {
+                $releaseItems = @(& git -C $repoRoot log ($previousTag.Trim() + '..HEAD') --pretty=format:'- %s' --no-merges)
+            } else {
+                $releaseItems = @(& git -C $repoRoot log -1 --pretty=format:'- %s' --no-merges)
+            }
         }
         if ($LASTEXITCODE -ne 0 -or $releaseItems.Count -eq 0) { $releaseItems = @('- 程序更新和问题修复') }
         $releaseNotes = @(
