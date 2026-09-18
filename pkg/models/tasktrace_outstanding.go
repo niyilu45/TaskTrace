@@ -131,7 +131,7 @@ func taskTraceAttribute(n *html.Node, key string) string {
 func taskTraceOutstandingMetadata(n *html.Node) string {
 	var out strings.Builder
 	for _, attr := range n.Attr {
-		if attr.Key == "data-done" || attr.Key == "data-priority" {
+		if attr.Key == "data-done" || attr.Key == "data-priority" || attr.Key == "data-completed-at" {
 			out.WriteString(` ` + attr.Key + `="` + html.EscapeString(attr.Val) + `"`)
 		}
 	}

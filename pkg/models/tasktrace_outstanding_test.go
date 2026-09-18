@@ -91,7 +91,7 @@ func taskTraceIDs(list *taskTraceOutstandingList) []string {
 func TestTaskTraceOutstandingMove(t *testing.T) {
 	t.Run("reorder then move without losing neighboring items", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
-		sourceID := taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "<b>A</b>", ` data-done="true" data-priority="2"`}, taskTraceOutstandingItem{"b", "B", ""}, taskTraceOutstandingItem{"c", "C", ""})
+		sourceID := taskTraceSeedList(t, 1, taskTraceOutstandingItem{"a", "<b>A</b>", ` data-done="true" data-priority="2" data-completed-at="2026-09-18T08:00:00.000Z"`}, taskTraceOutstandingItem{"b", "B", ""}, taskTraceOutstandingItem{"c", "C", ""})
 		targetID := taskTraceSeedList(t, 2, taskTraceOutstandingItem{"d", "D", ""})
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 1, ItemID: "c", BeforeItemID: "a"}))
 		assert.Equal(t, []string{"c", "a", "b"}, taskTraceIDs(taskTraceReadList(t, 1)))
@@ -103,7 +103,7 @@ func TestTaskTraceOutstandingMove(t *testing.T) {
 		target := taskTraceReadList(t, 2)
 		assert.Equal(t, []string{"a", "d"}, taskTraceIDs(target))
 		assert.Equal(t, "<b>A</b>", target.items[0].content)
-		assert.Equal(t, ` data-done="true" data-priority="2"`, target.items[0].metadata)
+		assert.Equal(t, ` data-done="true" data-priority="2" data-completed-at="2026-09-18T08:00:00.000Z"`, target.items[0].metadata)
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 2, TargetTaskID: 2, ItemID: "a"}))
 		assert.Equal(t, []string{"d", "a"}, taskTraceIDs(taskTraceReadList(t, 2)))
 	})

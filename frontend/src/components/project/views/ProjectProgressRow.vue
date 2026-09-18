@@ -50,14 +50,45 @@
 				v-else-if="error"
 				class="empty"
 			>遗留事项尚未加载</span>
-			<ReadonlyRichText
-				v-else-if="outstanding"
-				:html="outstanding"
-			/>
-			<span
-				v-else
-				class="empty"
-			>暂无遗留事项</span>
+			<template v-else>
+				<ol
+					v-if="pendingOutstanding.length"
+					class="outstanding-items"
+				>
+					<li
+						v-for="entry in pendingOutstanding"
+						:key="entry.item.id"
+						:value="entry.number"
+					>
+						<ReadonlyRichText :html="entry.item.html" />
+					</li>
+				</ol>
+				<span
+					v-else
+					class="empty"
+				>{{ completedOutstanding.length ? '暂无未完成遗留事项' : '暂无遗留事项' }}</span>
+				<button
+					v-if="completedOutstanding.length"
+					type="button"
+					class="range-summary"
+					:aria-expanded="showCompletedOutstanding"
+					@click="showCompletedOutstanding = !showCompletedOutstanding"
+				>
+					{{ showCompletedOutstanding ? '隐藏已完成的遗留事项' : `展开已完成的遗留事项（${completedOutstanding.length}）` }}
+				</button>
+				<ol
+					v-if="showCompletedOutstanding"
+					class="outstanding-items completed-outstanding"
+				>
+					<li
+						v-for="entry in completedOutstanding"
+						:key="entry.item.id"
+						:value="entry.number"
+					>
+						<ReadonlyRichText :html="entry.item.html" />
+					</li>
+				</ol>
+			</template>
 			<SubtaskOutstandingSummary
 				v-if="descendants?.length"
 				:tasks="descendants"
@@ -91,7 +122,10 @@
 				class="history-entry"
 			>
 				<time>{{ note.date }}<template v-if="showAuthors(note.date)"> · {{ authorsByDate[note.date].join('、') }}</template>：</time>
-				<strong v-if="showAuthors(note.date)" class="progress-author">{{ note.author }}：</strong><ReadonlyRichText :html="note.progress" />
+				<strong
+					v-if="showAuthors(note.date)"
+					class="progress-author"
+				>{{ note.author }}：</strong><ReadonlyRichText :html="note.progress" />
 				<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
 			</div>
 			<button
@@ -112,7 +146,7 @@ import {ref, computed, onBeforeUnmount, watch} from 'vue'
 import {useIntersectionObserver} from '@vueuse/core'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
-import {outstandingHtml} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding} from '@/helpers/sharedOutstanding'
 import {sortProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
@@ -144,8 +178,11 @@ const showAuthors = (date: string) => {
 }
 const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
 watch(() => props.progressDays, () => { showAllProgress.value = false })
-// The latest daily record replaces earlier outstanding items, including clearing them.
-const outstanding = computed(() => outstandingHtml(history.value))
+const numberedOutstanding = computed(() => sharedOutstanding(history.value).items.map((item, index) => ({item, number: index + 1})))
+const pendingOutstanding = computed(() => numberedOutstanding.value.filter(entry => !entry.item.done))
+const completedOutstanding = computed(() => numberedOutstanding.value.filter(entry => entry.item.done))
+const showCompletedOutstanding = ref(false)
+watch(() => props.task.id, () => { showCompletedOutstanding.value = false })
 const loading = ref(false)
 const error = ref('')
 let disposed = false
@@ -244,6 +281,17 @@ onBeforeUnmount(() => { disposed = true })
 }
 .empty { color: var(--grey-600);
  }
+.outstanding-items {
+	margin: 0;
+	padding-inline-start: 1.5rem;
+	li { padding-block-end: .35rem; }
+	li::marker { font-weight: 600; }
+}
+.completed-outstanding {
+	margin-block-start: .4rem;
+	color: var(--grey-600);
+	text-decoration: line-through;
+}
 .history-entry {
  margin-block-end: .6rem;
  :deep(.readonly-rich-text), :deep(.readonly-rich-text > p:first-child) { display: inline;

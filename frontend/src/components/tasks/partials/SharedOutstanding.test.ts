@@ -68,13 +68,14 @@ beforeEach(() => {
 afterEach(() => {
 	wrapper?.unmount()
 	root.remove()
+	vi.useRealTimers()
 	vi.unstubAllGlobals()
 })
 
 describe('outstanding item images', () => {
 	it('announces busy synchronously throughout image upload and releases it after saving', async () => {
 		let finishUpload!: (result: never) => void
-		upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve }))
+		upload.mockImplementationOnce(() => new Promise<never>(resolve => { finishUpload = resolve }))
 		await open()
 		await paste('pending.png')
 		await click('添加遗留事项')
@@ -88,13 +89,13 @@ describe('outstanding item images', () => {
 
 	it('clears busy when the component is unmounted during an upload', async () => {
 		let finishUpload!: (result: never) => void
-		upload.mockImplementationOnce(() => new Promise(resolve => { finishUpload = resolve }))
+		upload.mockImplementationOnce(() => new Promise<never>(resolve => { finishUpload = resolve }))
 		await open()
 		await paste('pending.png')
 		await click('添加遗留事项')
 		expect(wrapper.emitted('busy')).toEqual([[true]])
 		wrapper.unmount()
-		expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
+		expect(wrapper.emitted('busy')?.slice(-1)[0]).toEqual([false])
 		finishUpload({data: {success: [{id: 5}]}} as never)
 		await flushPromises()
 	})
@@ -133,25 +134,26 @@ describe('outstanding item images', () => {
 		expect(wrapper.get('textarea').element.value).toBe('')
 	})
 
-	it('appends to the latest item without losing concurrent edits and does not duplicate on an uncertain save', async () => {
-		history = [{id: 1, comment: shared('<li data-id="first">Original</li>')}]
+	it('edits text and images without losing other items or duplicating an uncertain save', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Original</p><p><img src="/api/v1/tasks/42/attachments/8" alt="旧图"></p></li>')}]
 		await open()
-		await click('添加图片')
+		await click('编辑')
+		expect(wrapper.get('textarea').element.value).toBe('Original')
+		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('/api/v1/tasks/42/attachments/8')
 		await wrapper.get('textarea').setValue('Image caption')
 		await paste('detail.png')
-		history[0].comment = shared('<li data-id="first">Updated remotely</li><li data-id="second">Concurrent item</li>')
+		history[0].comment = shared('<li data-id="first"><p>Original</p><p><img src="/api/v1/tasks/42/attachments/8" alt="旧图"></p></li><li data-id="second">Concurrent item</li>')
 		update.mockImplementationOnce(async ({body}) => {
 			history[0].comment = body.comment!
 			throw new Error('Response lost after server save')
 		})
-		await click('保存图片')
-		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(1)
-		await click('保存图片')
+		await click('保存修改')
+		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(2)
+		await click('保存修改')
 		expect(upload).toHaveBeenCalledTimes(1)
-		expect(history[0].comment).toContain('Updated remotely')
 		expect(history[0].comment).toContain('Concurrent item')
 		expect(history[0].comment.match(/Image caption/g)).toHaveLength(1)
-		expect(history[0].comment.match(/<img /g)).toHaveLength(1)
+		expect(history[0].comment.match(/<img /g)).toHaveLength(2)
 	})
 
 	it('preserves separate drafts when switching between new and existing items', async () => {
@@ -159,23 +161,23 @@ describe('outstanding item images', () => {
 		await open()
 		await wrapper.get('textarea').setValue('New outstanding draft')
 		await paste('new.png')
-		await click('添加图片')
-		expect(wrapper.get('textarea').element.value).toBe('')
+		await click('编辑')
+		expect(wrapper.get('textarea').element.value).toBe('Existing')
 		await paste('existing.png')
 		await click('返回新增事项')
 		expect(wrapper.get('textarea').element.value).toBe('New outstanding draft')
 		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('blob:new.png')
-		await click('添加图片')
+		await click('编辑')
 		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('blob:existing.png')
 	})
 
 	it('does not re-create an item that was moved or removed while its images were being added', async () => {
 		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
 		await open()
-		await click('添加图片')
+		await click('编辑')
 		await paste('unsaved.png')
 		history[0].comment = shared('')
-		await click('保存图片')
+		await click('保存修改')
 		expect(update).not.toHaveBeenCalled()
 		expect(wrapper.get('[role="alert"]').text()).toContain('已被移除或移动')
 		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(1)
@@ -195,5 +197,40 @@ describe('outstanding item images', () => {
 		expect(parentPaste).not.toHaveBeenCalled()
 		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(0)
 		expect(upload).not.toHaveBeenCalled()
+	})
+
+	it('hides completed items until requested and keeps their original numbers', async () => {
+		history = [{id: 1, comment: shared('<li data-id="pending" data-done="false">Pending</li><li data-id="done" data-done="true" data-completed-at="2026-09-18T08:00:00.000Z">Completed</li>')}]
+		await open()
+		expect(wrapper.text()).toContain('Pending')
+		expect(wrapper.text()).not.toContain('Completed')
+		expect(wrapper.get('ol.outstanding-list > li').attributes('value')).toBe('1')
+		await click('显示已完成的遗留事项（1）')
+		expect(wrapper.text()).toContain('Completed')
+		const completed = wrapper.get('ol.completed-list > li')
+		expect(completed.attributes('value')).toBe('2')
+		expect((completed.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
+	})
+
+	it('moves a checked item into completed items after five seconds and allows restoring it', async () => {
+		vi.useFakeTimers()
+		history = [{id: 1, comment: shared('<li data-id="pending" data-done="false">Pending</li>')}]
+		await open()
+		await wrapper.get('input[aria-label="完成第 1 条遗留事项"]').setValue(true)
+		await flushPromises()
+		expect(wrapper.text()).toContain('Pending')
+		expect(history[0].comment).toContain('data-done="true"')
+		vi.advanceTimersByTime(4999)
+		await wrapper.vm.$nextTick()
+		expect(wrapper.text()).toContain('Pending')
+		vi.advanceTimersByTime(1)
+		await wrapper.vm.$nextTick()
+		expect(wrapper.text()).not.toContain('Pending')
+		await click('显示已完成的遗留事项（1）')
+		await wrapper.get('input[aria-label="恢复第 1 条遗留事项"]').setValue(false)
+		await flushPromises()
+		expect(wrapper.text()).toContain('Pending')
+		expect(history[0].comment).toContain('data-done="false"')
+		expect(history[0].comment).not.toContain('data-completed-at')
 	})
 })
