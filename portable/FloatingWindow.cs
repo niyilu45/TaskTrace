@@ -31,6 +31,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly HashSet<long> collapsedTasks = new HashSet<long>();
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly CheckBox showCompleted = new CheckBox { Text = "显示已完成", AutoSize = true, Dock = DockStyle.Fill };
+    readonly CheckBox singleLine = new CheckBox { Text = "单行显示", AutoSize = true, Dock = DockStyle.Fill, AccessibleName = "任务单行显示" };
     readonly CheckBox pin = new CheckBox { Text = "置顶", Checked = true, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
     readonly Timer timer = new Timer { Interval = 1000 };
@@ -52,6 +53,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
+    internal sealed class TaskNode : TreeNode { public int CurrentTextLength; public TaskNode(string text) : base(text) {} }
     internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html; public bool Done; public int Priority=9; }
     sealed class PendingItem {
         public string Id, Html; public int Number; public bool Done; public int Priority=9;
@@ -119,12 +121,14 @@ internal sealed partial class FloatingWindow : Form {
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        projectRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
+        projectRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
-        projectRow.Controls.Add(projects, 0, 0); projectRow.Controls.Add(showCompleted, 1, 0);
+        projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+        projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
+        projectRow.Controls.Add(projects, 0, 0); projectRow.Controls.Add(showCompleted, 1, 0); projectRow.Controls.Add(singleLine, 2, 0);
         content.Controls.Add(projectRow, 0, 0);
         showCompleted.CheckedChanged += async delegate { if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
+        singleLine.CheckedChanged += async delegate { ApplyTaskTreeLayout(); if(!rendering) { SaveBounds(); await Reload(); } };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
         InitializePriorityChoice(entryPriority, defaultPriority);
         addRow = TaskCreationRow(entry, entryPriority, "新事项名称", "添加事项", async delegate { await AddTask(); });
@@ -132,7 +136,7 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(addRow, 0, 1);
         searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
         content.Controls.Add(searchRow, 0, 2);
-        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding();
+        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding(); ApplyTaskTreeLayout();
         content.Controls.Add(tasks, 0, 3);
         var progressButton = new Button { Text = "记录进展", AutoSize = false, Width = 72 };
         progressButton.Click += delegate { ShowProgress(); };
@@ -164,11 +168,12 @@ internal sealed partial class FloatingWindow : Form {
             else if(node.Tag is long) { tasks.SelectedNode = node; ShowProgress(); }
         };
         tasks.AfterCollapse += delegate(object sender, TreeViewEventArgs e) {
-            if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+            if(!rendering && !singleLine.Checked && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Add(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
         };
         tasks.AfterExpand += delegate(object sender, TreeViewEventArgs e) {
-            if(!rendering && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
+            if(!rendering && !singleLine.Checked && e.Node.Tag is long && search.Text.Trim().Length == 0) { collapsedTasks.Remove(Convert.ToInt64(e.Node.Tag)); SaveTreePreferences(); }
         };
+        tasks.BeforeCollapse += delegate(object sender, TreeViewCancelEventArgs e) { if(singleLine.Checked && !rendering && e.Node.Tag is long)e.Cancel=true; };
         // Both close and minimize keep the application available only in the notification area.
         Resize += delegate { if(!closing && WindowState == FormWindowState.Minimized) HideToTray(); else QueueFullLayoutRefresh(); };
         tray.DoubleClick += delegate { RestoreWindow(); };
@@ -308,6 +313,17 @@ internal sealed partial class FloatingWindow : Form {
     void HideNewTaskEditor() {
         if(addRow==null)return;
         entry.Clear();entryPriority.SelectedIndex=defaultPriority;addRow.Visible=false;content.RowStyles[1].Height=0;RefreshFullLayout();
+    }
+    void ApplyTaskTreeLayout() {
+        bool flat=singleLine.Checked;
+        tasks.SingleLinePaths=flat;
+        tasks.ShowLines=!flat;
+        tasks.ShowRootLines=true;
+        tasks.ShowPlusMinus=!flat;
+        tasks.Indent=flat?0:20;
+        if(flat)tasks.ExpandAll();
+        tasks.SyncCompletionStates();
+        tasks.Invalidate();
     }
     void QueueFullLayoutRefresh() {
         if(simpleMode || closing || IsDisposed || fullLayoutRefreshQueued || !IsHandleCreated || WindowState!=FormWindowState.Normal)return;
@@ -806,6 +822,7 @@ internal sealed partial class FloatingWindow : Form {
             var saved = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
             if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
+            if(saved.ContainsKey("singleLine")) singleLine.Checked = Convert.ToBoolean(saved["singleLine"]);
             var bounds = new Rectangle(Convert.ToInt32(saved["x"]), Convert.ToInt32(saved["y"]), Math.Max(350, Convert.ToInt32(saved["width"])), Math.Max(300, Convert.ToInt32(saved["height"])));
             var area = Screen.FromRectangle(bounds).WorkingArea;
             Size = new Size(Math.Min(bounds.Width, area.Width), Math.Min(bounds.Height, area.Height));
@@ -813,7 +830,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, projectId = preferredProjectId })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, singleLine = singleLine.Checked, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -900,7 +917,22 @@ internal sealed partial class FloatingWindow : Form {
             var sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();
             var sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
             var leafState=(OutstandingLeaf)sharedLeaf.Tag;
-            if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2)throw new Exception("Full mode direct outstanding status or priority failed");
+            if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2 || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Full mode direct outstanding status, priority or bold font failed");
+            if(singleLine.Parent!=projectRow || !singleLine.Visible || singleLine.AccessibleName!="任务单行显示")throw new Exception("Single-line checkbox is missing from full floating mode");
+            rendering=true;singleLine.Checked=true;rendering=false;ApplyTaskTreeLayout();await LoadTasks();
+            var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
+            string expectedAncestors=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
+            if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || !flatGrandchild.IsVisible || tasks.Nodes.Count!=3)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+flatGrandchild.IsVisible);
+            var flatRoot=tasks.Nodes.Find(id.ToString(),true).Single();var flatChild=tasks.Nodes.Find(childId.ToString(),true).Single();
+            var rootCheck=tasks.CompletionBounds(flatRoot);var childCheck=tasks.CompletionBounds(flatChild);var grandchildCheck=tasks.CompletionBounds(flatGrandchild);
+            if(rootCheck.Left!=childCheck.Left || childCheck.Left!=grandchildCheck.Left || flatRoot.StateImageIndex!=0 || flatChild.StateImageIndex!=0 || flatGrandchild.StateImageIndex!=0)throw new Exception("Single-line task completion boxes are not aligned");
+            SaveBounds();var singleLineSettings=ReadObject(File.ReadAllText(Path.Combine(data,"floating-window.json")));if(!Convert.ToBoolean(singleLineSettings["singleLine"]))throw new Exception("Single-line preference was not persisted");
+            using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-full-test.png")); }
+            int flatCompletionPoint=((grandchildCheck.Top+grandchildCheck.Height/2)<<16)|((grandchildCheck.Left+grandchildCheck.Width/2)&0xffff);
+            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(flatCompletionPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(flatCompletionPoint));
+            bool flatCompleted=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+grandchildId,null))["done"])){flatCompleted=true;break;}}
+            if(!flatCompleted)throw new Exception("Single-line custom completion box did not persist");while(busy)await Task.Delay(20);await Complete(grandchildId,false);
+            sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
             sharedLeaf.EnsureVisible();tasks.Refresh();var outstandingCheck=tasks.CompletionBounds(sharedLeaf);if(outstandingCheck.IsEmpty)throw new Exception("Outstanding completion box is not visible");
             int outstandingPoint=((outstandingCheck.Top+outstandingCheck.Height/2)<<16)|((outstandingCheck.Left+outstandingCheck.Width/2)&0xffff);
             SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(outstandingPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(outstandingPoint));
@@ -913,11 +945,15 @@ internal sealed partial class FloatingWindow : Form {
             tasks.SelectedNode=sharedLeaf;int beforeModeLoad=taskLoadVersion;
             SetSimpleMode(true);Size=new Size(330,260);
             if(tasks.Nodes.Find(childId.ToString(),true).Single()!=sharedChild || sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");
+            flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
+            if(!singleLine.Checked || !tasks.SingleLinePaths || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || !flatGrandchild.IsVisible || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Simple mode did not retain single-line paths or bold outstanding items");
+            using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-simple-test.png")); }
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
             ShowSimpleModeRestore();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
             restoreSimple.PerformClick();if(simpleMode)throw new Exception("Simple mode restore button failed");
             if(sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Full mode restore changed shared task data or selection");
+            rendering=true;singleLine.Checked=false;rendering=false;ApplyTaskTreeLayout();SaveBounds();await LoadTasks();
             tasks.Nodes[0].Collapse(); collapsedTasks.Clear(); LoadTreePreferences(); await LoadTasks();
             if(tasks.Nodes[0].IsExpanded || !collapsedTasks.Contains(id)) throw new Exception("Collapsed state not retained");
             search.Text = "下级子任务验收"; await LoadTasks();
@@ -998,7 +1034,7 @@ internal sealed partial class FloatingWindow : Form {
             SetSimpleMode(false);
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-test.png")); }
-            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
+            File.WriteAllText(Path.Combine(data, "floating-test.txt"), "PASS: bottom new-item button and labeled editor, responsive text fields after repeated width changes, all task groups scroll without pagination, double-click leaves expansion unchanged, shortcut-only undo and F5 refresh, persistent grouped undo, stale undo rejection, unrelated updates preserved, undo task/comment/delete/move/image, native text shortcut isolation, drag/drop reparent and order, outstanding move with image migration, priority sorting, image gallery, numbering, five-level task limit, rejected sixth level without orphan, tray-only startup, close/minimize to tray, full/simple tray restore, simple mode, resizing, restore button, shared direct outstanding tree across modes, bold outstanding items, persisted full/simple single-line task paths, layout-only mode switches, shared list, same-day merge, full error diagnostics, Windows error code, session redaction, hierarchy, nested indentation, collapse/expand retention, search ancestors, completed parent context, show/hide completed, reopen, completed search, saved filter preference, create, complete preserving description, search, independent browser session, pin, restore; TopMost=" + TopMost);
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }

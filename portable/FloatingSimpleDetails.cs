@@ -30,13 +30,13 @@ internal sealed partial class TaskTreeView {
         if(!simpleImageLinks || node==null || node.TreeView!=this || SimpleImageAvailable==null || !SimpleImageAvailable(node))return Rectangle.Empty;
         var bounds=node.Bounds;
         if(bounds.Height<=0)return Rectangle.Empty;
-        Font font=node.NodeFont??Font;
+        Font font=DisplayFont(node);
         int width=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width;
         return new Rectangle(bounds.Left+2,bounds.Top,width+4,bounds.Height);
     }
     internal void ReserveSimpleImageSpace(TreeNode node) {
         if(!simpleImageLinks || SimpleImageAvailable==null || !SimpleImageAvailable(node))return;
-        Font font=node.NodeFont??Font;
+        Font font=DisplayFont(node);
         int linkWidth=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width+12;
         int spaceWidth=Math.Max(1,TextRenderer.MeasureText("x x",font,Size.Empty,TextFormatFlags.NoPadding).Width-TextRenderer.MeasureText("xx",font,Size.Empty,TextFormatFlags.NoPadding).Width);
         // Native hit testing measures Node.Text, whereas owner drawing places a link before it.
@@ -56,7 +56,7 @@ internal sealed partial class TaskTreeView {
         if(DrawPriorityLink(e)){base.OnDrawNode(e);return;}
         var link=SimpleImageBounds(e.Node);
         if(link.IsEmpty){e.DrawDefault=true;base.OnDrawNode(e);return;}
-        Font font=e.Node.NodeFont??Font;
+        Font font=DisplayFont(e.Node);
         bool selected=(e.State&TreeNodeStates.Selected)!=0;
         Color background=selected?SystemColors.Highlight:BackColor;
         Color foreground=selected?SystemColors.HighlightText:e.Node.ForeColor;
@@ -121,8 +121,8 @@ internal sealed partial class FloatingWindow {
             ShowSimpleModeRestore();hoverTimer.Stop();progressTip.Hide(tasks);
             try {await ShowImageGallery(leaf.TaskId,leaf.Html,this);}catch(Exception error){Error(error);}
         };
-        tasks.AfterCollapse+=delegate(object sender,TreeViewEventArgs e){if(!rendering && e.Node.Tag is long)simpleCollapsedDuringRead.Add((long)e.Node.Tag);};
-        tasks.AfterExpand+=delegate(object sender,TreeViewEventArgs e){if(!rendering && e.Node.Tag is long)simpleCollapsedDuringRead.Remove((long)e.Node.Tag);};
+        tasks.AfterCollapse+=delegate(object sender,TreeViewEventArgs e){if(!rendering && !singleLine.Checked && e.Node.Tag is long)simpleCollapsedDuringRead.Add((long)e.Node.Tag);};
+        tasks.AfterExpand+=delegate(object sender,TreeViewEventArgs e){if(!rendering && !singleLine.Checked && e.Node.Tag is long)simpleCollapsedDuringRead.Remove((long)e.Node.Tag);};
     }
     void InvalidateSimpleOutstanding() {simpleOutstandingVersion++;}
     Task RefreshSimpleOutstanding() {
@@ -228,7 +228,7 @@ internal sealed partial class FloatingWindow {
             }
             tasks.SyncCompletionState(node);
             if(node.Nodes.Count==0)node.Collapse();
-            else if(!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id)))node.Expand();
+            else if(singleLine.Checked || (!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id))))node.Expand();
             RestoreOutstandingPositions(selection,top);
         } finally {tasks.EndUpdate();rendering=wasRendering;}
         return true;

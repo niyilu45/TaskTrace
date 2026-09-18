@@ -13,7 +13,7 @@ internal sealed partial class FloatingWindow {
 
     string TaskViewContext() {
         var selected=projects.SelectedItem as Project;
-        return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,
+        return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,singleLine.Checked,
             prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray()});
     }
     bool TaskLoadCurrent(int version,string context,bool background) {
@@ -50,6 +50,15 @@ internal sealed partial class FloatingWindow {
     object[] TaskTreeShape(IEnumerable<TreeNode> nodes) {
         return nodes.Where(node=>node.Tag is long).Select(node=>(object)new object[]{node.Tag,node.Text,node.Checked,
             node.ToolTipText,TaskTreeShape(node.Nodes.Cast<TreeNode>())}).ToArray();
+    }
+    static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
+        var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();
+        flat.Add(node);foreach(var child in children)CollectFlatTaskNodes(child,flat);
+    }
+    static List<TreeNode> FlattenTaskNodes(List<TreeNode> roots) {
+        var flat=new List<TreeNode>();foreach(var root in roots)CollectFlatTaskNodes(root,flat);
+        foreach(var node in flat)if(node.Parent!=null)node.Remove();
+        return flat;
     }
     async Task ReadSharedLists(IEnumerable<long> ids,Dictionary<long,SharedList> destination) {
         using(var gate=new SemaphoreSlim(4,4)) {
@@ -117,7 +126,7 @@ internal sealed partial class FloatingWindow {
         foreach(long id in ordered) {
             if(!included.Contains(id))continue;bool done=Convert.ToBoolean(all[id]["done"]);
             string taskStatus=TaskStatusValue(all[id]);
-            nodes[id]=new TreeNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
+            nodes[id]=new TaskNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
                 ForeColor=done?Color.FromArgb(100,110,125):ForeColor,
                 ToolTipText=TaskStatusText(taskStatus)+" · "+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
         }
@@ -126,6 +135,8 @@ internal sealed partial class FloatingWindow {
             if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id]))nodes[parents[id]].Nodes.Add(nodes[id]);else roots.Add(nodes[id]);
         }
         NumberTasks(roots,all);
+        int groupCount=roots.Count;
+        if(singleLine.Checked)roots=FlattenTaskNodes(roots);
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
         var visibleRoots=roots.ToArray();
@@ -159,14 +170,15 @@ internal sealed partial class FloatingWindow {
                 tasks.Nodes.Clear();tasks.Nodes.AddRange(visibleRoots);tasks.ExpandAll();
                 foreach(var pair in nodes) {
                     bool expanded;
-                    if(background && expansion.TryGetValue(pair.Key,out expanded)) {if(!expanded)pair.Value.Collapse();}
+                    if(singleLine.Checked)pair.Value.Expand();
+                    else if(background && expansion.TryGetValue(pair.Key,out expanded)) {if(!expanded)pair.Value.Collapse();}
                     else if(query.Length==0 && collapsedTasks.Contains(pair.Key))pair.Value.Collapse();
                 }
                 if(nodes.ContainsKey(selectedId) && nodes[selectedId].TreeView==tasks)tasks.SelectedNode=nodes[selectedId];
                 var selected=FindRefreshNode(selectedKey);if(selected!=null)tasks.SelectedNode=selected;
             }finally{tasks.EndUpdate();rendering=false;}
         }
-        int previousTotal=total;total=roots.Count;
+        int previousTotal=total;total=groupCount;
         string nextStatus=project==null?"请先在完整界面建立项目。":matches.Count==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可清空搜索或显示已完成。"):
             matches.Count+" 项 · "+total+" 个任务组";
         if(!background || treeChanged || projectChanged || previousTotal!=total || status.Text!=nextStatus) {
@@ -178,12 +190,15 @@ internal sealed partial class FloatingWindow {
         ApplyBackgroundOutstanding(sharedLists);
         if(background) {
             rendering=true;
-            try {foreach(var node in SimpleTaskNodes(tasks.Nodes)) {
-                bool expanded;
-                if(expansion.TryGetValue((long)node.Tag,out expanded) && node.Nodes.Count>0 && node.IsExpanded!=expanded) {
-                    if(expanded)node.Expand();else node.Collapse();
+            try {
+                if(singleLine.Checked)tasks.ExpandAll();
+                else foreach(var node in SimpleTaskNodes(tasks.Nodes)) {
+                    bool expanded;
+                    if(expansion.TryGetValue((long)node.Tag,out expanded) && node.Nodes.Count>0 && node.IsExpanded!=expanded) {
+                        if(expanded)node.Expand();else node.Collapse();
+                    }
                 }
-            }}finally{rendering=false;}
+            }finally{rendering=false;}
         }
         var restoredSelection=FindRefreshNode(selectedKey);if(restoredSelection!=null && tasks.SelectedNode!=restoredSelection)tasks.SelectedNode=restoredSelection;
         var restoredTop=FindRefreshNode(topKey);if(restoredTop!=null && tasks.TopNode!=restoredTop)tasks.TopNode=restoredTop;

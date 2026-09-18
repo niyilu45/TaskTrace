@@ -39,16 +39,13 @@ internal sealed partial class TaskTreeView : TreeView {
     internal void SyncCompletionState(TreeNode node) {
         if(node==null)return;
         var leaf=node.Tag as FloatingWindow.OutstandingLeaf;
-        node.StateImageIndex=node.Tag is long?(node.Checked?2:1):leaf!=null?(leaf.Done?2:1):0;
+        node.StateImageIndex=node.Tag is long?(SingleLinePaths?0:(node.Checked?2:1)):leaf!=null?(leaf.Done?2:1):0;
         foreach(TreeNode child in node.Nodes)SyncCompletionState(child);
     }
     internal void SyncCompletionStates() {foreach(TreeNode node in Nodes)SyncCompletionState(node);}
-    TreeNode CompletionNodeAt(Point point) {
-        var hit=HitTest(point);
-        return hit.Node!=null && (hit.Node.Tag is long || hit.Node.Tag is FloatingWindow.OutstandingLeaf) && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
-    }
-    internal Rectangle CompletionBounds(TreeNode node) {
+    internal Rectangle CompletionVisualBounds(TreeNode node) {
         if(node==null || node.TreeView!=this || !node.IsVisible)return Rectangle.Empty;
+        if(SingleLinePaths && node.Tag is long)return new Rectangle(4,node.Bounds.Top,18,node.Bounds.Height);
         int y=node.Bounds.Top+node.Bounds.Height/2,left=-1,right=-1;
         for(int x=0;x<ClientSize.Width;x++) {
             var hit=HitTest(x,y);
@@ -57,6 +54,14 @@ internal sealed partial class TaskTreeView : TreeView {
         }
         return left<0?Rectangle.Empty:new Rectangle(left,node.Bounds.Top,right-left+1,node.Bounds.Height);
     }
+    TreeNode CompletionNodeAt(Point point) {
+        if(SingleLinePaths && point.X>=4 && point.X<22) {
+            for(var node=TopNode;node!=null;node=node.NextVisibleNode)if(node.Tag is long && CompletionVisualBounds(node).Contains(point))return node;
+        }
+        var hit=HitTest(point);
+        return hit.Node!=null && (!SingleLinePaths || !(hit.Node.Tag is long)) && (hit.Node.Tag is long || hit.Node.Tag is FloatingWindow.OutstandingLeaf) && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
+    }
+    internal Rectangle CompletionBounds(TreeNode node) {return CompletionVisualBounds(node);}
     bool HandleCompletionMessage(ref Message message) {
         const int LeftDown=0x201,LeftUp=0x202,LeftDoubleClick=0x203,MouseMove=0x200,CaptureChanged=0x215;
         if(message.Msg==CaptureChanged){pressedCompletionNode=null;swallowCompletionUp=false;return false;}
@@ -108,7 +113,7 @@ internal sealed partial class TaskTreeView : TreeView {
             }
         }
     }
-    protected override void Dispose(bool disposing) {if(disposing)completionImages.Dispose();base.Dispose(disposing);}
+    protected override void Dispose(bool disposing) {if(disposing){completionImages.Dispose();DisposeDisplayFonts();}base.Dispose(disposing);}
 }
 
 internal sealed partial class FloatingWindow {
@@ -252,10 +257,14 @@ internal sealed partial class FloatingWindow {
         if(prioritySort.Checked)return ids.OrderBy(id=>PriorityNumber(all[id])).ThenBy(id=>PositionOf(id)).ThenBy(id=>id).ToList();
         return ids.OrderBy(id=>PositionOf(id)).ThenBy(id=>id).ToList();
     }
-    void NumberTasks(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all){for(int index=0;index<roots.Count;index++)NumberTask(roots[index],(index+1).ToString(),all);}
-    void NumberTask(TreeNode node,string number,Dictionary<long,Dictionary<string,object>> all){
-        long id=(long)node.Tag;int priority=PriorityNumber(all[id]);node.Text=number+". "+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+(string)all[id]["title"];
-        int index=0;foreach(TreeNode child in node.Nodes)if(child.Tag is long)NumberTask(child,number+"."+(++index),all);
+    void NumberTasks(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all){for(int index=0;index<roots.Count;index++)NumberTask(roots[index],(index+1).ToString(),all,new List<string>());}
+    void NumberTask(TreeNode node,string number,Dictionary<long,Dictionary<string,object>> all,List<string> ancestors){
+        long id=(long)node.Tag;int priority=PriorityNumber(all[id]);string title=(string)all[id]["title"];
+        string current=number+". "+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+title;
+        var taskNode=node as TaskNode;if(taskNode!=null)taskNode.CurrentTextLength=current.Length;
+        node.Text=current+(singleLine.Checked && ancestors.Count>0?TaskTreeView.SingleLineSeparator+String.Join(TaskTreeView.SingleLineSeparator,ancestors):"");
+        var nextAncestors=new List<string>{title};nextAncestors.AddRange(ancestors);
+        int index=0;foreach(TreeNode child in node.Nodes)if(child.Tag is long)NumberTask(child,number+"."+(++index),all,nextAncestors);
     }
     async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
         var shared=ReadShared(await ReadHistory(taskId));var item=shared.Items.FirstOrDefault(value=>value.Id==itemId);

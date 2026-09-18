@@ -8,9 +8,28 @@ using System.Windows.Forms;
 
 internal sealed partial class TaskTreeView {
     internal Action<TreeNode> PriorityClicked;
+    internal bool SingleLinePaths;
+    internal const string SingleLineSeparator=" / ";
     static readonly Regex PriorityPrefix=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+)(?<priority>\[P[0-9]\])(?=\s|$)");
     TreeNode pressedPriorityNode;
     bool swallowPriorityUp;
+    Font boldNodeFont;
+
+    internal Font DisplayFont(TreeNode node) {
+        if(node==null || !(node.Tag is FloatingWindow.OutstandingLeaf))return node!=null && node.NodeFont!=null?node.NodeFont:Font;
+        if(boldNodeFont==null)boldNodeFont=new Font(Font,Font.Style|FontStyle.Bold);
+        return boldNodeFont;
+    }
+    internal void DisposeDisplayFonts() {if(boldNodeFont!=null){boldNodeFont.Dispose();boldNodeFont=null;}}
+    protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);}
+    internal string CurrentTaskText(TreeNode node) {
+        var task=node as FloatingWindow.TaskNode;string text=node==null?"":node.Text.TrimEnd(' ');
+        return SingleLinePaths && task!=null && task.CurrentTextLength>0 && task.CurrentTextLength<=text.Length?text.Substring(0,task.CurrentTextLength):text;
+    }
+    internal string AncestorTaskText(TreeNode node) {
+        var task=node as FloatingWindow.TaskNode;string text=node==null?"":node.Text.TrimEnd(' ');
+        return SingleLinePaths && task!=null && task.CurrentTextLength>0 && task.CurrentTextLength<text.Length?text.Substring(task.CurrentTextLength):"";
+    }
 
     static Match TaskPriorityMatch(TreeNode node) {
         return node!=null && (node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf)?PriorityPrefix.Match(node.Text):Match.Empty;
@@ -19,12 +38,16 @@ internal sealed partial class TaskTreeView {
         // Appending a glyph measures trailing spaces without MeasureText's minimum-width shortcut.
         return TextRenderer.MeasureText(text+"x",font,Size.Empty,TextFormatFlags.NoPadding).Width-TextRenderer.MeasureText("x",font,Size.Empty,TextFormatFlags.NoPadding).Width;
     }
+    int NodeTextLeft(TreeNode node,Rectangle bounds) {
+        if(SingleLinePaths && node.Tag is long)return CompletionVisualBounds(node).Right+6;
+        var image=SimpleImageBounds(node);return image.IsEmpty?bounds.Left+2:image.Right+6;
+    }
     internal Rectangle PriorityLinkBounds(TreeNode node) {
         if(node==null || node.TreeView!=this)return Rectangle.Empty;
         var match=TaskPriorityMatch(node);var bounds=node.Bounds;
         if(!match.Success || bounds.Height<=0)return Rectangle.Empty;
-        Font font=node.NodeFont??Font;
-        var image=SimpleImageBounds(node);int textLeft=image.IsEmpty?bounds.Left+2:image.Right+6;
+        Font font=DisplayFont(node);
+        int textLeft=NodeTextLeft(node,bounds);
         int left=textLeft+PriorityTextAdvance(match.Groups["prefix"].Value,font);
         int width=PriorityTextAdvance(match.Groups["priority"].Value,font);
         return new Rectangle(left,bounds.Top,width,bounds.Height);
@@ -39,18 +62,30 @@ internal sealed partial class TaskTreeView {
     }
     internal bool DrawPriorityLink(DrawTreeNodeEventArgs e) {
         var link=PriorityLinkBounds(e.Node);if(link.IsEmpty)return false;
-        var match=TaskPriorityMatch(e.Node);Font font=e.Node.NodeFont??Font;
+        var match=TaskPriorityMatch(e.Node);Font font=DisplayFont(e.Node);
         bool selected=(e.State&TreeNodeStates.Selected)!=0;
         Color background=selected?SystemColors.Highlight:BackColor;
         Color foreground=selected?SystemColors.HighlightText:e.Node.ForeColor;
         if(foreground.IsEmpty)foreground=ForeColor;
+        if(SingleLinePaths && e.Node.Tag is long && !selected)foreground=Color.FromArgb(31,41,55);
         if(!Enabled)foreground=SystemColors.GrayText;
-        var bounds=e.Node.Bounds;
-        using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,bounds);
-        var image=SimpleImageBounds(e.Node);int textLeft=image.IsEmpty?bounds.Left+2:image.Right+6;
+        var bounds=e.Node.Bounds;int rowLeft=SingleLinePaths && e.Node.Tag is long?0:bounds.Left;
+        using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,new Rectangle(rowLeft,bounds.Top,Math.Max(0,ClientSize.Width-rowLeft),bounds.Height));
+        var image=SimpleImageBounds(e.Node);int textLeft=NodeTextLeft(e.Node,bounds);
+        if(SingleLinePaths && e.Node.Tag is long) {
+            var box=CompletionVisualBounds(e.Node);var checkState=e.Node.Checked?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
+            CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(box.Left+1,box.Top+Math.Max(0,(box.Height-14)/2)),checkState);
+        }
         if(!image.IsEmpty)using(var underline=new Font(font,font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
         var text=new Rectangle(textLeft,bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),bounds.Height);
-        TextRenderer.DrawText(e.Graphics,e.Node.Text.TrimEnd(' '),font,text,foreground,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
+        string current=CurrentTaskText(e.Node),ancestors=AncestorTaskText(e.Node);
+        var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
+        int currentWidth=Math.Min(text.Width,PriorityTextAdvance(current,font)+2);
+        TextRenderer.DrawText(e.Graphics,current,font,new Rectangle(text.Left,text.Top,currentWidth,text.Height),foreground,flags);
+        if(ancestors.Length>0 && currentWidth<text.Width) {
+            Color ancestorColor=!Enabled?SystemColors.GrayText:selected?Color.FromArgb(215,225,236):Color.FromArgb(156,163,175);
+            TextRenderer.DrawText(e.Graphics,ancestors,font,new Rectangle(text.Left+currentWidth,text.Top,text.Width-currentWidth,text.Height),ancestorColor,flags);
+        }
         // Repaint only the marker; the native text/title and its hit-test width stay unchanged.
         using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,link);
         using(var underline=new Font(font,font.Style|FontStyle.Underline)) {
