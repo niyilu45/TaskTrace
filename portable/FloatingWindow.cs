@@ -23,6 +23,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly System.Threading.SemaphoreSlim refreshGate = new System.Threading.SemaphoreSlim(1,1);
     readonly ComboBox projects = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, DisplayMember = "Title" };
     readonly TextBox entry = new TextBox { Dock = DockStyle.Fill, AccessibleName = "新事项名称" };
+    readonly ComboBox entryPriority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "新事项优先级" };
     readonly TextBox search = new TextBox { Dock = DockStyle.Fill, AccessibleName = "查找事项" };
     readonly Button newTaskButton = new Button { Text = "新事项", AutoSize = true, AccessibleName = "添加新事项" };
     readonly FlowLayoutPanel bottomActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Margin = Padding.Empty };
@@ -37,6 +38,7 @@ internal sealed partial class FloatingWindow : Form {
     bool busy, rendering, collapsed, closing, completionPending, projectsDirty = true;
     bool autoSaveEnabled = true;
     int autoSaveSeconds = 30;
+    int defaultPriority = 7;
     int page = 1, total, expandedHeight = 560;
     readonly bool selfTest;
     bool allowExit, simpleMode;
@@ -85,12 +87,13 @@ internal sealed partial class FloatingWindow : Form {
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
         LoadBounds(); LoadAutoSaveSettings(); LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
-        toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 9, 0), WrapContents = true };
+        toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 3, 0), WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var settingsButton = new Button { Text = "设置", AutoSize = true };
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
+        foreach(Control control in new Control[] { full, pin, settingsButton, simple }) control.Margin = new Padding(0, 0, 6, 6);
         newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
         newTaskButton.Click+=delegate {ShowNewTaskEditor();};
         toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple });
@@ -121,7 +124,8 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(projectRow, 0, 0);
         showCompleted.CheckedChanged += async delegate { if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
-        addRow = Row(entry, "新事项名称", "添加事项", async delegate { await AddTask(); });
+        InitializePriorityChoice(entryPriority, defaultPriority);
+        addRow = TaskCreationRow(entry, entryPriority, "新事项名称", "添加事项", async delegate { await AddTask(); });
         addRow.Visible=false;
         content.Controls.Add(addRow, 0, 1);
         searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
@@ -269,6 +273,27 @@ internal sealed partial class FloatingWindow : Form {
         var button = new Button { Text = title, Dock = DockStyle.Fill, BackColor = primary ? Blue : SystemColors.Control, ForeColor = primary ? Color.White : ForeColor, FlatStyle = FlatStyle.Flat };
         button.Click += action;return TextFieldRow(input,description,button);
     }
+    static string PriorityChoiceText(int value) { return value + (value == 0 ? " · 最高" : value == 9 ? " · 最低" : ""); }
+    static int ApiPriority(int value) { return 10-Math.Max(0,Math.Min(9,value)); }
+    void InitializePriorityChoice(ComboBox choice,int selected) {
+        choice.Items.Clear();for(int value=0;value<=9;value++)choice.Items.Add(PriorityChoiceText(value));
+        choice.SelectedIndex=Math.Max(0,Math.Min(9,selected));
+    }
+    TableLayoutPanel TaskCreationRow(TextBox input,ComboBox priority,string description,string title,EventHandler action) {
+        var button=new Button {Text=title,Dock=DockStyle.Fill,BackColor=Blue,ForeColor=Color.White,FlatStyle=FlatStyle.Flat};button.Click+=action;
+        return TaskCreationRow(input,priority,description,button);
+    }
+    TableLayoutPanel TaskCreationRow(TextBox input,ComboBox priority,string description,Control action) {
+        var row=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3,RowCount=2};
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,82));row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,96));
+        row.RowStyles.Add(new RowStyle(SizeType.Absolute,20));row.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        var inputLabel=new Label {Text=description,Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AutoEllipsis=true,AccessibleName=description};
+        var priorityLabel=new Label {Text="优先级",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="优先级说明"};
+        action.Dock=DockStyle.Fill;
+        input.AccessibleDescription=description;priority.AccessibleDescription="0 最高，9 最低";
+        row.Controls.Add(inputLabel,0,0);row.Controls.Add(priorityLabel,1,0);row.Controls.Add(input,0,1);row.Controls.Add(priority,1,1);row.Controls.Add(action,2,1);
+        return row;
+    }
     void ShowNewTaskEditor() {
         if(simpleMode || closing || IsDisposed)return;
         if(collapsed)ToggleFold();
@@ -277,7 +302,7 @@ internal sealed partial class FloatingWindow : Form {
     }
     void HideNewTaskEditor() {
         if(addRow==null)return;
-        entry.Clear();addRow.Visible=false;content.RowStyles[1].Height=0;RefreshFullLayout();
+        entry.Clear();entryPriority.SelectedIndex=defaultPriority;addRow.Visible=false;content.RowStyles[1].Height=0;RefreshFullLayout();
     }
     void QueueFullLayoutRefresh() {
         if(simpleMode || closing || IsDisposed || fullLayoutRefreshQueued || !IsHandleCreated || WindowState!=FormWindowState.Normal)return;
@@ -358,7 +383,7 @@ internal sealed partial class FloatingWindow : Form {
         if(busy || closing || string.IsNullOrWhiteSpace(entry.Text)) return;
         var project = projects.SelectedItem as Project; if(project == null) return;
         bool created=false;SetBusy(true);
-        try { await Api("POST", "/projects/" + project.Id + "/tasks", new { title = entry.Text.Trim() }); search.Clear(); page = 1; await LoadTasks(); HideNewTaskEditor(); created=true; }
+        try { await Api("POST", "/projects/" + project.Id + "/tasks", new { title = entry.Text.Trim(), priority = ApiPriority(entryPriority.SelectedIndex) }); search.Clear(); page = 1; await LoadTasks(); HideNewTaskEditor(); created=true; }
         catch(Exception e) { Error(e); } finally { SetBusy(false); if(addRow.Visible)entry.Focus();else if(created)tasks.Focus(); }
     }
     sealed class PastedImage { public byte[] Bytes; public long Id; }
@@ -528,16 +553,16 @@ internal sealed partial class FloatingWindow : Form {
         }
         return span;
     }
-    async Task<long> CreateSubtask(long parentId, long projectId, string title, long existingId = 0) {
+    async Task<long> CreateSubtask(long parentId, long projectId, string title, long existingId = 0, int priority = -1) {
         if(await TaskHierarchySpan(parentId) >= 5) throw new Exception(TaskDepthMessage);
         using(BeginUndoGroup()) {
         long childId = existingId;
-        if(childId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title }); childId = Convert.ToInt64(child["id"]); }
+        if(childId == 0) { int selectedPriority=priority<0?defaultPriority:priority;var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title, priority = ApiPriority(selectedPriority) }); childId = Convert.ToInt64(child["id"]); }
         await Api("POST", "/tasks/" + parentId + "/relations", new { other_task_id = childId, relation_kind = "subtask" });
         return childId;
         }
     }
-    async Task ShowSubtasks() {
+    async Task ShowSubtasks(bool verify=false) {
         if(busy || closing) return;
         if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text = "请先选中一个父事项。"; return; }
         long parentId = Convert.ToInt64(tasks.SelectedNode.Tag);
@@ -549,19 +574,20 @@ internal sealed partial class FloatingWindow : Form {
                 var list = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.None };
                 list.Columns.Add("子任务", 390);
                 var title = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "新子任务名称" };
+                var priority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "新子任务优先级" };InitializePriorityChoice(priority,defaultPriority);
                 var feedback = new Label { Dock = DockStyle.Bottom, Height = 46, Text = "子任务独立完成；在主列表中选择它可记录每日进展。" };
                 var add = new Button { Text = "添加子任务", Dock = DockStyle.Fill, Width = 95 };
-                var row = TextFieldRow(title,"新子任务名称",add);row.Dock=DockStyle.Top;row.Height=58;
+                var row = TaskCreationRow(title,priority,"新子任务名称",add);row.Dock=DockStyle.Top;row.Height=58;
                 var renameTitle = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "修改子任务名称" };
                 var rename = new Button { Text = "保存名称", Dock = DockStyle.Fill, Enabled = false, Width = 95 };
                 var renameRow = TextFieldRow(renameTitle,"修改选中子任务名称",rename);renameRow.Dock=DockStyle.Top;renameRow.Height=58;
                 dialog.Controls.Add(list); dialog.Controls.Add(renameRow); dialog.Controls.Add(row); dialog.Controls.Add(feedback);
-                bool loading = false, writing = false; long pendingId = 0; string pendingUndoGroup = null; bool depthLimit = false;
+                bool loading = false, writing = false; long pendingId = 0; int pendingPriority=-1; string pendingUndoGroup = null; bool depthLimit = false;
                 Func<Task> reload = async delegate {
                     loading = true;
                     try {
                         depthLimit = await TaskHierarchySpan(parentId) >= 5;
-                        add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;
+                        add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0;
                         if(depthLimit) feedback.Text = TaskDepthMessage;
                         var current = await Api("GET", "/tasks/" + parentId, null);
                         list.Items.Clear();
@@ -587,17 +613,17 @@ internal sealed partial class FloatingWindow : Form {
                 renameTitle.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; rename.PerformClick(); } };
                 add.Click += async delegate {
                     if(writing || depthLimit || string.IsNullOrWhiteSpace(title.Text)) return;
-                    writing = true; add.Enabled = false; title.Enabled = false;
+                    writing = true; add.Enabled = false; title.Enabled = false;priority.Enabled=false;
                     try {
                         if(await TaskHierarchySpan(parentId) >= 5) { depthLimit = true; throw new Exception(TaskDepthMessage); }
                         if(pendingUndoGroup == null) pendingUndoGroup = Guid.NewGuid().ToString();
                         using(BeginUndoGroup(pendingUndoGroup)) {
-                        if(pendingId == 0) { var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title.Text.Trim() }); pendingId = Convert.ToInt64(child["id"]); }
-                        await CreateSubtask(parentId, projectId, title.Text, pendingId);
+                        if(pendingId == 0) { pendingPriority=priority.SelectedIndex;var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title.Text.Trim(), priority = ApiPriority(pendingPriority) }); pendingId = Convert.ToInt64(child["id"]); }
+                        await CreateSubtask(parentId, projectId, title.Text, pendingId,pendingPriority);
                         }
-                        pendingId = 0; pendingUndoGroup = null; title.Clear(); feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
+                        pendingId = 0;pendingPriority=-1; pendingUndoGroup = null; title.Clear();priority.SelectedIndex=defaultPriority; feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
                     } catch { feedback.Text = depthLimit ? TaskDepthMessage : pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
-                    finally { writing = false; add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0; }
+                    finally { writing = false; add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0; }
                 };
                 title.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; add.PerformClick(); } };
                 list.ItemCheck += delegate(object sender, ItemCheckEventArgs e) {
@@ -612,7 +638,14 @@ internal sealed partial class FloatingWindow : Form {
                     }));
                 };
                 dialog.FormClosing += delegate(object sender, FormClosingEventArgs e) { if(writing) e.Cancel = true; };
-                await reload(); dialog.ShowDialog(this);
+                Exception verificationError=null;
+                if(verify)dialog.Shown+=delegate {
+                    try {
+                        if(priority.SelectedIndex!=defaultPriority || priority.AccessibleName!="新子任务优先级" || !row.Controls.OfType<Label>().Any(value=>value.Text=="优先级"))throw new Exception("Subtask priority selector missing or has the wrong default");
+                        using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-new-subtask-priority-test.png"));}
+                    }catch(Exception e){verificationError=e;}finally{dialog.Close();}
+                };
+                await reload(); dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;
             }
             await LoadTasks();
         } catch(Exception e) { Error(e); }
@@ -704,28 +737,39 @@ internal sealed partial class FloatingWindow : Form {
             var settings = ReadObject(File.ReadAllText(Path.Combine(data, "autosave.json")));
             autoSaveEnabled = Convert.ToBoolean(settings["enabled"]);
             autoSaveSeconds = Math.Max(5, Math.Min(3600, Convert.ToInt32(settings["seconds"])));
+            if(settings.ContainsKey("default_priority"))defaultPriority=Math.Max(0,Math.Min(9,Convert.ToInt32(settings["default_priority"])));
         } catch { }
     }
-    void ShowAutoSaveSettings() {
-        using(var settings = new Form { Text = "设置", Size = new Size(430, 345), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
+    void ShowAutoSaveSettings(bool verify=false) {
+        using(var settings = new Form { Text = "设置", Size = new Size(430, 405), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
             var help = new Label { Text = "仅内容变化时保存；编辑期间更新同一条进展。\n设置保存在本机目录，网页设置需在网页中配置。", Location = new Point(18, 92), Size = new Size(335, 48) };
-            var apply = new Button { Text = "保存设置", Location = new Point(235, 150), Width = 100 };
+            var priorityLabel = new Label { Text = "默认新增任务优先级（0 最高，9 最低）", Location = new Point(18, 150), AutoSize = true };
+            var priority = new NumericUpDown { Minimum = 0, Maximum = 9, Value = defaultPriority, Location = new Point(298, 147), Width = 55, AccessibleName = "默认新增任务优先级" };
+            var apply = new Button { Text = "保存设置", Location = new Point(253, 190), Width = 100 };
             apply.Click += delegate {
                 try {
-                    File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value }));
-                    autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value; settings.Close();
+                    File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value }));
+                    autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority; settings.Close();
                 } catch { MessageBox.Show(settings, "设置保存失败，请检查目录写入权限。"); }
             };
-                        var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 192), Size = new Size(380, 48), AutoEllipsis = true };
-            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 248), Size = new Size(250, 32) };
+            var dataLabel = new Label { Text = "当前数据目录：" + data, Location = new Point(18, 235), Size = new Size(380, 48), AutoEllipsis = true };
+            var chooseData = new Button { Text = "配置数据目录（重启生效）", Location = new Point(18, 295), Size = new Size(250, 32) };
             chooseData.Click += delegate {
                 try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -STA -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "Configure-TaskTrace.ps1") + "\"") { UseShellExecute = false, CreateNoWindow = true }); }
                 catch(Exception e) { MessageBox.Show(settings, e.Message); }
             };
-            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, apply, dataLabel, chooseData }); settings.ShowDialog(this);
+            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, apply, dataLabel, chooseData });
+            Exception verificationError=null;
+            if(verify)settings.Shown+=delegate {
+                try {
+                    if((int)priority.Value!=defaultPriority || priority.AccessibleName!="默认新增任务优先级" || !priorityLabel.Text.Contains("0 最高，9 最低"))throw new Exception("Default priority setting is missing or incorrect");
+                    using(var bitmap=new Bitmap(settings.Width,settings.Height)){settings.DrawToBitmap(bitmap,new Rectangle(Point.Empty,settings.Size));bitmap.Save(Path.Combine(data,"floating-settings-priority-test.png"));}
+                }catch(Exception e){verificationError=e;}finally{settings.Close();}
+            };
+            settings.ShowDialog(this);if(verificationError!=null)throw verificationError;
         }
     }
     void LoadBounds() {
@@ -744,19 +788,31 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task TestFlow() {
         try {
+            string settingsPath=Path.Combine(data,"autosave.json");string savedSettings=File.Exists(settingsPath)?File.ReadAllText(settingsPath):null;
+            bool savedAutoEnabled=autoSaveEnabled;int savedAutoSeconds=autoSaveSeconds,savedDefaultPriority=defaultPriority;
+            try {
+                File.WriteAllText(settingsPath,json.Serialize(new{enabled=false,seconds=17,default_priority=4}));LoadAutoSaveSettings();
+                if(autoSaveEnabled || autoSaveSeconds!=17 || defaultPriority!=4)throw new Exception("Default priority setting did not load");
+            } finally {
+                if(savedSettings==null){if(File.Exists(settingsPath))File.Delete(settingsPath);}else File.WriteAllText(settingsPath,savedSettings);
+                autoSaveEnabled=savedAutoEnabled;autoSaveSeconds=savedAutoSeconds;defaultPriority=savedDefaultPriority;entryPriority.SelectedIndex=defaultPriority;
+            }
             Error(new Exception("Diagnostic test", new System.ComponentModel.Win32Exception(1155, "No default browser #tasktrace-local=TEST_PRIVATE_SESSION")));
             string diagnostic = File.ReadAllText(Path.Combine(data, "TaskTrace-window-error.log"));
             if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
+            ShowAutoSaveSettings(true);
             if(newTaskButton.Parent!=bottomActions || !newTaskButton.Visible || addRow.Visible)throw new Exception("Bottom new-item button entry point missing");
             newTaskButton.PerformClick();
-            if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Labeled text fields missing");
+            if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || entryPriority.SelectedIndex!=defaultPriority || entryPriority.AccessibleDescription!="0 最高，9 最低" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !entryPriority.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="优先级") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Labeled task fields or default priority missing");
             TestResponsiveFullLayout();ShowNewTaskEditor();
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(addRow.Visible)throw new Exception("New task editor stayed open after creation");
             if(tasks.Nodes.Count == 0 || !tasks.Nodes[0].Text.EndsWith(createdTitle)) throw new Exception("Task creation failed");
             long id = Convert.ToInt64(tasks.Nodes[0].Tag);
+            if(PriorityNumber(await Api("GET","/tasks/"+id,null))!=defaultPriority)throw new Exception("New task did not use the configured default priority");
+            tasks.SelectedNode=tasks.Nodes.Find(id.ToString(),true).First();await ShowSubtasks(true);
             tasks.Nodes[0].EnsureVisible();tasks.Refresh();var completionBounds=tasks.CompletionBounds(tasks.Nodes[0]);
             if(completionBounds.IsEmpty)throw new Exception("Task completion box is not visible");
             int completionPoint=((completionBounds.Top+completionBounds.Height/2)<<16)|((completionBounds.Left+completionBounds.Width/2)&0xffff);
@@ -777,6 +833,7 @@ internal sealed partial class FloatingWindow : Form {
             var history = await Api("GET", "/tasks/" + id + "/comments?order_by=desc", null);
             if(Convert.ToInt32(history["total"]) != 2 || !json.Serialize(history).Contains("每日进展")) throw new Exception("Daily progress history failed");
             long childId = await CreateSubtask(id, Convert.ToInt64((await Api("GET", "/tasks/" + id, null))["project_id"]), "子任务验收");
+            if(PriorityNumber(await Api("GET","/tasks/"+childId,null))!=defaultPriority)throw new Exception("New subtask did not use the configured default priority");
             await Api("PATCH", "/tasks/" + childId, new { title = "子任务验收改名" });
             var renamedChild = await Api("GET", "/tasks/" + childId, null);
             if((string)renamedChild["title"] != "子任务验收改名") throw new Exception("Subtask rename not persisted");

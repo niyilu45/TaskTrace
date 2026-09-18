@@ -139,7 +139,6 @@ internal sealed partial class FloatingWindow {
             await ShowPriority();
         };
         tasks.SetSimpleImageLinks(true);
-        toolbar.Controls.Add(priorityFilterButton);
         try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
         prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
         InitializePriorityFilter();
@@ -265,9 +264,9 @@ internal sealed partial class FloatingWindow {
             using(var dialog=new Form{Text="优先级 · "+title,Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(value+(value==0?" · 最高":value==9?" · 最低（默认）":""));choice.SelectedIndex=selectedPriority;
+                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(PriorityChoiceText(value)+(value==defaultPriority?" · 新增默认":""));choice.SelectedIndex=selectedPriority;
                 var save=new Button{Text="保存优先级",AutoSize=true};bool writing=false;
-                layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；默认 9。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；遗留事项默认 9。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
+                layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；当前新增默认 "+defaultPriority+"。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；当前新增默认 "+defaultPriority+"。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
                 save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
@@ -302,18 +301,21 @@ internal sealed partial class FloatingWindow {
         try {
             var shared=ReadShared(await ReadHistory(id));
             using(var dialog=new Form{Text="遗留事项 · 所有日期共享",Size=new Size(580,570),MinimumSize=new Size(500,480),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false,KeyPreview=true}){
-                var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=6};
-                layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
+                var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=7};
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
                 var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
                 var mode=new Label{Text="遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项内容说明"};
                 var input=new TextBox{Dock=DockStyle.Fill,Multiline=true,ScrollBars=ScrollBars.Vertical,AccessibleName="遗留事项内容",AccessibleDescription="遗留事项内容"};
+                var priority=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="遗留事项优先级"};InitializePriorityChoice(priority,defaultPriority);
+                var priorityRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};priorityRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));priorityRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
+                priorityRow.Controls.Add(new Label{Text="优先级（0 最高，9 最低）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项优先级说明"},0,0);priorityRow.Controls.Add(priority,1,0);
                 var previews=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false};
                 var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill};
                 var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var remove=new Button{Text="移除选中",AutoSize=true};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
-                layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString();bool writing=false,loading=false,removeExistingImages=false;
+                layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString();int originalPriority=defaultPriority;bool writing=false,loading=false,removeExistingImages=false;
                 Action disposePreviews=delegate{foreach(Control control in previews.Controls.Cast<Control>().ToArray()){var box=control as PictureBox;if(box!=null && box.Image!=null)box.Image.Dispose();control.Dispose();}previews.Controls.Clear();};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();foreach(var picture in pictures.ToList()){
@@ -327,19 +329,19 @@ internal sealed partial class FloatingWindow {
                     clearImages.Enabled=!writing && existing>0;
                 };
                 Action render=delegate{loading=true;list.Items.Clear();for(int i=0;i<shared.Items.Count;i++){shared.Items[i].Number=i+1;list.Items.Add(shared.Items[i]);}loading=false;};render();
-                Func<bool> dirty=delegate{return input.Text!=originalText || pictures.Count>0 || removeExistingImages;};
+                Func<bool> dirty=delegate{return input.Text!=originalText || priority.SelectedIndex!=originalPriority || pictures.Count>0 || removeExistingImages;};
                 Func<bool> mayDiscard=delegate{return !dirty() || MessageBox.Show(dialog,"当前输入尚未保存，是否放弃？","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;};
-                Action<PendingItem> edit=delegate(PendingItem item){editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";renderPreviews();};
+                Action<PendingItem> edit=delegate(PendingItem item){editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";renderPreviews();};
                 list.SelectedIndexChanged+=delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}edit(selected);};
                 fresh.Click+=delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;edit(null);input.Focus();};
-                recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalText="";removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
+                recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalText="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
                 gallery.Click+=async delegate{await ShowImageGallery(id,editingId==null?null:originalHtml,dialog);};
                 Func<bool,Task> write=async delegate(bool deleting){
                     if(writing)return;if(deleting && editingId==null)return;
                     if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return;}
-                    writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;
+                    writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;priority.Enabled=false;
                     try{
                         string uploaded=deleting?"":await UploadOutstandingPictures(id,pictures);
                         var current=ReadShared(await ReadHistory(id));var existing=current.Items.FirstOrDefault(item=>item.Id==(editingId??draftId));
@@ -349,11 +351,11 @@ internal sealed partial class FloatingWindow {
                         else{
                             string body=input.Text==originalText?originalHtml:"<p>"+WebUtility.HtmlEncode(input.Text.Trim()).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>"+String.Join("",Regex.Matches(originalHtml,@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
                             if(removeExistingImages)body=Regex.Replace(body,@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
-                            if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded});else existing.Html=body+uploaded;
+                            if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded,Priority=priority.SelectedIndex});else{existing.Html=body+uploaded;existing.Priority=priority.SelectedIndex;}
                         }
                         await WriteShared(id,current);shared=current;render();edit(null);feedback.Text="已保存。图片随遗留事项保存，所有日期共享。";
                     }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;}
-                    finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;}
+                    finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;priority.Enabled=true;}
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{await write(true);};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
@@ -363,14 +365,14 @@ internal sealed partial class FloatingWindow {
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
                     try{
-                        int count=shared.Items.Count;input.Text="编辑器图片验收";
+                        int count=shared.Items.Count;input.Text="编辑器图片验收";priority.SelectedIndex=4;
                         using(var bitmap=new Bitmap(42,28))using(var stream=new MemoryStream()){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.Teal);bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}
                         renderPreviews();await write(false);
-                        if(shared.Items.Count!=count+1 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1)throw new Exception("Outstanding editor image create failed: "+feedback.Text);
-                        list.SelectedIndex=list.Items.Count-1;input.Text="编辑器修改验收";
+                        if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=4 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1)throw new Exception("Outstanding editor image create or priority failed: "+feedback.Text);
+                        list.SelectedIndex=list.Items.Count-1;input.Text="编辑器修改验收";priority.SelectedIndex=2;
                         using(var bitmap=new Bitmap(32,20))using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}
                         await write(false);
-                        if(shared.Items.Count!=count+1 || !shared.Items.Last().Html.Contains("编辑器修改验收") || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=2)throw new Exception("Outstanding editor image update failed: "+feedback.Text);
+                        if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=2 || !shared.Items.Last().Html.Contains("编辑器修改验收") || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=2)throw new Exception("Outstanding editor image or priority update failed: "+feedback.Text);
                         list.SelectedIndex=list.Items.Count-1;
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}

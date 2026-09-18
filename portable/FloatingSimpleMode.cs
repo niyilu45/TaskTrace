@@ -51,7 +51,6 @@ internal sealed partial class FloatingWindow {
         addOutstandingRequested=delegate(long id){ShowOutstanding(id);};
         fullToggleTask.Click+=delegate {SetSelectedSimpleTaskExpanded(null);};
         fullAddOutstanding.Click+=delegate {AddSelectedOutstanding();};
-        toolbar.Controls.Add(fullToggleTask);
         restoreSimple.Margin=new Padding(0,0,6,4);simpleActions.Controls.Add(restoreSimple);
         Controls.Add(simpleActions);Controls.Add(simpleEmpty);
         Resize+=delegate {SimpleModeResized();};
@@ -317,22 +316,23 @@ internal sealed partial class FloatingWindow {
             SetBusy(false);
             SetSimpleMode(false);tasks.SelectedNode=child;UpdateSimpleActionState();
             var bottomLabels=bottomActions.Controls.Cast<Control>().Select(control=>control.Text).ToArray();
-            if(!bottomLabels.SequenceEqual(new[]{"记录进展","新事项","新任务","新遗留"}) || !fullAddOutstanding.Visible || !fullAddOutstanding.Enabled || fullAddOutstanding.Parent!=bottomActions || !priorityFilterButton.Visible || fullToggleTask.Visible)throw new Exception("Full mode is missing the four bottom actions or exposes expansion for an empty task");
+            if(!bottomLabels.SequenceEqual(new[]{"记录进展","新事项","新任务","新遗留"}) || !fullAddOutstanding.Visible || !fullAddOutstanding.Enabled || fullAddOutstanding.Parent!=bottomActions || priorityFilterButton.Parent!=null || fullToggleTask.Parent!=null)throw new Exception("Full mode actions or compact toolbar controls are incorrect");
             fullAddOutstanding.PerformClick();if(clicks!=1 || requested!=910002L)throw new Exception("Full add action did not target the selected task");
             var normalLeaf=new TreeNode("1. 待核对"){Tag=new OutstandingLeaf{TaskId=910002L,Id="full-action",Html="待核对"}};
             child.Nodes.Add(normalLeaf);owner.Expand();child.Expand();
             tasks.SelectedNode=normalLeaf;UpdateSimpleActionState();fullAddOutstanding.PerformClick();
-            if(clicks!=2 || requested!=910002L || !fullToggleTask.Visible || !fullToggleTask.Enabled)throw new Exception("Full actions do not support a task with only direct outstanding items");
+            if(clicks!=2 || requested!=910002L)throw new Exception("Full actions do not support a task with only direct outstanding items");
             tasks.SelectedNode=child;fullAddOutstanding.PerformClick();if(clicks!=3 || requested!=910002L)throw new Exception("Full add action did not resolve the selected child");
-            fullToggleTask.PerformClick();if(child.IsExpanded)throw new Exception("Full collapse action did not target the selected outstanding owner");
-            tasks.SelectedNode=child;fullToggleTask.PerformClick();if(!child.IsExpanded)throw new Exception("Full expansion action failed");
-            SetBusy(true);fullAddOutstanding.PerformClick();if(clicks!=3 || fullAddOutstanding.Enabled || fullToggleTask.Enabled)throw new Exception("Full actions remained usable while busy");
+            SetSelectedSimpleTaskExpanded(false);if(child.IsExpanded)throw new Exception("Task collapse action did not target the selected outstanding owner");
+            tasks.SelectedNode=child;SetSelectedSimpleTaskExpanded(true);if(!child.IsExpanded)throw new Exception("Task expansion action failed");
+            SetBusy(true);fullAddOutstanding.PerformClick();if(clicks!=3 || fullAddOutstanding.Enabled)throw new Exception("Full actions remained usable while busy");
             SetBusy(false);tasks.SelectedNode=null;UpdateSimpleActionState();fullAddOutstanding.PerformClick();
-            if(clicks!=3 || fullAddOutstanding.Enabled || fullToggleTask.Visible)throw new Exception("Full actions accepted an empty selection");
+            if(clicks!=3 || fullAddOutstanding.Enabled)throw new Exception("Full actions accepted an empty selection");
             tasks.SelectedNode=child;UpdateSimpleActionState();
             Action assertToolbar=delegate {
                 PerformLayout();toolbar.PerformLayout();
                 var controls=toolbar.Controls.Cast<Control>().Where(control=>control.Visible).ToArray();
+                if(!controls.Select(control=>control.Text).SequenceEqual(new[]{"完整界面","置顶","设置","简洁模式"}) || controls.Select(control=>control.Top).Distinct().Count()!=1)throw new Exception("Full toolbar is not a single compact row");
                 foreach(var control in controls)if(control.Left<toolbar.Padding.Left || control.Right+control.Margin.Right>toolbar.ClientSize.Width-toolbar.Padding.Right || control.Bottom+control.Margin.Bottom>toolbar.ClientSize.Height-toolbar.Padding.Bottom)throw new Exception("A full toolbar action was clipped: "+control.Text);
                 int bottom=controls.Max(control=>control.Bottom+control.Margin.Bottom)+toolbar.Padding.Bottom;
                 if(Math.Abs(toolbar.Height-bottom)>1)throw new Exception("Full toolbar retained empty rows: height="+toolbar.Height+", used="+bottom);
@@ -342,9 +342,7 @@ internal sealed partial class FloatingWindow {
                 Size=new Size(width,600);assertToolbar();
                 if(width!=350)using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-full-toolbar-"+width+"-test.png"));}
             }
-            string filterText=priorityFilterButton.Text;
-            priorityFilterButton.Text="按优先级 (9/10)";assertToolbar();priorityFilterButton.Text=filterText;assertToolbar();
-            if(toolbar.Controls.Cast<Control>().Any(control=>new[]{"收起","展开","刷新","撤销","查看图片","新事项"}.Contains(control.Text)))throw new Exception("A removed toolbar action is still visible");
+            if(toolbar.Controls.Cast<Control>().Any(control=>new[]{"收起","展开","展开/收起","刷新","撤销","查看图片","新事项","按优先级"}.Contains(control.Text)))throw new Exception("A removed toolbar action is still visible");
             var fullArea=Bounds;tasks.SelectedNode=normalLeaf;tasks.TopNode=owner;
             var top=tasks.TopNode;int loads=taskLoadVersion,reads=simpleOutstandingVersion;
             string context=TaskViewContext();
@@ -353,7 +351,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);assertToolbar();
             if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || !child.IsExpanded || tasks.TopNode!=top || taskLoadVersion!=loads || simpleOutstandingVersion!=reads || TaskViewContext()!=context)throw new Exception("Mode switching refreshed data or lost shared tree state");
             if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions");
-            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; selected-owner expand/collapse action; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts without clipped actions; removed toolbar actions absent; priority label reflow; mode switches retained.");
+            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; task-tree expand/collapse; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts with one compact toolbar row and no clipped actions; removed toolbar actions absent; mode switches retained.");
             File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: simple mode exposes only the restore button; task-tree expand/collapse and direct outstanding items remain usable; restore remains available while busy; narrow footer fits; focus preserves viewport.");
         } finally {
             addOutstandingRequested=callback;rendering=true;if(collapsed)ToggleFold();SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);

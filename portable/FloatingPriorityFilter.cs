@@ -52,7 +52,7 @@ internal sealed partial class FloatingWindow {
         menu.Items.Add(all);menu.Items.Add(none);menu.Items.Add(new ToolStripSeparator());
         for(int number=0;number<=9;number++) {
             int priority=number;
-            var choice=new ToolStripMenuItem(number+(number==0?" · 最高":number==9?" · 最低（默认）":"")) {CheckOnClick=true,Tag=priority,Checked=visiblePriorities.Contains(priority)};
+            var choice=new ToolStripMenuItem(PriorityChoiceText(number)) {CheckOnClick=true,Tag=priority,Checked=visiblePriorities.Contains(priority)};
             choice.Click+=delegate {
                 var selection=new HashSet<int>(visiblePriorities);
                 if(choice.Checked)selection.Add(priority);else selection.Remove(priority);
@@ -163,7 +163,7 @@ internal sealed partial class FloatingWindow {
             using(var first=CreatePriorityFilterMenuItem())using(var second=CreatePriorityFilterMenuItem()) {
                 ChangePrioritySelection(Enumerable.Range(0,10));
                 for(int number=0;number<=9;number++)if(!MatchesPriority(new Dictionary<string,object>{{"priority",10-number}}))throw new Exception("Default selection omits a priority");
-                if(!MatchesPriority(new Dictionary<string,object>{{"priority",0}}))throw new Exception("Legacy default priority nine is not selected");
+                if(!MatchesPriority(new Dictionary<string,object>{{"priority",0}}))throw new Exception("Legacy unspecified priority nine is not selected");
                 first.DropDownItems["priority-filter-none"].PerformClick();
                 var chooseZero=first.DropDownItems.Cast<ToolStripItem>().OfType<ToolStripMenuItem>().Single(item=>item.Tag is int && (int)item.Tag==0);
                 var chooseNine=first.DropDownItems.Cast<ToolStripItem>().OfType<ToolStripMenuItem>().Single(item=>item.Tag is int && (int)item.Tag==9);
@@ -197,7 +197,7 @@ internal sealed partial class FloatingWindow {
             if(tasks.Nodes.Count!=0)throw new Exception("No-priority selection still displays tasks");
             ChangePrioritySelection(Enumerable.Range(0,10));await ApplyPendingPriorityFilter();
             if(tasks.Nodes.Find(hidden.ToString(),true).Length!=1)throw new Exception("Select-all did not restore hidden tasks");
-            File.WriteAllText(Path.Combine(data,"floating-priority-filter-test.txt"),"PASS: priorities 0-9 plus default9; multi-select/all/none; independent menus synchronized; settings persist including none and reject malformed/out-of-range types; sorting and manual-order menu state; rapid changes retained while busy; unmatched ancestors retained; unmatched tasks hidden; select-all restores tasks.");
+            File.WriteAllText(Path.Combine(data,"floating-priority-filter-test.txt"),"PASS: priorities 0-9 plus legacy unspecified priority9; multi-select/all/none; independent menus synchronized; settings persist including none and reject malformed/out-of-range types; sorting and manual-order menu state; rapid changes retained while busy; unmatched ancestors retained; unmatched tasks hidden; select-all restores tasks.");
         } catch(Exception e) {failure=e;}
         {
             SetBusy(true);priorityFilterReloadTimer.Stop();priorityFilterReloadPending=false;
