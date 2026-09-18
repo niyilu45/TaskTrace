@@ -26,7 +26,16 @@
 			:disabled="saving || referenceLoading"
 			@update:modelValue="switchDate"
 		/>
-		<label :for="`progress-text-${taskId}`">今日进展</label>
+		<div class="daily-progress__heading-row">
+			<label :for="`progress-text-${taskId}`">今日进展</label>
+			<button
+				class="button is-primary"
+				type="submit"
+				:disabled="saving || referenceLoading || restoring || sharedBusy || (!progress.trim() && images.length === 0 && !references.length && !autoCommentId)"
+			>
+				{{ saving ? '正在保存…' : '保存进展' }}
+			</button>
+		</div>
 		<textarea
 			:id="`progress-text-${taskId}`"
 			ref="progressTextarea"
@@ -192,13 +201,6 @@
 			</figure>
 		</div>
 		<div class="daily-progress-actions">
-			<button
-				class="button is-primary"
-				type="submit"
-				:disabled="saving || referenceLoading || restoring || sharedBusy || (!progress.trim() && images.length === 0 && !references.length && !autoCommentId)"
-			>
-				{{ saving ? '正在保存…' : '保存进展' }}
-			</button>
 			<span role="status">{{ message || 'Ctrl + Enter 快速保存，历史记录保留在下方。' }}</span>
 		</div>
 	</form>
@@ -414,6 +416,13 @@ onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.valu
 
 	input { max-inline-size: 12rem; }
 	label { font-weight: 600; }
+}
+.daily-progress__heading-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: .65rem;
 }
 .daily-progress__textarea {
 	resize: none;

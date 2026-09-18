@@ -494,9 +494,9 @@ internal sealed partial class FloatingWindow : Form {
                 var feedback=new Label {Dock=DockStyle.Fill};
                 var referenceGroup=new GroupBox {Text="引用历史进展",Dock=DockStyle.Fill,Padding=new Padding(8)};
                 var referenceLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
-                referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));
-                var choiceRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));
-                var chooseReferences=new Button {Text="引用历史进展",Dock=DockStyle.Fill,AccessibleName="打开历史进展多选表格"};
+                referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));
+                var choiceRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0)};choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));choiceRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,170));
+                var chooseReferences=new Button {Text="引用历史进展",Dock=DockStyle.Fill,Margin=new Padding(0),AccessibleName="打开历史进展多选表格"};
                 var toggleReferences=new LinkLabel {Text="",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,Visible=false,AccessibleName="展开或收起已引用的历史进展"};choiceRow.Controls.Add(chooseReferences);choiceRow.Controls.Add(toggleReferences);
                 var referenceList=new ListBox {Dock=DockStyle.Fill,HorizontalScrollbar=true,IntegralHeight=false,AccessibleName="已引用的历史进展"};
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
@@ -512,7 +512,8 @@ internal sealed partial class FloatingWindow : Form {
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
                     int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
                     toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
-                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?180:52;
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?230:82;
+                    referenceLayout.RowStyles[2].Height=referenceActions.Visible?34:0;
                     referenceGroup.Text="引用历史进展";
                 };
                 Action loadDay=delegate {
@@ -578,6 +579,8 @@ internal sealed partial class FloatingWindow : Form {
                 if(verify)dialog.Shown+=async delegate {
                     try {
                         autoTimer.Stop();
+                        var chooseBounds=dialog.RectangleToClient(chooseReferences.RectangleToScreen(chooseReferences.ClientRectangle));
+                        if(chooseReferences.Height<28 || !dialog.ClientRectangle.Contains(chooseBounds))throw new Exception("Reference picker button is clipped in progress dialog");
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
                         using(var calendar=day.RenderCalendarForTest())calendar.Save(Path.Combine(data,"floating-progress-calendar-test.png"));
                         DateTime beforeOutside=day.Value;day.OpenCalendarForTest();if(!day.CalendarVisibleForTest())throw new Exception("Progress calendar did not open modelessly");day.SimulateCalendarOutsideClickForTest();if(day.CalendarVisibleForTest() || day.Value!=beforeOutside)throw new Exception("Clicking outside progress calendar did not cancel selection");

@@ -108,24 +108,36 @@ internal sealed partial class FloatingWindow {
         var candidates=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(day=>String.CompareOrdinal(day,targetDay)<0 && !used.Contains(day)).OrderByDescending(day=>day).Select(day=>new ProgressReferenceCandidate {
             Date=day,Html=ProgressSnapshotHtml(String.Join("",DailyHistory(history).Where(note=>DayOf(note)==day).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>ProgressBody((string)note["comment"],taskId))),taskId),Citations=ProgressCitationsForDay(taskId,day,history)
         }).Where(item=>!String.IsNullOrWhiteSpace(item.Html)).ToList();
-        using(var dialog=DpiDialog(new Form {Text="引用历史进展",Size=new Size(760,500),MinimumSize=new Size(560,390),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
-            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=4};
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
-            layout.Controls.Add(new Label {Text="勾选一个或多个历史日期，然后点击确定。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft});
+        using(var dialog=DpiDialog(new Form {Text="引用历史进展",ClientSize=new Size(760,500),MinimumSize=new Size(560,390),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+            layout.Controls.Add(new Label {Text="勾选一个或多个历史日期，然后点击确定。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft},0,0);
+            var content=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=new Padding(0)};
+            content.RowStyles.Add(new RowStyle(SizeType.Percent,100));content.RowStyles.Add(new RowStyle(SizeType.Absolute,0));
             var table=new DataGridView {Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=false,AutoGenerateColumns=false,RowHeadersVisible=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=false,AccessibleName="历史进展多选表格"};
             table.Columns.Add(new DataGridViewCheckBoxColumn {HeaderText="选择",Width=54,FlatStyle=FlatStyle.Standard});table.Columns.Add(new DataGridViewTextBoxColumn {HeaderText="日期",Width=100,ReadOnly=true});table.Columns.Add(new DataGridViewTextBoxColumn {HeaderText="历史进展信息",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true});table.Columns.Add(new DataGridViewButtonColumn {HeaderText="引用方",Width=116,ReadOnly=true,FlatStyle=FlatStyle.Standard});
             foreach(var item in candidates){int index=table.Rows.Add(false,item.Date,Plain(item.Html).Replace("\r\n"," ").Replace("\n"," "),item.Citations.Count==0?"无引用方":"查看引用方（"+item.Citations.Count+"）");table.Rows[index].Tag=item;}
-            layout.Controls.Add(table);
-            var citationDetails=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Visible=false,AccessibleName="引用方的进展信息"};layout.Controls.Add(citationDetails);
+            table.CurrentCellDirtyStateChanged+=delegate{if(table.IsCurrentCellDirty)table.CommitEdit(DataGridViewDataErrorContexts.Commit);};
+            content.Controls.Add(table,0,0);
+            var citationDetails=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,Visible=false,AccessibleName="引用方的进展信息"};content.Controls.Add(citationDetails,0,1);layout.Controls.Add(content,0,1);
             ProgressReferenceCandidate shown=null;
             table.CellContentClick+=delegate(object sender,DataGridViewCellEventArgs e){
                 if(e.RowIndex<0 || e.ColumnIndex!=3)return;var item=table.Rows[e.RowIndex].Tag as ProgressReferenceCandidate;if(item==null || item.Citations.Count==0)return;
-                if(Object.ReferenceEquals(shown,item) && citationDetails.Visible){shown=null;citationDetails.Visible=false;layout.RowStyles[2].Height=0;table.Rows[e.RowIndex].Cells[3].Value="查看引用方（"+item.Citations.Count+"）";return;}
+                if(Object.ReferenceEquals(shown,item) && citationDetails.Visible){shown=null;citationDetails.Visible=false;content.RowStyles[1].Height=0;table.Rows[e.RowIndex].Cells[3].Value="查看引用方（"+item.Citations.Count+"）";return;}
                 foreach(DataGridViewRow row in table.Rows){var other=row.Tag as ProgressReferenceCandidate;if(other!=null && other.Citations.Count>0)row.Cells[3].Value="查看引用方（"+other.Citations.Count+"）";}
-                shown=item;citationDetails.Text=String.Join(Environment.NewLine+Environment.NewLine,item.Citations.Select(citation=>citation.Date+"："+Plain(citation.Html)));citationDetails.Visible=true;layout.RowStyles[2].Height=120;table.Rows[e.RowIndex].Cells[3].Value="收起引用方";
+                shown=item;citationDetails.Text=String.Join(Environment.NewLine+Environment.NewLine,item.Citations.Select(citation=>citation.Date+"："+Plain(citation.Html)));citationDetails.Visible=true;content.RowStyles[1].Height=120;table.Rows[e.RowIndex].Cells[3].Value="收起引用方";
             };
-            var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false,Padding=new Padding(0,6,0,0)};var confirm=new Button {Text="确定",DialogResult=DialogResult.OK,AutoSize=true};var cancel=new Button {Text="取消",DialogResult=DialogResult.Cancel,AutoSize=true};actions.Controls.Add(confirm);actions.Controls.Add(cancel);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=confirm;dialog.CancelButton=cancel;
-            if(verify)dialog.Shown+=delegate{if(table.Rows.Count<2)throw new Exception("Reference picker table lacks historical rows");table.Rows[0].Cells[0].Value=true;table.Rows[1].Cells[0].Value=true;table.CurrentCell=null;table.ClearSelection();table.Refresh();Application.DoEvents();using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-reference-picker-test.png"));}dialog.DialogResult=DialogResult.OK;dialog.Close();};
+            var actions=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=new Padding(0),Padding=new Padding(0,8,0,0)};
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,96));actions.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,96));
+            var cancel=new Button {Text="取消",DialogResult=DialogResult.Cancel,Dock=DockStyle.Fill,Margin=new Padding(4,0,4,0),AccessibleName="取消引用历史进展"};
+            var confirm=new Button {Text="确定",DialogResult=DialogResult.OK,Dock=DockStyle.Fill,Margin=new Padding(4,0,0,0),AccessibleName="确定引用所选历史进展"};
+            actions.Controls.Add(cancel,1,0);actions.Controls.Add(confirm,2,0);layout.Controls.Add(actions,0,2);dialog.Controls.Add(layout);dialog.AcceptButton=confirm;dialog.CancelButton=cancel;
+            if(verify)dialog.Shown+=delegate{
+                if(table.Rows.Count<2)throw new Exception("Reference picker table lacks historical rows");
+                var confirmBounds=dialog.RectangleToClient(confirm.RectangleToScreen(confirm.ClientRectangle));var cancelBounds=dialog.RectangleToClient(cancel.RectangleToScreen(cancel.ClientRectangle));
+                if(confirm.Height<28 || cancel.Height<28 || !dialog.ClientRectangle.Contains(confirmBounds) || !dialog.ClientRectangle.Contains(cancelBounds))throw new Exception("Reference picker confirm or cancel button is clipped");
+                table.Rows[0].Cells[0].Value=true;table.Rows[1].Cells[0].Value=true;table.CurrentCell=null;table.ClearSelection();table.Refresh();Application.DoEvents();using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-reference-picker-test.png"));}dialog.DialogResult=DialogResult.OK;dialog.Close();
+            };
             if(dialog.ShowDialog(owner)!=DialogResult.OK)return new List<string>();table.EndEdit();return table.Rows.Cast<DataGridViewRow>().Where(row=>Convert.ToBoolean(row.Cells[0].Value)).Select(row=>((ProgressReferenceCandidate)row.Tag).Date).ToList();
         }
     }
