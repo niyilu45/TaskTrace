@@ -14,7 +14,7 @@ docs/themes/
 Run
 /dist/*
 !/dist/Install-TaskTrace.cmd
-!/dist/Install-TaskTrace.ps1
+!/dist/Install-TaskTrace-Engine.ps1
 !/dist/README.md
 !/dist/TaskTrace-local/
 !/dist/TaskTrace-local/.gitignore

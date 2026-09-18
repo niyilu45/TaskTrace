@@ -2,7 +2,7 @@
 
 ## 2026-09-18 源码安装器与字体缩放
 
-- `dist/Install-TaskTrace.cmd` / `.ps1` 会先检查 Windows x64、PowerShell、Git、Node.js 24、pnpm 11.26、Go 1.27、x64 GCC 和 .NET Framework C# 编译器，再生成 `dist/TaskTrace-local`。
+- `dist/Install-TaskTrace.cmd` / `Install-TaskTrace-Engine.ps1` 会先检查 Windows x64、PowerShell、Git、Node.js 24、pnpm 11.26、Go 1.27、x64 GCC 和 .NET Framework C# 编译器，再生成 `dist/TaskTrace-local`。
 - 使用系统 Node.js 18 与 pnpm 11.19 验证失败路径：安装器一次列出两个版本问题、对应升级方法及 `dist/install.log`，并且不开始构建。
 - 使用隔离的 Node.js 24.21.0 与 pnpm 11.26.0 验证通过路径：完整前端、后端、悬浮窗和启动器构建成功；`-SkipArchive` 未生成正式发布包。
 - 安装成品自检退出码为 0；DPI 清单使用 Per-Monitor V2，悬浮窗及对话框启用 DPI 自动缩放并采用 Windows 系统消息字体，任务行高和缩进随显示器 DPI 更新。

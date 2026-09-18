@@ -1,6 +1,6 @@
 # 从源码生成 TaskTrace 免安装程序
 
-双击 `Install-TaskTrace.cmd`。工具会先检查全部构建依赖；只有检查通过后才开始生成程序。
+双击 `Install-TaskTrace.cmd`。工具会先检查全部构建依赖；只有检查通过后才开始生成程序。成功、缺少依赖或构建失败都会弹出结果窗口。
 
 生成结果位于：
 
@@ -22,7 +22,7 @@ dist\TaskTrace-local\TaskTrace.exe
 只检查环境而不构建：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File dist/Install-TaskTrace.ps1 -CheckOnly
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File dist/Install-TaskTrace-Engine.ps1 -CheckOnly
 ```
 
 如果失败，窗口会列出缺少或版本不合格的依赖以及处理方法，完整记录保存在 `dist/install.log`。

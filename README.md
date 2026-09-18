@@ -36,7 +36,7 @@
 ```text
 dist/
   Install-TaskTrace.cmd               # 检查依赖并从当前源码生成程序
-  Install-TaskTrace.ps1
+  Install-TaskTrace-Engine.ps1
   TaskTrace-local/                    # 本机生成的免安装程序，不提交到 Git
 Releases/
   TaskTrace-local-windows-x64.zip     # 正式发布的干净免安装包
@@ -50,7 +50,7 @@ Git 只跟踪 `dist` 下的安装脚本和说明，不跟踪生成的 EXE、运�
 
 源码可从本仓库下载或克隆。每个版本的 Releases 页面还提供该标签对应的 Source code 下载。
 
-使用 Git 克隆源码后，双击 `dist/Install-TaskTrace.cmd`。安装工具会一次性检查 Node.js 24、pnpm 11.26、Go 1.27、Windows x64 GCC、Git 和 .NET Framework C# 编译器；如果缺少依赖，会显示具体问题、安装方法和日志位置。
+使用 Git 克隆源码后，双击 `dist/Install-TaskTrace.cmd`。安装工具会一次性检查 Node.js 24、pnpm 11.26、Go 1.27、Windows x64 GCC、Git 和 .NET Framework C# 编译器；如果缺少依赖，会弹出具体问题、安装方法和日志位置；生成成功或失败时也会弹出结果，双击运行不会再因黑框关闭而看不到结果。
 
 ```powershell
 git clone git@github.com:niyilu45/TaskTrace.git

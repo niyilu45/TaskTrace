@@ -2,6 +2,7 @@
 param(
     [switch]$CheckOnly,
     [switch]$SkipFrontend,
+    [switch]$Interactive,
     [string]$Version = 'v0.1.0-beta.11'
 )
 
@@ -16,6 +17,18 @@ $stage = '检查构建环境'
 function Write-InstallLine([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray) {
     Write-Host $Text -ForegroundColor $Color
     try { [IO.File]::AppendAllText($logFile, $Text + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
+}
+
+function Show-InstallResult([string]$Title, [string]$Message, [bool]$IsError = $false) {
+    if (!$Interactive) { return }
+    try {
+        $icon = if ($IsError) { 16 } else { 64 }
+        $shell = New-Object -ComObject WScript.Shell
+        [void]$shell.Popup($Message, 0, $Title, $icon)
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+    } catch {
+        Write-InstallLine ('无法显示结果窗口：' + $_.Exception.Message) Yellow
+    }
 }
 
 function Add-DependencyIssue([string]$Problem, [string]$Hint) {
@@ -135,12 +148,16 @@ try {
         Write-InstallLine '解决方法：' Yellow
         foreach ($hint in $hints) { Write-InstallLine ('  - ' + $hint) Yellow }
         Write-InstallLine ('详细记录：' + $logFile)
+        $problemText = (($issues | ForEach-Object { '• ' + $_ }) -join [Environment]::NewLine)
+        $hintText = (($hints | ForEach-Object { '• ' + $_ }) -join [Environment]::NewLine)
+        Show-InstallResult 'TaskTrace：缺少构建条件' ("尚未开始生成程序。`r`n`r`n发现的问题：`r`n" + $problemText + "`r`n`r`n解决方法：`r`n" + $hintText + "`r`n`r`n详细记录：" + $logFile) $true
         exit 2
     }
 
     if ($CheckOnly) {
         Write-InstallLine ''
         Write-InstallLine '构建依赖检查通过。' Green
+        Show-InstallResult 'TaskTrace：检查完成' ("构建依赖检查通过。`r`n`r`n详细记录：" + $logFile)
         exit 0
     }
 
@@ -175,6 +192,7 @@ try {
     Write-InstallLine ('程序位置：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
     Write-InstallLine '运行程序不再需要 Node.js、pnpm、Go、GCC 或 C# 编译器。'
     Write-InstallLine ('详细记录：' + $logFile)
+    Show-InstallResult 'TaskTrace：生成成功' ("免安装程序已经生成。`r`n`r`n双击运行：`r`n" + (Join-Path $outputDirectory 'TaskTrace.exe') + "`r`n`r`n详细记录：" + $logFile)
     exit 0
 } catch {
     Write-InstallLine ''
@@ -185,5 +203,6 @@ try {
         Write-InstallLine '如果错误中包含拒绝访问，请退出正在运行的 TaskTrace，并确认源码目录可写。' Yellow
     }
     Write-InstallLine ('详细记录：' + $logFile)
+    Show-InstallResult 'TaskTrace：生成失败' ("失败阶段：" + $stage + "`r`n`r`n错误：" + $_.Exception.Message + "`r`n`r`n详细记录：" + $logFile) $true
     exit 1
 }
