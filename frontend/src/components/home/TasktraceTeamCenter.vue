@@ -42,6 +42,18 @@
 					<p class="help">链接只会导入共享任务及其子任务，不会导入对方的父任务或其他事项。</p>
 				</div>
 				<div class="field">
+					<label class="label" for="team-repository-override">共享目录地址（可选）</label>
+					<input
+						id="team-repository-override"
+						v-model="repositoryOverride"
+						class="input"
+						placeholder="\\\\10.143.58.8\\teamData"
+					>
+					<p class="help">
+						正常情况下无需填写。如果链接里的电脑名无法访问，可填写资源管理器中能打开的完整 teamData 地址。
+					</p>
+				</div>
+				<div class="field">
 					<label class="label">保存到项目</label>
 					<ProjectSearch
 						:model-value="targetProject || undefined"
@@ -130,6 +142,7 @@ const teamStore = useTasktraceTeamStore()
 const showImport = ref(false)
 const showActivity = ref(false)
 const link = ref('')
+const repositoryOverride = ref('')
 const targetProject = ref<IProject | null>(null)
 const resolutions = reactive<Record<string, string>>({})
 let timer: ReturnType<typeof setInterval> | null = null
@@ -168,6 +181,7 @@ onBeforeUnmount(() => {
 function closeImport() {
 	showImport.value = false
 	link.value = ''
+	repositoryOverride.value = ''
 	targetProject.value = null
 }
 
@@ -177,7 +191,7 @@ async function importTask() {
 		return
 	}
 	try {
-		await teamStore.importLink(link.value.trim(), targetProject.value.id)
+		await teamStore.importLink(link.value.trim(), targetProject.value.id, repositoryOverride.value)
 		success({message: '团队任务已导入，后续修改会自动同步。'})
 		closeImport()
 	} catch (cause) {

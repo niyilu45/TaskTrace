@@ -77,4 +77,17 @@ describe('getErrorText', () => {
 
 		expect(text).toBe('direct problem detail')
 	})
+
+	it('includes nested v2 error details', () => {
+		const text = getErrorText({
+			response: {
+				data: {
+					detail: 'cannot import team task',
+					errors: [{message: '无法读取团队共享目录'}],
+				},
+			},
+		})
+
+		expect(text).toBe('cannot import team task：无法读取团队共享目录')
+	})
 })

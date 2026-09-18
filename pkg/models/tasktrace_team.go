@@ -33,6 +33,7 @@ var taskTraceTeamMu sync.Mutex
 
 type TaskTraceTeamRepositoryInfo struct {
 	Path       string   `json:"path"`
+	Paths      []string `json:"-"`
 	Computer   string   `json:"computer,omitempty"`
 	Candidates []string `json:"candidates"`
 	Shared     bool     `json:"shared"`
@@ -206,10 +207,11 @@ type TaskTraceTeamStatus struct {
 }
 
 type taskTraceTeamLink struct {
-	Schema     int    `json:"schema"`
-	Repository string `json:"repository"`
-	ShareID    string `json:"share_id"`
-	Secret     string `json:"secret"`
+	Schema       int      `json:"schema"`
+	Repository   string   `json:"repository"`
+	Repositories []string `json:"repositories,omitempty"`
+	ShareID      string   `json:"share_id"`
+	Secret       string   `json:"secret"`
 }
 
 var taskTraceTeamMarker = regexp.MustCompile(`<!--tasktrace-team:([A-Za-z0-9_-]+)-->`)
@@ -284,12 +286,32 @@ func taskTraceTeamSaveState(state taskTraceTeamState) error {
 	return taskTraceTeamWriteJSON(taskTraceTeamStatePath(), &state)
 }
 
+func taskTraceTeamAppendRepository(paths []string, value string) []string {
+	value = strings.TrimRight(strings.Trim(strings.TrimSpace(value), "\"'"), `\/`)
+	if value == "" {
+		return paths
+	}
+	for _, existing := range paths {
+		if strings.EqualFold(existing, value) {
+			return paths
+		}
+	}
+	return append(paths, value)
+}
+
 func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
-	info := TaskTraceTeamRepositoryInfo{Path: root, Candidates: []string{}}
-	_ = taskTraceTeamReadJSON(filepath.Join(root, "repository-info.json"), &info)
+	info := TaskTraceTeamRepositoryInfo{Path: root, Paths: []string{}, Candidates: []string{}}
+	path := filepath.Join(root, "repository-info.json")
+	_ = taskTraceTeamReadJSON(path, &info)
+	var aliases struct {
+		Paths []string `json:"paths"`
+	}
+	_ = taskTraceTeamReadJSON(path, &aliases)
+	info.Paths = aliases.Paths
 	if info.Path == "" {
 		info.Path = root
 	}
+	info.Paths = taskTraceTeamAppendRepository(info.Paths, info.Path)
 	return info
 }
 
@@ -324,7 +346,23 @@ func taskTraceTeamNormalizeMembers(members []string, owner string) []string {
 }
 
 func taskTraceTeamEncodeLink(repository, shareID, secret string) string {
-	b, _ := json.Marshal(taskTraceTeamLink{Schema: taskTraceTeamSchema, Repository: repository, ShareID: shareID, Secret: secret})
+	return taskTraceTeamEncodeLinkPaths(repository, nil, shareID, secret)
+}
+
+func taskTraceTeamEncodeLinkPaths(repository string, repositories []string, shareID, secret string) string {
+	paths := taskTraceTeamAppendRepository(nil, repository)
+	for _, candidate := range repositories {
+		paths = taskTraceTeamAppendRepository(paths, candidate)
+	}
+	primary := repository
+	if len(paths) > 0 {
+		primary = paths[0]
+	}
+	additional := []string{}
+	if len(paths) > 1 {
+		additional = paths[1:]
+	}
+	b, _ := json.Marshal(taskTraceTeamLink{Schema: taskTraceTeamSchema, Repository: primary, Repositories: additional, ShareID: shareID, Secret: secret})
 	return "tasktrace-team://import/" + base64.RawURLEncoding.EncodeToString(b)
 }
 
@@ -343,6 +381,41 @@ func taskTraceTeamDecodeLink(link string) (taskTraceTeamLink, error) {
 		return parsed, errors.New("invalid TaskTrace task link")
 	}
 	return parsed, nil
+}
+
+func taskTraceTeamRepositoryCandidates(link taskTraceTeamLink, override string) []string {
+	result := []string{}
+	override = strings.TrimRight(strings.Trim(strings.TrimSpace(override), "\"'"), `\/`)
+	if strings.HasPrefix(override, `\\`) {
+		remainder := strings.TrimPrefix(override, `\\`)
+		if !strings.ContainsAny(remainder, `\/`) {
+			result = taskTraceTeamAppendRepository(result, override+`\teamData`)
+		}
+	}
+	result = taskTraceTeamAppendRepository(result, override)
+	result = taskTraceTeamAppendRepository(result, link.Repository)
+	for _, repository := range link.Repositories {
+		result = taskTraceTeamAppendRepository(result, repository)
+	}
+	return result
+}
+
+func taskTraceTeamReadLinkedManifest(link taskTraceTeamLink, override string) (string, TaskTraceTeamManifest, error) {
+	var manifest TaskTraceTeamManifest
+	candidates := taskTraceTeamRepositoryCandidates(link, override)
+	var lastErr error
+	for _, repository := range candidates {
+		manifest = TaskTraceTeamManifest{}
+		err := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(repository, link.ShareID), "manifest.json"), &manifest)
+		if err == nil {
+			return repository, manifest, nil
+		}
+		lastErr = err
+	}
+	if len(candidates) == 0 {
+		return "", manifest, errors.New("team repository address is missing")
+	}
+	return "", manifest, fmt.Errorf("无法读取团队共享目录（已尝试 %s）。请确认共享目录地址形如 \\\\10.143.58.8\\teamData，并且当前 Windows 用户具有读写权限：%w", strings.Join(candidates, "、"), lastErr)
 }
 
 func taskTraceTeamShareDir(repository, shareID string) string {
@@ -1328,9 +1401,9 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	if err != nil {
 		return nil, err
 	}
-	var manifest TaskTraceTeamManifest
-	if err := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(link.Repository, link.ShareID), "manifest.json"), &manifest); err != nil {
-		return nil, fmt.Errorf("open team repository: %w", err)
+	repository, manifest, err := taskTraceTeamReadLinkedManifest(link, "")
+	if err != nil {
+		return nil, err
 	}
 	if manifest.ShareID != link.ShareID || manifest.TokenHash != taskTraceTeamTokenHash(link.Secret) {
 		return nil, errors.New("the task link is invalid or has been revoked")
@@ -1343,7 +1416,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 		}
 	}
 	if !isMember {
-		return nil, errors.New("this task was not shared with the current Windows user")
+		return nil, fmt.Errorf("当前 Windows 用户 %q 不在任务共享成员列表中（%s）", u.Username, strings.Join(manifest.Members, "、"))
 	}
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
@@ -1352,7 +1425,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	if taskTraceTeamFindBinding(&state, link.ShareID) != nil {
 		return nil, errors.New("this team task has already been imported")
 	}
-	binding := TaskTraceTeamBinding{ShareID: link.ShareID, Repository: link.Repository, Secret: link.Secret, Owner: manifest.Owner, Members: manifest.Members, ProjectID: request.ProjectID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
+	binding := TaskTraceTeamBinding{ShareID: link.ShareID, Repository: repository, Secret: link.Secret, Owner: manifest.Owner, Members: manifest.Members, ProjectID: request.ProjectID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
 	snapshots, err := taskTraceTeamReadSnapshots(&binding)
 	if err != nil {
 		return nil, fmt.Errorf("read team task: %w", err)
@@ -1378,7 +1451,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	binding.Base = taskTraceTeamBaseFromSnapshot(owner)
 	manifest.Members = binding.Members
 	manifest.Updated = time.Now().UTC()
-	if err := taskTraceTeamWriteJSON(filepath.Join(taskTraceTeamShareDir(link.Repository, link.ShareID), "manifest.json"), &manifest); err != nil {
+	if err := taskTraceTeamWriteJSON(filepath.Join(taskTraceTeamShareDir(repository, link.ShareID), "manifest.json"), &manifest); err != nil {
 		return nil, err
 	}
 	state.Bindings = append(state.Bindings, binding)
@@ -1581,11 +1654,13 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		linkPath := binding.Repository
+		linkPaths := []string{}
 		if binding.Owner == u.Username {
 			info := taskTraceTeamRepositoryInfo(binding.Repository)
 			linkPath = info.Path
+			linkPaths = info.Paths
 		}
-		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, TaskIDs: ids, Link: taskTraceTeamEncodeLink(linkPath, binding.ShareID, binding.Secret), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
+		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
 		status.Bindings = append(status.Bindings, row)
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(&binding, u.Username)...)

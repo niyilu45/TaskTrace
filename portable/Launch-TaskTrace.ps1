@@ -73,6 +73,7 @@ try {
         } | ForEach-Object { ($_ -split '\\')[-1] } | Sort-Object -Unique)
     } catch { $teamCandidates = @() }
     $teamLinkPath = $teamRoot
+    $teamLinkPaths = @($teamRoot)
     $teamShareName = $null
     try {
         $resolvedTeamRoot = [IO.Path]::GetFullPath($teamRoot).TrimEnd('\')
@@ -82,10 +83,23 @@ try {
         if ($null -ne $matchingShare) {
             $teamShareName = [string]$matchingShare.Name
             $teamLinkPath = '\\' + $env:COMPUTERNAME + '\' + $teamShareName
+            $teamLinkPaths = @($teamLinkPath)
+            try {
+                $ipv4Addresses = @([Net.Dns]::GetHostAddresses([Net.Dns]::GetHostName()) | Where-Object {
+                    $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+                    -not [Net.IPAddress]::IsLoopback($_)
+                } | ForEach-Object { $_.IPAddressToString } | Sort-Object -Unique)
+                foreach ($ipv4Address in $ipv4Addresses) {
+                    $ipPath = '\\' + $ipv4Address + '\' + $teamShareName
+                    if ($teamLinkPaths -notcontains $ipPath) { $teamLinkPaths += $ipPath }
+                }
+                if ($teamLinkPaths.Count -gt 1) { $teamLinkPath = $teamLinkPaths[1] }
+            } catch { }
         }
     } catch { }
     $repositoryInfo = [ordered]@{
         path = $teamLinkPath
+        paths = @($teamLinkPaths)
         computer = [string]$env:COMPUTERNAME
         candidates = @($teamCandidates)
         shared = ($null -ne $teamShareName)

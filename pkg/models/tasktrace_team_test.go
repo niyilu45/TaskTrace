@@ -9,14 +9,25 @@ import (
 )
 
 func TestTaskTraceTeamLinkRoundTrip(t *testing.T) {
-	link := taskTraceTeamEncodeLink(`\\HOST\TaskTraceTeam`, "share-id", "secret")
+	link := taskTraceTeamEncodeLinkPaths(`\\HOST\TaskTraceTeam`, []string{`\\10.143.58.8\TaskTraceTeam`}, "share-id", "secret")
 	parsed, err := taskTraceTeamDecodeLink(link)
 	require.NoError(t, err)
 	require.Equal(t, `\\HOST\TaskTraceTeam`, parsed.Repository)
+	require.Equal(t, []string{`\\10.143.58.8\TaskTraceTeam`}, parsed.Repositories)
 	require.Equal(t, "share-id", parsed.ShareID)
 	require.Equal(t, "secret", parsed.Secret)
 	_, err = taskTraceTeamDecodeLink("https://example.test/task")
 	require.Error(t, err)
+}
+
+func TestTaskTraceTeamRepositoryCandidatesPreferOverrideAndAcceptServerRoot(t *testing.T) {
+	link := taskTraceTeamLink{Repository: `\\TASK-PC\teamData`, Repositories: []string{`\\10.0.0.8\teamData`, `\\TASK-PC\teamData`}}
+	require.Equal(t, []string{
+		`\\10.143.58.8\teamData`,
+		`\\10.143.58.8`,
+		`\\TASK-PC\teamData`,
+		`\\10.0.0.8\teamData`,
+	}, taskTraceTeamRepositoryCandidates(link, `\\10.143.58.8`))
 }
 
 func TestTaskTraceTeamMarkerKeepsRemoteAuthor(t *testing.T) {

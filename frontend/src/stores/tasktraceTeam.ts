@@ -13,6 +13,7 @@ import {
 	type TaskTraceTeamResolution,
 	type TaskTraceTeamStatus,
 } from '@/client/generated'
+import {overrideTeamLinkRepository} from '@/helpers/tasktraceTeam'
 
 export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const status = ref<TaskTraceTeamStatus>({enabled: false, bindings: [], conflicts: [], notifications: []})
@@ -52,8 +53,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return run(() => tasksTeamShare({path: {task: taskId}, body: {members}}))
 	}
 
-	async function importLink(link: string, projectId: number) {
-		return run(() => tasktraceTeamImport({body: {link, project_id: projectId}}))
+	async function importLink(link: string, projectId: number, repository = '') {
+		return run(() => tasktraceTeamImport({body: {link: overrideTeamLinkRepository(link, repository), project_id: projectId}}))
 	}
 
 	async function configure(shareId: string, notify: boolean) {

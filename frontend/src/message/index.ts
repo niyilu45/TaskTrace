@@ -19,7 +19,15 @@ export function getErrorText(r): string {
 	}
 	
 	// v2 errors are RFC 9457 problem+json, which carries `detail` instead of `message`.
-	let message = data?.message || data?.detail || r.message
+	let message = data?.message || data?.detail || r.message || ''
+	const details = Array.isArray(data?.errors)
+		? data.errors
+			.map(item => item?.message || item?.detail)
+			.filter(detail => typeof detail === 'string' && detail && !message.includes(detail))
+		: []
+	if (details.length) {
+		message += `${message ? '：' : ''}${details.join('；')}`
+	}
 	
 	const causeMessage = r.cause?.response?.data?.message ?? r.cause?.message
 	if (typeof causeMessage !== 'undefined') {
