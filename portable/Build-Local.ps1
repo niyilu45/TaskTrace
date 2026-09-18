@@ -1,4 +1,4 @@
-﻿param([switch]$SkipFrontend, [string]$PackageDirectory = 'Releases/TaskTrace-local', [string]$Version = 'v0.1.0-beta.11')
+﻿param([switch]$SkipFrontend, [switch]$SkipArchive, [string]$PackageDirectory = 'dist/TaskTrace-local', [string]$Version = 'v0.1.0-beta.11')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
@@ -46,32 +46,34 @@ try {
     Assert-Exit 'Updater build'
     Copy-Item -LiteralPath 'portable/Configure-TaskTrace.cmd','portable/Configure-TaskTrace.ps1','portable/tasktrace-settings.example.json','portable/Launch-TaskTrace.ps1','portable/README.md','LICENSE' -Destination $packageRoot -Force
     '5f3504827990df58bef84b3a5d8c6ab398534c0b' | Set-Content -LiteralPath (Join-Path $packageRoot 'UPSTREAM-COMMIT.txt') -Encoding ASCII
-    New-Item -ItemType Directory -Path (Join-Path $repoRoot 'Releases') -Force | Out-Null
     $sourceCommit = (& git rev-parse HEAD).Trim()
     Assert-Exit 'Source revision'
     $sourceCommit | Set-Content -LiteralPath (Join-Path $packageRoot 'SOURCE-COMMIT.txt') -Encoding ASCII
     $Version | Set-Content -LiteralPath (Join-Path $packageRoot 'VERSION.txt') -Encoding ASCII
-    $previousTag = (& git describe --tags --abbrev=0 HEAD 2>$null)
-    if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($previousTag)) {
-        $releaseItems = @(& git log ($previousTag.Trim() + '..HEAD') --pretty=format:'- %s' --no-merges)
-    } else {
-        $releaseItems = @(& git log -1 --pretty=format:'- %s' --no-merges)
+    if (!$SkipArchive) {
+        New-Item -ItemType Directory -Path (Join-Path $repoRoot 'Releases') -Force | Out-Null
+        $previousTag = (& git describe --tags --abbrev=0 HEAD 2>$null)
+        if ($LASTEXITCODE -eq 0 -and ![string]::IsNullOrWhiteSpace($previousTag)) {
+            $releaseItems = @(& git log ($previousTag.Trim() + '..HEAD') --pretty=format:'- %s' --no-merges)
+        } else {
+            $releaseItems = @(& git log -1 --pretty=format:'- %s' --no-merges)
+        }
+        if ($LASTEXITCODE -ne 0 -or $releaseItems.Count -eq 0) { $releaseItems = @('- 程序更新和问题修复') }
+        $releaseNotes = @(
+            ('# TaskTrace ' + $Version)
+            ''
+            ('发布日期：' + (Get-Date -Format 'yyyy-MM-dd'))
+            ''
+            '## 更新内容'
+            ''
+        )
+        $releaseNotes += $releaseItems
+        $releaseNotes += @('', '## 版本对应', '', ('- 源代码提交：' + $sourceCommit))
+        $releaseNotes | Set-Content -LiteralPath (Join-Path $repoRoot 'Releases/RELEASE-NOTES.md') -Encoding UTF8
+        # Only package public application files. Never include runtime data.
+        $packageFiles = @('TaskTrace.exe','TaskTrace-updater.exe','Configure-TaskTrace.cmd','Configure-TaskTrace.ps1','tasktrace-settings.example.json','TaskTrace-server.exe','TaskTrace-floating.exe','Launch-TaskTrace.ps1','README.md','LICENSE','UPSTREAM-COMMIT.txt','SOURCE-COMMIT.txt','VERSION.txt') | ForEach-Object { Join-Path $packageRoot $_ }
+        Compress-Archive -LiteralPath $packageFiles -DestinationPath (Join-Path $repoRoot 'Releases/TaskTrace-local-windows-x64.zip') -Force
     }
-    if ($LASTEXITCODE -ne 0 -or $releaseItems.Count -eq 0) { $releaseItems = @('- 程序更新和问题修复') }
-    $releaseNotes = @(
-        ('# TaskTrace ' + $Version)
-        ''
-        ('发布日期：' + (Get-Date -Format 'yyyy-MM-dd'))
-        ''
-        '## 更新内容'
-        ''
-    )
-    $releaseNotes += $releaseItems
-    $releaseNotes += @('', '## 版本对应', '', ('- 源代码提交：' + $sourceCommit))
-    $releaseNotes | Set-Content -LiteralPath (Join-Path $repoRoot 'Releases/RELEASE-NOTES.md') -Encoding UTF8
-    # Only package public application files. Never include runtime data.
-    $packageFiles = @('TaskTrace.exe','TaskTrace-updater.exe','Configure-TaskTrace.cmd','Configure-TaskTrace.ps1','tasktrace-settings.example.json','TaskTrace-server.exe','TaskTrace-floating.exe','Launch-TaskTrace.ps1','README.md','LICENSE','UPSTREAM-COMMIT.txt','SOURCE-COMMIT.txt','VERSION.txt') | ForEach-Object { Join-Path $packageRoot $_ }
-    Compress-Archive -LiteralPath $packageFiles -DestinationPath (Join-Path $repoRoot 'Releases/TaskTrace-local-windows-x64.zip') -Force
     # Retire the old entry point when rebuilding an existing package.
     foreach ($obsoleteName in @('Start-Floating.cmd', 'Start-TaskTrace.cmd')) {
         $obsoleteLauncher = Join-Path $packageRoot $obsoleteName

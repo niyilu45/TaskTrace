@@ -2,7 +2,7 @@
 
 基于 [Vikunja](https://github.com/go-vikunja/vikunja) 二次开发的事项与项目进展跟踪工具，提供 Windows 置顶悬浮窗和完整网页界面。
 
-**[下载 Windows 免安装测试版](https://github.com/niyilu45/TaskTrace/releases)** · **[下载源码](https://github.com/niyilu45/TaskTrace/archive/refs/heads/main.zip)** · **[反馈问题](https://github.com/niyilu45/TaskTrace/issues)**
+**[从源码生成免安装版](https://github.com/niyilu45/TaskTrace/tree/main/dist)** · **[下载正式发布版](https://github.com/niyilu45/TaskTrace/releases)** · **[下载源码](https://github.com/niyilu45/TaskTrace/archive/refs/heads/main.zip)** · **[反馈问题](https://github.com/niyilu45/TaskTrace/issues)**
 
 ## 使用软件
 
@@ -31,15 +31,18 @@
 
 默认数据位于程序目录下的 `data`，可通过 `Configure-TaskTrace.cmd` 更改。程序可自动检查并安装新版本，自动更新会保留 `data` 和 `tasktrace-settings.json`；也可退出程序后手动覆盖程序文件。
 
-本地交付目录统一为：
+程序产物分为源码构建版和正式发布版：
 
 ```text
+dist/
+  Install-TaskTrace.cmd               # 检查依赖并从当前源码生成程序
+  Install-TaskTrace.ps1
+  TaskTrace-local/                    # 本机生成的免安装程序，不提交到 Git
 Releases/
-  TaskTrace-local/                    # 可直接测试的程序及本地数据
-  TaskTrace-local-windows-x64.zip     # 可公开发布的干净免安装包
+  TaskTrace-local-windows-x64.zip     # 正式发布的干净免安装包
 ```
 
-`Releases/` 和 `.local-build/` 不提交到 Git。发布包由白名单生成，不包含测试数据、个人配置或登录会话；不要直接压缩使用中的程序目录上传。
+Git 只跟踪 `dist` 下的安装脚本和说明，不跟踪生成的 EXE、运行数据、个人设置或日志。`Releases/` 和 `.local-build/` 也不提交到 Git；正式发布包由白名单生成，不包含测试数据、个人配置或登录会话。
 
 每日进展支持从日期和内容表格中多选更早记录并填写更正，保留原记录及引用时的文字、图片；引用内容和引用方进展均可双向展开或收起，完整界面和悬浮窗共用，支持自动保存与撤销。
 
@@ -47,15 +50,15 @@ Releases/
 
 源码可从本仓库下载或克隆。每个版本的 Releases 页面还提供该标签对应的 Source code 下载。
 
-Windows 构建需要 Git、Node.js 24 或更新版本、项目指定的 pnpm、Go（版本见 go.mod）、x64 GCC，以及 .NET Framework C# 编译器。
+使用 Git 克隆源码后，双击 `dist/Install-TaskTrace.cmd`。安装工具会一次性检查 Node.js 24、pnpm 11.26、Go 1.27、Windows x64 GCC、Git 和 .NET Framework C# 编译器；如果缺少依赖，会显示具体问题、安装方法和日志位置。
 
 ```powershell
 git clone git@github.com:niyilu45/TaskTrace.git
 cd TaskTrace
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File portable/Build-Local.ps1
+dist\Install-TaskTrace.cmd
 ```
 
-构建结果位于 `Releases`，运行成品不依赖上述开发工具。构建前先退出该目录中运行的 TaskTrace。
+生成结果位于 `dist/TaskTrace-local`。这些工具只在生成程序时使用；运行成品不依赖 Node.js、pnpm、Go、GCC 或开发环境。正式发布 ZIP 仍生成在 `Releases`，构建前请先退出正在运行的 TaskTrace。详细说明见 [源码安装说明](dist/README.md)。
 
 ## 上游与许可证
 

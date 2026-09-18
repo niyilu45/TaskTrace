@@ -59,7 +59,7 @@ internal sealed class ProgressCalendarPopup : Form {
 
     internal ProgressCalendarPopup(DateTime selected,IEnumerable<DateTime> markedDates) {
         this.selected=selected.Date;marked=new HashSet<DateTime>((markedDates??Enumerable.Empty<DateTime>()).Select(date=>date.Date));month=new DateTime(selected.Year,selected.Month,1);
-        FormBorderStyle=FormBorderStyle.FixedSingle;ControlBox=false;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Size=new Size(318,300);MinimumSize=MaximumSize=Size;KeyPreview=true;Font=SystemFonts.MessageBoxFont;
+        AutoScaleDimensions=new SizeF(96F,96F);AutoScaleMode=AutoScaleMode.Dpi;FormBorderStyle=FormBorderStyle.FixedSingle;ControlBox=false;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Size=new Size(318,300);MinimumSize=MaximumSize=Size;KeyPreview=true;Font=SystemFonts.MessageBoxFont;
         var previous=new Button {Text="上月",Dock=DockStyle.Fill,AccessibleName="上一个月"};var next=new Button {Text="下月",Dock=DockStyle.Fill,AccessibleName="下一个月"};
         var header=new TableLayoutPanel {Dock=DockStyle.Top,Height=42,ColumnCount=3,Padding=new Padding(8,6,8,0)};header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,62));header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,62));
         header.Controls.Add(previous,0,0);header.Controls.Add(heading,1,0);header.Controls.Add(next,2,0);Controls.Add(grid);Controls.Add(header);

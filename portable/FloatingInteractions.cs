@@ -280,7 +280,7 @@ internal sealed partial class FloatingWindow {
         try {
             var current=leaf==null?await Api("GET","/tasks/"+id,null):null;
             string title=leaf==null?(string)current["title"]:OutstandingText(leaf.Html);int selectedPriority=leaf==null?PriorityNumber(current):leaf.Priority;
-            using(var dialog=new Form{Text="优先级 · "+title,Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
+            using(var dialog=DpiDialog(new Form{Text="优先级 · "+title,Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
                 var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(PriorityChoiceText(value)+(value==defaultPriority?" · 新增默认":""));choice.SelectedIndex=selectedPriority;
@@ -300,7 +300,7 @@ internal sealed partial class FloatingWindow {
         try {
             var current=await Api("GET","/tasks/"+id,null);string currentStatus=TaskStatusValue(current);
             string[] values={"to-do","doing","done","hold"};string[] labels={"待办（to-do）","进行中（doing）","已完成（done）","暂停（hold）"};
-            using(var dialog=new Form{Text="任务状态 · "+(string)current["title"],Size=new Size(360,205),MinimumSize=new Size(360,205),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}){
+            using(var dialog=DpiDialog(new Form{Text="任务状态 · "+(string)current["title"],Size=new Size(360,205),MinimumSize=new Size(360,205),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
                 var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="任务状态"};choice.Items.AddRange(labels);choice.SelectedIndex=Math.Max(0,Array.IndexOf(values,currentStatus));
@@ -339,7 +339,7 @@ internal sealed partial class FloatingWindow {
         if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;SetBusy(true);timer.Stop();editingOutstanding=true;
         try {
             var shared=ReadShared(await ReadHistory(id));
-            using(var dialog=new Form{Text="遗留事项 · 所有日期共享",Size=new Size(580,570),MinimumSize=new Size(500,480),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false,KeyPreview=true}){
+            using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(580,570),MinimumSize=new Size(500,480),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false,KeyPreview=true})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=7};
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
                 var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
@@ -471,7 +471,7 @@ internal sealed partial class FloatingWindow {
         var leaf=tasks.SelectedNode.Tag as OutstandingLeaf;await ShowImageGallery(id,leaf==null?null:leaf.Html,this);
     }
     async Task ShowImageGallery(long id,string onlyHtml,Form owner,string scopeLabel=null){
-        var gallery=new Form{Text="查看图片 · "+TaskTitle(id),Size=new Size(800,650),MinimumSize=new Size(400,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false};
+        var gallery=DpiDialog(new Form{Text="查看图片 · "+TaskTitle(id),Size=new Size(800,650),MinimumSize=new Size(400,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false});
         var heading=new Label{Dock=DockStyle.Top,Height=42,Padding=new Padding(12,10,12,0),Text="正在收集图片…"};
         var flow=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,FlowDirection=FlowDirection.TopDown,WrapContents=false,Padding=new Padding(10)};
         gallery.Controls.Add(flow);gallery.Controls.Add(heading);var bitmaps=new List<Image>();

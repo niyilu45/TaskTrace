@@ -1,5 +1,14 @@
 # 本机体验版验证记录
 
+## 2026-09-18 源码安装器与字体缩放
+
+- `dist/Install-TaskTrace.cmd` / `.ps1` 会先检查 Windows x64、PowerShell、Git、Node.js 24、pnpm 11.26、Go 1.27、x64 GCC 和 .NET Framework C# 编译器，再生成 `dist/TaskTrace-local`。
+- 使用系统 Node.js 18 与 pnpm 11.19 验证失败路径：安装器一次列出两个版本问题、对应升级方法及 `dist/install.log`，并且不开始构建。
+- 使用隔离的 Node.js 24.21.0 与 pnpm 11.26.0 验证通过路径：完整前端、后端、悬浮窗和启动器构建成功；`-SkipArchive` 未生成正式发布包。
+- 安装成品自检退出码为 0；DPI 清单使用 Per-Monitor V2，悬浮窗及对话框启用 DPI 自动缩放并采用 Windows 系统消息字体，任务行高和缩进随显示器 DPI 更新。
+- 网页端在 144dpi 与 192dpi 高密度显示环境中分别提升基础字号；目标样式通过 stylelint。
+- `dist/TaskTrace-local` 只保留本机生成文件，Git 仅跟踪安装器、说明和该目录的忽略规则。
+
 ## 2026-09-18 GitHub Releases 自动更新
 
 - 程序启动时及按配置间隔检查 GitHub Releases，默认 60 分钟；更新设置页和系统托盘均可手动检查。

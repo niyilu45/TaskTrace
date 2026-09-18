@@ -24,6 +24,18 @@ a, button, input[type='checkbox'], input[type='radio'], select, [tabindex], [con
 :root {
   // Bulma sets this to "scroll" which gives us a scrollbar even if there's no content to scroll
   --body-overflow-y: auto;
+  font-size: 16px;
+
+  // Add a modest type boost on high-density Windows displays. Browsers already
+  // map CSS pixels to the system scale; this keeps dense task tables readable
+  // when the display or accessibility text scale is above the baseline.
+  @media (min-resolution: 144dpi) {
+    font-size: 17px;
+  }
+
+  @media (min-resolution: 192dpi) {
+    font-size: 18px;
+  }
 }
 
 // The LanguageTool browser plugin creates a custom element with shadow root for textareas.

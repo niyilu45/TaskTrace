@@ -66,6 +66,15 @@ internal sealed partial class FloatingWindow : Form {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, string text);
     static void Hint(TextBox input, string text) { input.HandleCreated += delegate { SendMessage(input.Handle, 0x1501, new IntPtr(1), text); }; }
     static readonly Color Blue = Color.FromArgb(36, 94, 210);
+    static Font AdaptiveUiFont() {
+        var system = SystemFonts.MessageBoxFont;
+        return new Font(system.FontFamily, Math.Max(9F, system.SizeInPoints), FontStyle.Regular, GraphicsUnit.Point);
+    }
+    static Form DpiDialog(Form dialog) {
+        dialog.AutoScaleDimensions = new SizeF(96F, 96F);
+        dialog.AutoScaleMode = AutoScaleMode.Dpi;
+        return dialog;
+    }
 
     [STAThread] static int Main(string[] args) {
         Application.EnableVisualStyles();
@@ -80,12 +89,13 @@ internal sealed partial class FloatingWindow : Form {
     }
     FloatingWindow(string address, string directory, string dataDirectory, bool test, bool openBrowser) {
         url = address; root = directory; data = Path.GetFullPath(dataDirectory); selfTest = test;
+        AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
         var session = ReadObject(File.ReadAllText(Path.Combine(data, "local-session.json")));
         token = (string)session["token"]; refresh = (string)session["refresh_token"];
         http.Timeout = TimeSpan.FromSeconds(10);
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         tray.Icon = Icon; tray.Visible = true;
-        ShowInTaskbar = false; Text = "TaskTrace · 悬浮事项"; Font = new Font("Microsoft YaHei UI", 9F);
+        ShowInTaskbar = false; Text = "TaskTrace · 悬浮事项"; Font = AdaptiveUiFont();
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
@@ -186,7 +196,7 @@ internal sealed partial class FloatingWindow : Form {
         InitializeSimpleModeRecovery(menu);
         InitializeUpdates();
         InitializeAutoRefresh();
-        Shown += async delegate { await Reload();
+        Shown += async delegate { ApplyDpiMetrics(); await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
@@ -207,7 +217,15 @@ internal sealed partial class FloatingWindow : Form {
             else if(bottom) message.Result = new IntPtr(left ? 16 : right ? 17 : 15);
             else if(left || right) message.Result = new IntPtr(left ? 10 : 11);
         }
+        if(message.Msg == 0x02E0 && IsHandleCreated && !closing) BeginInvoke(new Action(ApplyDpiMetrics));
         HandleEdgeHideWindowMessage(message.Msg);
+    }
+    void ApplyDpiMetrics() {
+        if(IsDisposed || !IsHandleCreated)return;
+        int dpi=96;using(var graphics=CreateGraphics())dpi=Math.Max(96,(int)Math.Round(graphics.DpiX));
+        tasks.ItemHeight=Math.Max(28,(int)Math.Round(28d*dpi/96d));
+        tasks.Indent=Math.Max(20,(int)Math.Round(20d*dpi/96d));
+        QueueFullLayoutRefresh();
     }
     static string Plain(string html) {
         string value = Regex.Replace(html ?? "", @"<br\s*/?>|</p>|</div>|</li>", "\r\n", RegexOptions.IgnoreCase);
@@ -463,7 +481,7 @@ internal sealed partial class FloatingWindow : Form {
         SetBusy(true); timer.Stop();
         try {
             var history = await ReadHistory(id);
-            using(var dialog=new Form {Text="每日进展 · "+taskTitle,Size=new Size(560,700),MinimumSize=new Size(420,580),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
+            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(560,700),MinimumSize=new Size(420,580),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
@@ -610,7 +628,7 @@ internal sealed partial class FloatingWindow : Form {
         try {
             var parent = await Api("GET", "/tasks/" + parentId, null);
             long projectId = Convert.ToInt64(parent["project_id"]);
-            using(var dialog = new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 470), MinimumSize = new Size(380, 360), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
+            using(var dialog = DpiDialog(new Form { Text = "子任务 · " + (string)parent["title"], Size = new Size(450, 470), MinimumSize = new Size(380, 360), Font = Font, TopMost = TopMost, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false })) {
                 var list = new ListView { Dock = DockStyle.Fill, View = View.Details, CheckBoxes = true, FullRowSelect = true, HeaderStyle = ColumnHeaderStyle.None };
                 list.Columns.Add("子任务", 390);
                 var title = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "新子任务名称" };
@@ -724,7 +742,7 @@ internal sealed partial class FloatingWindow : Form {
     string lastError = "";
     void ShowErrorDetails() {
         if(String.IsNullOrEmpty(lastError)) return;
-        using(var dialog = new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false }) {
+        using(var dialog = DpiDialog(new Form { Text = "TaskTrace · 错误详情（可复制）", Width = 740, Height = 480, Font = Font, StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false })) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=2};
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,28));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
             layout.Controls.Add(new Label {Text="错误详情（可选择并复制）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft});
@@ -781,7 +799,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void ShowAutoSaveSettings(bool verify=false) {
-        using(var settings = new Form { Text = "设置", ClientSize = new Size(470, 510), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false }) {
+        using(var settings = DpiDialog(new Form { Text = "设置", ClientSize = new Size(470, 510), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false })) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
@@ -859,6 +877,7 @@ internal sealed partial class FloatingWindow : Form {
             if(!diagnostic.Contains("Windows error code: 1155") || diagnostic.Contains("TEST_PRIVATE_SESSION") || !lastError.Contains("错误日志")) throw new Exception("Error diagnostics incomplete or leaked session");
             await Reload();
             if(projects.Items.Count == 0 || !TopMost || ShowInTaskbar || !tray.Visible) throw new Exception("Workspace, TopMost or tray-only startup failed");
+            if(AutoScaleMode!=AutoScaleMode.Dpi || Font.SizeInPoints<9F || tasks.ItemHeight<28)throw new Exception("DPI-aware font scaling is not active");
             ShowAutoSaveSettings(true);
             TestEdgeHideBehavior();
             if(newTaskButton.Parent!=bottomActions || !newTaskButton.Visible || addRow.Visible)throw new Exception("Bottom new-item button entry point missing");

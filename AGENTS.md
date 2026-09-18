@@ -38,5 +38,6 @@ Invoke with the `Skill` tool before writing code in these areas:
 
 ## TaskTrace delivery
 - After completing and validating user-requested work, commit it and push the source to `origin/main` automatically.
+- Keep only the source installer and its documentation in `dist/`. Generated files under `dist/TaskTrace-local` are local build output and must never be committed. Never add runtime data, personal settings, sessions, screenshots, or logs.
 - Create or update a GitHub Release only when the user explicitly says “更新程序”, “发布程序”, or otherwise explicitly requests a release. An ordinary implementation request authorizes the source push, not a Release.
 - For an authorized Release, record the built source commit in the release notes and `SOURCE-COMMIT.txt`, upload the portable ZIP and `SHA256SUMS.txt`, and never package local user or test data.

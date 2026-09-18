@@ -12,7 +12,12 @@ docs/themes/
 *.db-shm
 *.db-wal
 Run
-dist/
+/dist/*
+!/dist/Install-TaskTrace.cmd
+!/dist/Install-TaskTrace.ps1
+!/dist/README.md
+!/dist/TaskTrace-local/
+!/dist/TaskTrace-local/.gitignore
 cover.*
 /vikunja
 Test_*
@@ -60,7 +65,7 @@ plans/
 /.local-build/
 /vikunja.exe
 
-# Local portable programs, user data and release archives
+# Formal release archives and local release staging
 /Releases/
 
 # Runtime LAN collaboration repository. Keep its instructions, never commit tasks.

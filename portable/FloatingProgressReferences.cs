@@ -108,7 +108,7 @@ internal sealed partial class FloatingWindow {
         var candidates=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(day=>String.CompareOrdinal(day,targetDay)<0 && !used.Contains(day)).OrderByDescending(day=>day).Select(day=>new ProgressReferenceCandidate {
             Date=day,Html=ProgressSnapshotHtml(String.Join("",DailyHistory(history).Where(note=>DayOf(note)==day).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>ProgressBody((string)note["comment"],taskId))),taskId),Citations=ProgressCitationsForDay(taskId,day,history)
         }).Where(item=>!String.IsNullOrWhiteSpace(item.Html)).ToList();
-        using(var dialog=new Form {Text="引用历史进展",Size=new Size(760,500),MinimumSize=new Size(560,390),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
+        using(var dialog=DpiDialog(new Form {Text="引用历史进展",Size=new Size(760,500),MinimumSize=new Size(560,390),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=4};
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
             layout.Controls.Add(new Label {Text="勾选一个或多个历史日期，然后点击确定。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft});
@@ -130,7 +130,7 @@ internal sealed partial class FloatingWindow {
         }
     }
     async Task ShowReferenceSnapshot(ProgressReference reference,Form owner,bool verify=false) {
-        using(var dialog=new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false}) {
+        using(var dialog=DpiDialog(new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,46));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));
             layout.Controls.Add(new Label{Text="引用内容快照 · "+reference.Date+"；添加引用时固定，后续更正不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft});

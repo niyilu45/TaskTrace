@@ -22,7 +22,7 @@
 - 已阅读上游 AGENTS.md；保留原始代码和许可证。
 - 已完成本机免安装浏览器体验包；运行不依赖 Node.js，支持本地 SQLite 与图片持久化。
 - 本机体验已支持免注册、免输入账号密码，启动即进入本地工作区，自动续期并保留旧单账号数据。
-- 打包产物：Releases/TaskTrace-local-windows-x64.zip；测试记录：portable/VERIFICATION.md。
+- 源码安装入口：dist/Install-TaskTrace.cmd；本机生成目录：dist/TaskTrace-local；正式发布包：Releases/TaskTrace-local-windows-x64.zip；测试记录：portable/VERIFICATION.md。
 - 已加入原生 Windows 置顶悬浮窗：免登录、快速新增、完成、项目选择、搜索分页、收起和托盘恢复。
 - 已加入基于 Windows `teamData` 共享文件夹的局域网团队协作：子树任务链接导入、按用户名多设备合并、评论/进展及图片附件自动合并、冲突集中处理、成员通知和个人优先级隔离。
 - 已支持网页及悬浮窗快捷记录每日进展，按日期追加历史，可填写遗留问题 / 下一步；保存于现有事项评论，支持后续编辑和加图。
@@ -34,7 +34,7 @@
 
 
 ## 本地测试约定
-- 用户直接在 `Releases/TaskTrace-local` 目录测试程序；交付更新应同步到此目录，不能只更新 release 目录或 ZIP。
+- 用户通过 `dist/Install-TaskTrace.cmd` 检查依赖并生成 `dist/TaskTrace-local`，再直接测试其中的程序；生成的二进制文件不提交。
 - 更新时保留已有 `data` 和 `tasktrace-settings.json`，不停止用户正在运行的程序。
 - 自动验收使用 `.local-build` 下的独立数据，禁止将临时数据、登录会话、运行配置、截图及构建产物提交到 Git。
-- `dist/`、`/.local-build/` 和前端测试产物已有 Git 忽略规则；提交前确认没有跟踪运行数据。
+- `dist/` 只跟踪安装脚本、说明和输出目录忽略规则；`dist/TaskTrace-local`、`/.local-build/` 和前端测试产物均不提交。提交前确认没有跟踪二进制文件或运行数据。
