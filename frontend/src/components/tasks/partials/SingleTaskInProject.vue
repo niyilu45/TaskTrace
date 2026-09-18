@@ -2,16 +2,39 @@
 	<div
 		:data-task-id="task.id"
 		:data-project-id="task.projectId"
+		:draggable="canDrag"
+		class="task-tree-item"
+		@dragstart.stop="startTaskDrag"
+		@dragend.stop="finishTaskDrag"
 	>
 		<div
 			ref="taskRoot"
-			:class="{'is-loading': taskService.loading}"
+			:class="{
+				'is-loading': taskService.loading,
+				'task-drop-before': dropZone === 'before',
+				'task-drop-inside': dropZone === 'inside',
+				'task-drop-after': dropZone === 'after',
+			}"
 			class="task loader-container single-task"
 			tabindex="-1"
 			:data-is-overdue="isOverdue || undefined"
 			@click="openTaskDetail"
 			@keyup.enter="openTaskDetail"
+			@dragenter.prevent.stop
+			@dragover.prevent.stop="showTaskDropZone"
+			@dragleave.stop="clearTaskDropZone"
+			@drop.prevent.stop="dropOnTask"
 		>
+			<span
+				v-if="canDrag"
+				class="icon task-drag-handle"
+				title="拖动任务及其全部子任务"
+				aria-label="拖动任务及其全部子任务"
+				@pointerdown.stop="dragHandlePressed = true"
+				@pointerup.stop="dragHandlePressed = false"
+			>
+				<Icon icon="grip-lines" />
+			</span>
 			<span
 				v-tooltip="!canMarkAsDone ? $t('task.readOnlyCheckbox') : ''"
 				class="is-inline-flex is-align-items-center"
@@ -189,20 +212,20 @@
 			</BaseButton>
 			<slot />
 		</div>
-		<template v-if="typeof task.relatedTasks?.subtask !== 'undefined'">
-			<template v-for="subtask in task.relatedTasks.subtask">
-				<template v-if="getTaskById(subtask.id)">
-					<single-task-in-project
-						:key="subtask.id"
-						:the-task="getTaskById(subtask.id)"
-						:disabled="disabled"
-						:can-mark-as-done="canMarkAsDone"
-						:all-tasks="allTasks"
-						class="subtask-nested"
-					/>
-				</template>
-			</template>
-		</template>
+		<single-task-in-project
+			v-for="subtask in orderedSubtasks"
+			:key="subtask.id"
+			:the-task="subtask"
+			:disabled="disabled"
+			:can-mark-as-done="canMarkAsDone"
+			:all-tasks="allTasks"
+			:can-drag="canDrag"
+			class="subtask-nested"
+			@taskUpdated="emit('taskUpdated', $event)"
+			@taskDragStart="emit('taskDragStart', $event)"
+			@taskDragEnd="emit('taskDragEnd', $event)"
+			@taskDrop="emit('taskDrop', $event)"
+		/>
 	</div>
 </template>
 
@@ -241,6 +264,16 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
 import {TASK_STATUSES, taskStatusLabel} from '@/types/ITaskStatus'
 import {useGlobalNow} from '@/composables/useGlobalNow'
+import type {TaskDropZone} from '@/helpers/taskTreeDrag'
+
+interface TaskDragEvent {
+	task: ITask
+	event: DragEvent
+}
+
+interface TaskDropEvent extends TaskDragEvent {
+	zone: TaskDropZone
+}
 
 const props = withDefaults(defineProps<{
 	theTask: ITask,
@@ -249,16 +282,21 @@ const props = withDefaults(defineProps<{
 	disabled?: boolean,
 	canMarkAsDone?: boolean,
 	allTasks?: ITask[],
+	canDrag?: boolean,
 }>(), {
 	isArchived: false,
 	showProject: false,
 	disabled: false,
 	canMarkAsDone: true,
 	allTasks: () => [],
+	canDrag: false,
 })
 
 const emit = defineEmits<{
 	'taskUpdated': [task: ITask],
+	'taskDragStart': [payload: TaskDragEvent],
+	'taskDragEnd': [payload: TaskDragEvent],
+	'taskDrop': [payload: TaskDropEvent],
 }>()
 
 function getTaskById(taskId: number): ITask | undefined {
@@ -273,6 +311,14 @@ const {t} = useI18n({useScope: 'global'})
 
 const taskService = shallowReactive(new TaskService())
 const task = ref<ITask>(new TaskModel())
+
+const orderedSubtasks = computed(() => {
+	const order = new Map(props.allTasks.map((item, index) => [item.id, index]))
+	return (task.value.relatedTasks?.subtask ?? [])
+		.map(subtask => getTaskById(subtask.id))
+		.filter((subtask): subtask is ITask => typeof subtask !== 'undefined')
+		.sort((left, right) => (order.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(right.id) ?? Number.MAX_SAFE_INTEGER))
+})
 
 const isRepeating = computed(() => task.value.repeatAfter.amount > 0 || (task.value.repeatAfter.amount === 0 && task.value.repeatMode === TASK_REPEAT_MODES.REPEAT_MODE_MONTH))
 
@@ -412,6 +458,55 @@ function openTaskDetail(event: MouseEvent | KeyboardEvent) {
 	}
 
 	taskLinkRef.value?.$el.click()
+}
+
+const dropZone = ref<TaskDropZone | null>(null)
+let dragHandlePressed = false
+
+function startTaskDrag(event: DragEvent) {
+	if (!props.canDrag || !dragHandlePressed) {
+		event.preventDefault()
+		return
+	}
+	dragHandlePressed = false
+	if (event.dataTransfer) {
+		event.dataTransfer.effectAllowed = 'move'
+		event.dataTransfer.setData('text/plain', String(task.value.id))
+	}
+	emit('taskDragStart', {task: task.value, event})
+}
+
+function finishTaskDrag(event: DragEvent) {
+	dragHandlePressed = false
+	dropZone.value = null
+	emit('taskDragEnd', {task: task.value, event})
+}
+
+function zoneForEvent(event: DragEvent): TaskDropZone {
+	const bounds = taskRoot.value?.getBoundingClientRect()
+	if (!bounds) return 'inside'
+	const offset = event.clientY - bounds.top
+	if (offset < bounds.height * .25) return 'before'
+	if (offset > bounds.height * .75) return 'after'
+	return 'inside'
+}
+
+function showTaskDropZone(event: DragEvent) {
+	if (!props.canDrag) return
+	dropZone.value = zoneForEvent(event)
+	if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+function clearTaskDropZone(event: DragEvent) {
+	if (event.relatedTarget instanceof Node && taskRoot.value?.contains(event.relatedTarget)) return
+	dropZone.value = null
+}
+
+function dropOnTask(event: DragEvent) {
+	if (!props.canDrag) return
+	const zone = zoneForEvent(event)
+	dropZone.value = null
+	emit('taskDrop', {task: task.value, event, zone})
 }
 
 defineExpose({
@@ -620,6 +715,31 @@ defineExpose({
 		border-inline-start-color: var(--grey-300);
 		border-block-end-color: var(--grey-300);
 	}
+}
+
+.task-drag-handle {
+	flex: 0 0 auto;
+	margin-inline-end: .25rem;
+	color: var(--grey-400);
+	cursor: grab;
+	touch-action: none;
+
+	&:active {
+		cursor: grabbing;
+	}
+}
+
+.task-drop-before {
+	box-shadow: inset 0 3px 0 var(--primary);
+}
+
+.task-drop-inside {
+	border-color: var(--primary);
+	background: hsla(var(--primary-hsl), .08);
+}
+
+.task-drop-after {
+	box-shadow: inset 0 -3px 0 var(--primary);
 }
 
 .subtask-nested {

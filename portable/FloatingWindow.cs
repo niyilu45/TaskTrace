@@ -174,7 +174,7 @@ internal sealed partial class FloatingWindow : Form {
             }));
         };
         tasks.NodeDoubleClicked = delegate(TreeNode node) {
-            if(node.Tag is OutstandingLeaf) ShowOutstanding(((OutstandingLeaf)node.Tag).TaskId);
+            if(node.Tag is OutstandingLeaf) {var item=(OutstandingLeaf)node.Tag;ShowOutstandingItem(item.TaskId,item.Id);}
             else if(node.Tag is long) { tasks.SelectedNode = node; ShowProgress(); }
         };
         tasks.AfterCollapse += delegate(object sender, TreeViewEventArgs e) {
@@ -489,6 +489,8 @@ internal sealed partial class FloatingWindow : Form {
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var save=new Button {Text="保存当天进展 (Ctrl+Enter)",Dock=DockStyle.Fill};
+                var deleteTask=new Button {Text="删除此任务",Dock=DockStyle.Fill,BackColor=Color.Firebrick,ForeColor=Color.White,FlatStyle=FlatStyle.Flat};
+                var actionRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));actionRow.Controls.Add(save,0,0);actionRow.Controls.Add(deleteTask,1,0);
                 var feedback=new Label {Dock=DockStyle.Fill};
                 var referenceGroup=new GroupBox {Text="引用历史进展",Dock=DockStyle.Fill,Padding=new Padding(8)};
                 var referenceLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
@@ -500,9 +502,9 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(sharedButton);layout.Controls.Add(save);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(sharedButton);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false,referenceExpanded=false;
+                string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false,referenceExpanded=false,taskDeleted=false;
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count,references=SerializeProgressReferences(references)});};
                 Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Text=progress.Text,Pictures=new List<PastedImage>(pictures),References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action refreshReferences=delegate {
@@ -529,7 +531,7 @@ internal sealed partial class FloatingWindow : Form {
                 referenceList.SelectedIndexChanged+=delegate{previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;};
                 Func<bool,Task> selectReferences=async delegate(bool verifyPicker) {
                     if(submitting)return;string targetDay=selectedDay;
-                    submitting=true;day.Enabled=false;save.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;feedback.Text="正在读取所选日期的最新进展…";
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;feedback.Text="正在读取所选日期的最新进展…";
                     try {
                         var latest=await ReadHistory(id);
                         if(dialog.IsDisposed || selectedDay!=targetDay)return;
@@ -537,7 +539,7 @@ internal sealed partial class FloatingWindow : Form {
                         foreach(string sourceDay in selected)if(!references.Any(item=>item.Date==sourceDay)){references.Add(ReferenceForDay(id,sourceDay,targetDay,history));added++;}
                         if(added>0){referenceExpanded=true;refreshReferences();referenceList.SelectedIndex=references.Count-1;feedback.Text="已添加 "+added+" 条引用。请在上方填写当天更正，保存后原记录不变。";}else {refreshReferences();feedback.Text="未添加引用。";}
                     } catch(Exception e){if(!dialog.IsDisposed)feedback.Text=e.Message;}
-                    finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;}}
+                    finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;}}
                 };
                 chooseReferences.Click+=async delegate {await selectReferences(false);};
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
@@ -545,7 +547,7 @@ internal sealed partial class FloatingWindow : Form {
                 Func<bool,Task> write=async delegate(bool finish) {
                     if(submitting || (String.IsNullOrWhiteSpace(progress.Text) && pictures.Count==0 && references.Count==0 && commentId==0))return;
                     if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return;}
-                    submitting=true;day.Enabled=false;save.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;progress.ReadOnly=true;
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;progress.ReadOnly=true;
                     try {
                         using(BeginUndoGroup()) {
                         var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
@@ -557,10 +559,17 @@ internal sealed partial class FloatingWindow : Form {
                         history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
                         }
                     } catch {feedback.Text="保存失败，内容已保留，请重试。";}
-                    finally{submitting=false;day.Enabled=true;save.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}
+                    finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}
                 };
                 save.Click+=async delegate {await write(true);};
                 var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=async delegate {if(autoSaveEnabled && !editingOutstanding && snapshot()!=lastSaved)await write(false);};autoTimer.Start();
+                deleteTask.Click+=async delegate {
+                    if(submitting || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？删除后可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;referenceGroup.Enabled=false;progress.ReadOnly=true;feedback.Text="正在删除任务…";
+                    try {await Api("DELETE","/tasks/"+id,null);await RefreshUndo();taskDeleted=true;submitting=false;dialog.Close();}
+                    catch(Exception e){feedback.Text=e.Message;}
+                    finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}}
+                };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}feedback.Text="已粘贴 "+pictures.Count+" 张图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
@@ -594,8 +603,9 @@ internal sealed partial class FloatingWindow : Form {
                         referenceList.SelectedIndex=0;removeReference.PerformClick();await write(false);var retained=SplitProgressReferences((string)(await ReadHistory(id)).First(note=>Convert.ToInt64(note["id"])==commentId)["comment"],id);if(retained.References.Count!=1)throw new Exception("Removed reference was not auto saved");
                     } catch(Exception e){verificationError=e;}finally{drafts.Clear();dialog.Close();}
                 };
-                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(submitting){e.Cancel=true;return;}if(verify)return;stash();if(drafts.Count>0 && MessageBox.Show(dialog,"还有日期的进展未保存，确定放弃这些修改？","每日进展",MessageBoxButtons.YesNo)!=DialogResult.Yes)e.Cancel=true;};
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(taskDeleted)return;if(submitting){e.Cancel=true;return;}if(verify)return;stash();if(drafts.Count>0 && MessageBox.Show(dialog,"还有日期的进展未保存，确定放弃这些修改？","每日进展",MessageBoxButtons.YesNo)!=DialogResult.Yes)e.Cancel=true;};
                 try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
+                if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
         }catch(Exception e){if(verify)throw;Error(e);}finally{SetBusy(false);timer.Start();}
     }

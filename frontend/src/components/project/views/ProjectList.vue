@@ -55,46 +55,32 @@
 						</ButtonLink>
 					</Nothing>
 
-					<draggable
+					<ul
 						v-if="tasks && tasks.length > 0"
-						v-model="tasks"
-						:group="{name: 'tasks', put: false}"
-						:disabled="!canDragTasks || !isPositionSorting"
-						item-key="id"
-						tag="ul"
-						:component-data="{
-							class: {
-								tasks: true,
-								'dragging-disabled': !canDragTasks || !isPositionSorting
-							},
-							type: 'transition-group'
-						}"
-						:animation="100"
-						:handle="dragHandle"
-						:delay-on-touch-only="!isTouchDevice"
-						:delay="isTouchDevice ? 0 : 1000"
-						ghost-class="task-ghost"
-						@start="handleDragStart"
-						@end="saveTaskPosition"
+						class="tasks"
+						:class="{'dragging-disabled': !canDragTasks || !isPositionSorting}"
+						@dragover.self.prevent
+						@drop.self.prevent="dropAtRootEnd"
 					>
-						<template #item="{element: t, index}">
+						<li
+							v-for="(t, index) in tasks"
+							:key="t.id"
+							class="task-tree-root"
+						>
 							<SingleTaskInProject
 								:ref="(el) => setTaskRef(el, index)"
 								:show-list-color="false"
 								:can-mark-as-done="canWrite || isPseudoProject"
 								:the-task="t"
 								:all-tasks="allTasks"
+								:can-drag="canDragTasks && isPositionSorting && !dragMoveSaving"
 								@taskUpdated="updateTasks"
-							>
-								<span
-									v-if="canDragTasks && isPositionSorting"
-									class="icon handle"
-								>
-									<Icon icon="grip-lines" />
-								</span>
-							</SingleTaskInProject>
-						</template>
-					</draggable>
+								@taskDragStart="handleTaskDragStart"
+								@taskDragEnd="handleTaskDragEnd"
+								@taskDrop="handleTaskDrop"
+							/>
+						</li>
+					</ul>
 
 					<Pagination
 						:total-pages="totalPages"
@@ -109,7 +95,6 @@
 
 <script setup lang="ts">
 import {ref, computed, nextTick, onMounted, onBeforeUnmount, watch, toRef} from 'vue'
-import draggable from 'zhyswan-vuedraggable'
 import {useStorage} from '@vueuse/core'
 
 import ProjectWrapper from '@/components/project/ProjectWrapper.vue'
@@ -125,8 +110,10 @@ import {useTaskList} from '@/composables/useTaskList'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
 import {shouldShowTaskInListView} from '@/composables/useTaskListFiltering'
 import {PERMISSIONS as Permissions} from '@/constants/permissions'
-import {calculateItemPosition} from '@/helpers/calculateItemPosition'
 import type {ITask} from '@/modelTypes/ITask'
+import {taskMovePlan, type TaskDropZone} from '@/helpers/taskTreeDrag'
+import {tasksTasktraceMove} from '@/client/generated'
+import {error, success} from '@/message'
 import {isSavedFilter, useSavedFilter} from '@/services/savedFilter'
 
 import {useBaseStore} from '@/stores/base'
@@ -134,9 +121,6 @@ import {useTaskStore} from '@/stores/tasks'
 
 import type {IProject} from '@/modelTypes/IProject'
 import type {IProjectView} from '@/modelTypes/IProjectView'
-import TaskPositionService from '@/services/taskPosition'
-import TaskPositionModel from '@/models/taskPosition'
-
 const props = defineProps<{
         isLoadingProject: boolean,
         projectId: IProject['id'],
@@ -149,8 +133,6 @@ defineOptions({name: 'List'})
 
 const showCompleted = useStorage('tasktrace:edit-show-completed', false)
 const ctaVisible = ref(false)
-
-const drag = ref(false)
 
 const {
 	tasks: allTasks,
@@ -169,8 +151,6 @@ const {
 		: ['subtasks', 'comment_count', 'is_unread'],
 	() => showCompleted.value,
 )
-
-const taskPositionService = ref(new TaskPositionService())
 
 // Saved filter composable for accessing filter data
 const _savedFilter = useSavedFilter(() => isSavedFilter({id: projectId.value}) ? projectId.value : undefined).filter
@@ -202,12 +182,6 @@ onMounted(async () => {
 })
 
 const canDragTasks = computed(() => canWrite.value || isSavedFilter(project.value))
-
-const isTouchDevice = ref(false)
-if (typeof window !== 'undefined') {
-	isTouchDevice.value = !window.matchMedia('(hover: hover) and (pointer: fine)').matches
-}
-const dragHandle = computed(() => isTouchDevice.value ? '.handle' : undefined)
 
 const addTaskRef = ref<typeof AddTask | null>(null)
 
@@ -244,55 +218,73 @@ function updateTasks(updatedTask: ITask) {
 	}
 }
 
-function handleDragStart(e: { item: HTMLElement }) {
-	drag.value = true
-	const taskId = parseInt(e.item.dataset.taskId ?? '', 10)
-	const task = tasks.value.find(t => t.id === taskId)
+interface TaskDragPayload {
+	task: ITask
+	event: DragEvent
+}
 
-	if (task) {
-		taskStore.setDraggedTask(task)
+interface TaskDropPayload extends TaskDragPayload {
+	zone: TaskDropZone
+}
+
+const draggedTaskId = ref(0)
+const dragMoveSaving = ref(false)
+let treeDropHandled = false
+
+function handleTaskDragStart({task}: TaskDragPayload) {
+	draggedTaskId.value = task.id
+	treeDropHandled = false
+	taskStore.setDraggedTask(task)
+}
+
+async function saveTreeMove(parentId: number, beforeTaskId: number) {
+	if (!draggedTaskId.value || dragMoveSaving.value) return
+	dragMoveSaving.value = true
+	try {
+		await tasksTasktraceMove({
+			path: {task: draggedTaskId.value},
+			body: {
+				parent_id: parentId,
+				before_task_id: beforeTaskId,
+				project_view_id: props.viewId,
+			},
+		})
+		await loadTasks(false)
+		success({message: '任务及其全部子任务已移动，遗留事项保持在原任务中。'})
+	} catch {
+		error({message: '任务移动失败。请确认没有形成循环，并且任务层级不超过 5 级。'})
+		await loadTasks(false)
+	} finally {
+		dragMoveSaving.value = false
 	}
 }
 
-async function saveTaskPosition(e: { originalEvent?: MouseEvent, to: HTMLElement, from: HTMLElement, item: HTMLElement, newIndex: number }) {
-	drag.value = false
-
-	// Check if dropped on a sidebar project
-	const {moved} = await handleTaskDropToProject(e, (task) => {
-		tasks.value = tasks.value.filter(t => t.id !== task.id)
-	})
-
-	if (moved) {
+async function handleTaskDrop({task, zone}: TaskDropPayload) {
+	if (!draggedTaskId.value) return
+	treeDropHandled = true
+	const plan = taskMovePlan(allTasks.value, draggedTaskId.value, task.id, zone)
+	if (!plan) {
+		error({message: '不能把任务移动到自身或自己的子任务中。'})
 		return
 	}
+	await saveTreeMove(plan.parentId, plan.beforeTaskId)
+}
 
-	// If dropped outside this list
-	if (e.to !== e.from) {
-		return
+async function dropAtRootEnd() {
+	if (!draggedTaskId.value) return
+	treeDropHandled = true
+	await saveTreeMove(0, 0)
+}
+
+async function handleTaskDragEnd({event}: TaskDragPayload) {
+	if (!treeDropHandled) {
+		await handleTaskDropToProject({originalEvent: event}, (task) => {
+			tasks.value = tasks.value.filter(item => item.id !== task.id)
+		})
 	}
-
-	// e.newIndex is a DOM index: it counts elements still leaving the transition group, so it can
-	// point past the last task. The list is already reordered here, so resolve the task by its id.
-	const movedTaskId = parseInt(e.item.dataset.taskId ?? '', 10)
-	const newIndex = tasks.value.findIndex(t => t.id === movedTaskId)
-
-	if (newIndex === -1) {
-		return
-	}
-
-	const taskBefore = tasks.value[newIndex - 1] ?? null
-	const taskAfter = tasks.value[newIndex + 1] ?? null
-
-	const position = calculateItemPosition(taskBefore !== null ? taskBefore.position : null, taskAfter !== null ? taskAfter.position : null)
-
-	await taskPositionService.value.update(new TaskPositionModel({
-		position,
-		projectViewId: props.viewId,
-		taskId: movedTaskId,
-	}))
-	tasks.value = tasks.value.map(t => t.id === movedTaskId
-		? {...t, position}
-		: t)
+	taskStore.setDraggedTask(null)
+	draggedTaskId.value = 0
+	treeDropHandled = false
 }
 
 const taskRefs = ref<(InstanceType<typeof SingleTaskInProject> | null)[]>([])
@@ -389,16 +381,6 @@ onBeforeUnmount(() => {
 	padding: .5rem;
 }
 
-.task-ghost {
-	border-radius: $radius;
-	background: var(--grey-100);
-	border: 2px dashed var(--grey-300);
-
-	* {
-		opacity: 0;
-	}
-}
-
 .list-view__add-task {
 	padding: 1rem 1rem 0;
 }
@@ -408,27 +390,8 @@ onBeforeUnmount(() => {
 	box-shadow: none;
 }
 
-:deep(.single-task .handle) {
-	cursor: grab;
-	margin-inline-end: .25rem;
-	color: var(--grey-400);
-}
-
-@media (hover: hover) and (pointer: fine) {
-	:deep(.single-task .handle) {
-		display: none;
-	}
-}
-
-:deep(.tasks:not(.dragging-disabled) .single-task) {
-	cursor: grab;
-	-webkit-touch-callout: none;
-	user-select: none;
-	touch-action: manipulation;
-
-	&:active {
-		cursor: grabbing;
-	}
+.task-tree-root {
+	list-style: none;
 }
 
 .list-view {

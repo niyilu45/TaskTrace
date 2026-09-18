@@ -335,7 +335,8 @@ internal sealed partial class FloatingWindow {
         return String.Join("",tags);
     }
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
-    async Task EditOutstanding(long id,bool nested,bool verify){
+    async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
+    async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
         if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;SetBusy(true);timer.Stop();editingOutstanding=true;
         try {
             var shared=ReadShared(await ReadHistory(id));
@@ -350,7 +351,7 @@ internal sealed partial class FloatingWindow {
                 priorityRow.Controls.Add(new Label{Text="优先级（0 最高，9 最低）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项优先级说明"},0,0);priorityRow.Controls.Add(priority,1,0);
                 var previews=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false};
                 var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill};
-                var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var remove=new Button{Text="移除选中",AutoSize=true};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
+                var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
@@ -370,8 +371,9 @@ internal sealed partial class FloatingWindow {
                 Action render=delegate{loading=true;list.Items.Clear();for(int i=0;i<shared.Items.Count;i++){shared.Items[i].Number=i+1;list.Items.Add(shared.Items[i]);}loading=false;};render();
                 Func<bool> dirty=delegate{return input.Text!=originalText || priority.SelectedIndex!=originalPriority || pictures.Count>0 || removeExistingImages;};
                 Func<bool> mayDiscard=delegate{return !dirty() || MessageBox.Show(dialog,"当前输入尚未保存，是否放弃？","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;};
-                Action<PendingItem> edit=delegate(PendingItem item){editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";renderPreviews();};
+                Action<PendingItem> edit=delegate(PendingItem item){editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";renderPreviews();};
                 list.SelectedIndexChanged+=delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}edit(selected);};
+                if(!String.IsNullOrEmpty(selectedItemId)){var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(selected!=null)list.SelectedItem=selected;}
                 fresh.Click+=delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;edit(null);input.Focus();};
                 recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalText="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();};
@@ -392,11 +394,11 @@ internal sealed partial class FloatingWindow {
                             if(removeExistingImages)body=Regex.Replace(body,@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
                             if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded,Priority=priority.SelectedIndex});else{existing.Html=body+uploaded;existing.Priority=priority.SelectedIndex;}
                         }
-                        await WriteShared(id,current);shared=current;render();edit(null);feedback.Text="已保存。图片随遗留事项保存，所有日期共享。";
+                        await WriteShared(id,current);shared=current;render();edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已保存。图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();
                     }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;}
                     finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;priority.Enabled=true;}
                 };
-                save.Click+=async delegate{await write(false);};remove.Click+=async delegate{await write(true);};
+                save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}renderPreviews();feedback.Text="已粘贴图片，点击保存；点击缩略图可移除待保存图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}

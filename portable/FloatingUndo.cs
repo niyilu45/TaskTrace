@@ -100,12 +100,13 @@ internal sealed partial class FloatingWindow {
         await Api("POST","/tasks/"+a+"/outstanding/move",new{target_task_id=b,item_id="undo-image",before_item_id="keep"});await UndoForTest();
         shared=ReadShared(await ReadHistory(a));target=ReadShared(await ReadHistory(b));
         if(shared.Items.Count!=1 || shared.Items[0].Id!="undo-image" || target.Items.Count!=1 || target.Items[0].Id!="keep")throw new Exception("Outstanding move undo lost items");
+        shared.Items.RemoveAll(pending=>pending.Id=="undo-image");await WriteShared(a,shared);await UndoForTest();shared=ReadShared(await ReadHistory(a));if(!shared.Items.Any(pending=>pending.Id=="undo-image"))throw new Exception("Deleted outstanding item undo failed");
         if((await DownloadImage("/api/v1/tasks/"+a+"/attachments/"+picture[0].Id)).Length==0)throw new Exception("Undo removed original image");
         await Api("PATCH","/tasks/"+a,new{title="按钮撤销"});await RefreshUndo();SetBusy(false);
         if(undoId==0)throw new Exception("Undo shortcut state is not available");
         await PerformUndo();if((string)(await Api("GET","/tasks/"+a,null))["title"]!="撤销验收 A")throw new Exception("Undo shortcut action failed");
         ShowNewTaskEditor();entry.Focus();if(!EditingText())throw new Exception("Text Ctrl+Z was not isolated");HideNewTaskEditor();tasks.Focus();if(EditingText())throw new Exception("Tree Ctrl+Z was not enabled");
         undoRecording=false;foreach(long id in cleanup)await Api("DELETE","/tasks/"+id,null);undoRecording=true;await LoadTasks();await RefreshUndo();
-        File.WriteAllText(Path.Combine(data,"floating-undo-test.txt"),"PASS: shortcut-only undo, stale request rejection, unrelated field preservation, conflict safety and retry, grouped child creation, task delete/restore, progress create/edit undo, task move undo, outstanding image transfer undo, original image retained, input Ctrl+Z isolation.");
+        File.WriteAllText(Path.Combine(data,"floating-undo-test.txt"),"PASS: shortcut-only undo, stale request rejection, unrelated field preservation, conflict safety and retry, grouped child creation, task delete/restore, progress create/edit undo, task move undo, outstanding image transfer and delete undo, original image retained, input Ctrl+Z isolation.");
     }
 }
