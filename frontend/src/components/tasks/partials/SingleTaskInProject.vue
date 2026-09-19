@@ -2,10 +2,7 @@
 	<div
 		:data-task-id="task.id"
 		:data-project-id="task.projectId"
-		:draggable="canDrag"
 		class="task-tree-item"
-		@dragstart.stop="startTaskDrag"
-		@dragend.stop="finishTaskDrag"
 	>
 		<div
 			ref="taskRoot"
@@ -18,23 +15,11 @@
 			class="task loader-container single-task"
 			tabindex="-1"
 			:data-is-overdue="isOverdue || undefined"
-			@click="openTaskDetail"
-			@keyup.enter="openTaskDetail"
 			@dragenter.prevent.stop
 			@dragover.prevent.stop="showTaskDropZone"
 			@dragleave.stop="clearTaskDropZone"
 			@drop.prevent.stop="dropOnTask"
 		>
-			<span
-				v-if="canDrag"
-				class="icon task-drag-handle"
-				title="拖动任务及其全部子任务"
-				aria-label="拖动任务及其全部子任务"
-				@pointerdown.stop="dragHandlePressed = true"
-				@pointerup.stop="dragHandlePressed = false"
-			>
-				<Icon icon="grip-lines" />
-			</span>
 			<span
 				v-tooltip="!canMarkAsDone ? $t('task.readOnlyCheckbox') : ''"
 				class="is-inline-flex is-align-items-center"
@@ -76,22 +61,54 @@
 						class="mie-1"
 					/>
 	
-					<PriorityLabel
-						:priority="task.priority"
-						:done="task.done"
-						class="pis-2 mie-1"
-					/>
+					<label
+						class="inline-task-control mie-1"
+						@click.stop
+						@pointerdown.stop
+					>
+						<span class="is-sr-only">任务优先级</span>
+						<select
+							:value="tasktracePriorityNumber(task.priority)"
+							:disabled="inlineSaving || disabled || isArchived"
+							aria-label="任务优先级"
+							@change="changePriority"
+						>
+							<option
+								v-for="priority in 10"
+								:key="priority - 1"
+								:value="priority - 1"
+							>P{{ priority - 1 }}</option>
+						</select>
+					</label>
 
-					<span
-						class="task-status-badge mie-1"
-						:data-status="task.status"
-					>{{ taskStatusLabel(task.status, task.done) }}</span>
+					<label
+						class="inline-task-control mie-1"
+						@click.stop
+						@pointerdown.stop
+					>
+						<span class="is-sr-only">任务状态</span>
+						<select
+							:value="task.status"
+							:disabled="inlineSaving || disabled || isArchived"
+							aria-label="任务状态"
+							@change="changeStatus"
+						>
+							<option
+								v-for="option in TASK_STATUS_OPTIONS"
+								:key="option.value"
+								:value="option.value"
+							>{{ option.label }}</option>
+						</select>
+					</label>
 
 					<TaskGlanceTooltip :task="task">
 						<RouterLink
-							ref="taskLinkRef"
 							:to="taskDetailRoute"
+							:draggable="canDrag"
 							class="task-link"
+							title="单击编辑；按住并拖动可改变层级"
+							@dragstart.stop="startTaskDrag"
+							@dragend.stop="finishTaskDrag"
 						>
 							{{ task.title }}
 						</RouterLink>
@@ -232,11 +249,11 @@
 <script setup lang="ts">
 import {ref, watch, shallowReactive, onMounted, computed} from 'vue'
 import {useI18n} from 'vue-i18n'
+import {useRouter} from 'vue-router'
 
 import TaskModel, {getHexColor} from '@/models/task'
 import type {ITask} from '@/modelTypes/ITask'
 
-import PriorityLabel from '@/components/tasks/partials/PriorityLabel.vue'
 import Labels from '@/components/tasks/partials/Labels.vue'
 import TaskGlanceTooltip from '@/components/tasks/partials/TaskGlanceTooltip.vue'
 import DeferTask from '@/components/tasks/partials/DeferTask.vue'
@@ -252,7 +269,7 @@ import Popup from '@/components/misc/Popup.vue'
 import TaskService from '@/services/task'
 
 import {formatDisplayDate, formatISO, formatDateLong} from '@/helpers/time/formatDate'
-import {success} from '@/message'
+import {error, success} from '@/message'
 
 import {useProjectStore} from '@/stores/projects'
 import {useBaseStore} from '@/stores/base'
@@ -262,9 +279,11 @@ import {useIntervalFn} from '@vueuse/core'
 import {playPopSound} from '@/helpers/playPop'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
-import {TASK_STATUSES, taskStatusLabel} from '@/types/ITaskStatus'
+import {TASK_STATUSES, TASK_STATUS_OPTIONS, type TaskStatus} from '@/types/ITaskStatus'
 import {useGlobalNow} from '@/composables/useGlobalNow'
 import type {TaskDropZone} from '@/helpers/taskTreeDrag'
+import {tasktracePriorityNumber, tasktraceStoredPriority} from '@/helpers/tasktracePriority'
+import type {Priority} from '@/constants/priorities'
 
 interface TaskDragEvent {
 	task: ITask
@@ -308,6 +327,7 @@ function getTaskById(taskId: number): ITask | undefined {
 }
 
 const {t} = useI18n({useScope: 'global'})
+const router = useRouter()
 
 const taskService = shallowReactive(new TaskService())
 const task = ref<ITask>(new TaskModel())
@@ -442,33 +462,39 @@ async function toggleFavorite() {
 const taskRoot = ref<HTMLElement | null>(null)
 const dueDateTrigger = ref<InstanceType<typeof BaseButton> | null>(null)
 const dueDateTriggerEl = computed<HTMLElement | null>(() => dueDateTrigger.value?.$el ?? null)
-const taskLinkRef = ref<HTMLElement | null>(null)
+const inlineSaving = ref(false)
 
-function hasTextSelected() {
-	const isTextSelected = window.getSelection().toString()
-	return !(typeof isTextSelected === 'undefined' || isTextSelected === '' || isTextSelected === '\n')
+async function saveInline(changes: Partial<ITask>) {
+	if (inlineSaving.value || props.disabled || props.isArchived) return
+	inlineSaving.value = true
+	try {
+		const updated = await taskStore.update({...task.value, ...changes})
+		task.value = updated
+		emit('taskUpdated', updated)
+	} catch (reason) {
+		error(reason)
+	} finally {
+		inlineSaving.value = false
+	}
 }
 
-function openTaskDetail(event: MouseEvent | KeyboardEvent) {
-	if (event.target instanceof HTMLElement) {
-		const isInteractiveElement = event.target.closest('a, button, label, input[type="checkbox"], .favorite, [role="button"]')
-		if (isInteractiveElement || hasTextSelected()) {
-			return
-		}
-	}
+function changePriority(event: Event) {
+	const displayed = Number((event.target as HTMLSelectElement).value)
+	void saveInline({priority: tasktraceStoredPriority(displayed) as Priority})
+}
 
-	taskLinkRef.value?.$el.click()
+function changeStatus(event: Event) {
+	const status = (event.target as HTMLSelectElement).value as TaskStatus
+	void saveInline({status, done: status === TASK_STATUSES.DONE})
 }
 
 const dropZone = ref<TaskDropZone | null>(null)
-let dragHandlePressed = false
 
 function startTaskDrag(event: DragEvent) {
-	if (!props.canDrag || !dragHandlePressed) {
+	if (!props.canDrag) {
 		event.preventDefault()
 		return
 	}
-	dragHandlePressed = false
 	if (event.dataTransfer) {
 		event.dataTransfer.effectAllowed = 'move'
 		event.dataTransfer.setData('text/plain', String(task.value.id))
@@ -477,7 +503,6 @@ function startTaskDrag(event: DragEvent) {
 }
 
 function finishTaskDrag(event: DragEvent) {
-	dragHandlePressed = false
 	dropZone.value = null
 	emit('taskDragEnd', {task: task.value, event})
 }
@@ -511,7 +536,7 @@ function dropOnTask(event: DragEvent) {
 
 defineExpose({
 	focus: () => taskRoot.value?.focus(),
-	click: (e: MouseEvent | KeyboardEvent) => openTaskDetail(e),
+	click: () => router.push(taskDetailRoute.value),
 })
 </script>
 
@@ -522,7 +547,7 @@ defineExpose({
 	padding: .4rem;
 	transition: background-color $transition;
 	align-items: center;
-	cursor: pointer;
+	cursor: default;
 	border-radius: $radius;
 	border: 2px solid transparent;
 
@@ -717,12 +742,20 @@ defineExpose({
 	}
 }
 
-.task-drag-handle {
-	flex: 0 0 auto;
-	margin-inline-end: .25rem;
-	color: var(--grey-400);
+.inline-task-control select {
+	min-block-size: 1.75rem;
+	border: 1px solid var(--grey-300);
+	border-radius: .25rem;
+	background: var(--white);
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+	padding: .1rem 1.45rem .1rem .35rem;
+}
+
+.task-link[draggable='true'] {
 	cursor: grab;
-	touch-action: none;
+	user-select: none;
 
 	&:active {
 		cursor: grabbing;

@@ -42,7 +42,7 @@
 			<XButton
 				variant="secondary"
 				:disabled="loading"
-				@click="load"
+				@click="load()"
 			>
 				刷新进展
 			</XButton>
@@ -93,7 +93,7 @@
 		>
 			{{ error }} <XButton
 				variant="secondary"
-				@click="load"
+				@click="load()"
 			>
 				重试
 			</XButton>
@@ -119,7 +119,15 @@
 						aria-hidden="true"
 						:class="{expanded: isExpanded(group.root.id)}"
 					><path d="m6 3 5 5-5 5" /></svg>
-				</button><h3>{{ group.root.title }}</h3><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
+				</button><h3>
+					<button
+						type="button"
+						class="task-edit-link"
+						@click="openTaskEditor(group.root.id)"
+					>
+						{{ group.root.title }}
+					</button>
+				</h3><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
 			</header>
 			<template v-if="isExpanded(group.root.id)">
 				<ReadonlyRichText
@@ -141,6 +149,7 @@
 							:descendants="group.rows.slice(1).map(row => row.task)"
 							:depth="0"
 							:progress-days="progressDays"
+							@edit="openTaskEditor"
 						/>
 					</ProjectProgressTable>
 				</details>
@@ -161,6 +170,7 @@
 						:has-children="parents.has(row.task.id)"
 						:expanded="isExpanded(row.task.id)"
 						@toggle="toggle(row.task.id)"
+						@edit="openTaskEditor"
 					/>
 				</ProjectProgressTable>
 				<p
@@ -196,7 +206,8 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, watch, onBeforeUnmount} from 'vue'
+import {ref, computed, watch, onBeforeUnmount, nextTick} from 'vue'
+import {useRoute, useRouter} from 'vue-router'
 import {projectTasksList} from '@/client/generated'
 import {useElementSize, useStorage} from '@vueuse/core'
 import {visibleProgressRows, groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
@@ -205,6 +216,8 @@ import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 const props = defineProps<{projectId: number}>()
+const route = useRoute()
+const router = useRouter()
 const overview = ref<HTMLElement>()
 const {width: overviewWidth} = useElementSize(overview)
 const customWidths = ref<number[] | null>(null)
@@ -313,9 +326,13 @@ const groups = computed(() => grouped.value.map(group => {
 watch(search, () => { searchExpanded.value = new Set() })
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
 watch([search, scope], () => { page.value = 1 })
-async function load() {
+async function load(options: {preserveView?: boolean} = {}) {
 	const version = ++requestId
-	loading.value = true; error.value = ''; tasks.value = []; page.value = 1
+	loading.value = true; error.value = ''
+	if (!options.preserveView) {
+		tasks.value = []
+		page.value = 1
+	}
 	try {
 		const collected: ProgressTask[] = []
 		for (let next = 1; ; next++) {
@@ -329,7 +346,30 @@ async function load() {
 	} catch { if (version === requestId) error.value = '项目读取失败，请重试。' }
 	finally { if (version === requestId) loading.value = false }
 }
-watch(() => props.projectId, load, {immediate: true})
+let modalOpenedHere = false
+let savedScrollY = 0
+function openTaskEditor(taskId: number) {
+	savedScrollY = window.scrollY
+	modalOpenedHere = true
+	void router.push({
+		name: 'task.detail',
+		params: {id: taskId},
+		state: {backdropView: route.fullPath},
+	})
+}
+watch(() => route.name, async name => {
+	if (!modalOpenedHere) return
+	if (name === 'task.detail') {
+		await nextTick()
+		requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
+		return
+	}
+	modalOpenedHere = false
+	await load({preserveView: true})
+	await nextTick()
+	requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
+})
+watch(() => props.projectId, () => load(), {immediate: true})
 onBeforeUnmount(() => requestId++)
 </script>
 
@@ -409,6 +449,27 @@ onBeforeUnmount(() => requestId++)
 	margin: 0;
 	flex: 1;
 	}
+.task-edit-link {
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	font-weight: inherit;
+	padding: 0;
+	cursor: pointer;
+	text-align: start;
+	text-decoration: underline;
+	text-decoration-color: transparent;
+	text-underline-offset: .18em;
+	&:hover {
+		color: var(--primary);
+		text-decoration-color: currentcolor;
+	}
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
+}
 .progress-group header span {
 	font-size: .75rem;
 	color: var(--grey-600);

@@ -176,11 +176,13 @@ internal sealed partial class FloatingWindow {
         tasks.DragEnter+=delegate(object sender,DragEventArgs e){e.Effect=e.Data.GetDataPresent(typeof(TreeNode))?DragDropEffects.Move:DragDropEffects.None;};
         tasks.DragOver+=delegate(object sender,DragEventArgs e){
             var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;var point=tasks.PointToClient(new Point(e.X,e.Y));var target=tasks.GetNodeAt(point);
-            int zone=DropZone(source,target,point.Y);var plan=MakeDropPlan(source,target,zone);
+            if(source!=null && source.Tag is long && target!=null && target.Tag is OutstandingLeaf)target=target.Parent;
+            int zone;var plan=ResolveDropPlan(source,target,point.Y,out zone);
             e.Effect=plan==null?DragDropEffects.None:DragDropEffects.Move;
-            tasks.Dropping=plan!=null;tasks.DropNode=target;tasks.DropZone=zone;tasks.Invalidate();
+            bool markChanged=tasks.Dropping!=(plan!=null) || tasks.DropNode!=target || tasks.DropZone!=zone;
+            tasks.Dropping=plan!=null;tasks.DropNode=target;tasks.DropZone=zone;if(markChanged)tasks.Invalidate();
             string message=plan==null?"此处不能放置（不能形成循环或超过 5 级）":plan.Message;
-            status.Text=message;
+            if(status.Text!=message)status.Text=message;
             if(target!=dropHover){dropHover=target;dropHoverSince=DateTime.UtcNow;progressTip.Hide(tasks);progressTip.Show(message,tasks,Math.Min(point.X+12,Math.Max(6,tasks.Width-240)),Math.Max(0,point.Y-28),1500);}
             if(target!=null && !target.IsExpanded && (DateTime.UtcNow-dropHoverSince).TotalMilliseconds>700)target.Expand();
             if((DateTime.UtcNow-scrollSince).TotalMilliseconds>180){if(point.Y<24 && tasks.TopNode!=null && tasks.TopNode.PrevVisibleNode!=null)tasks.TopNode=tasks.TopNode.PrevVisibleNode;else if(point.Y>tasks.Height-24 && target!=null && target.NextVisibleNode!=null)target.NextVisibleNode.EnsureVisible();scrollSince=DateTime.UtcNow;}
@@ -188,16 +190,26 @@ internal sealed partial class FloatingWindow {
         tasks.DragLeave+=delegate{ClearDropMark();};
         tasks.DragDrop+=async delegate(object sender,DragEventArgs e){
             var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;var point=tasks.PointToClient(new Point(e.X,e.Y));var target=tasks.GetNodeAt(point);
-            var plan=MakeDropPlan(source,target,DropZone(source,target,point.Y));ClearDropMark();if(plan!=null)await ExecuteDrop(plan);
+            if(source!=null && source.Tag is long && target!=null && target.Tag is OutstandingLeaf)target=target.Parent;
+            int zone;var plan=ResolveDropPlan(source,target,point.Y,out zone);ClearDropMark();if(plan!=null)await ExecuteDrop(plan);
         };
     }
     void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked}));}catch{}}
-    void ClearDropMark(){tasks.Dropping=false;tasks.DropNode=null;dropHover=null;tasks.Invalidate();progressTip.Hide(tasks);}
+    void ClearDropMark(){bool hadMark=tasks.Dropping || tasks.DropNode!=null;tasks.Dropping=false;tasks.DropNode=null;dropHover=null;if(hadMark)tasks.Invalidate();progressTip.Hide(tasks);}
     long SelectedTaskId(){var node=tasks.SelectedNode;if(node==null)return 0;if(node.Tag is long)return (long)node.Tag;var leaf=node.Tag as OutstandingLeaf;return leaf==null?0:leaf.TaskId;}
     static int DropZone(TreeNode source,TreeNode target,int y){
         if(target==null)return 0;
         if(source!=null && source.Tag is OutstandingLeaf)return target.Tag is OutstandingLeaf?(y<target.Bounds.Top+target.Bounds.Height/2?-1:1):0;
-        int edge=Math.Max(5,target.Bounds.Height/4);return y<target.Bounds.Top+edge?-1:y>=target.Bounds.Bottom-edge?1:0;
+        int edge=Math.Max(7,(int)Math.Round(target.Bounds.Height*.35));return y<target.Bounds.Top+edge?-1:y>=target.Bounds.Bottom-edge?1:0;
+    }
+    DropPlan ResolveDropPlan(TreeNode source,TreeNode target,int y,out int zone){
+        zone=DropZone(source,target,y);var plan=MakeDropPlan(source,target,zone);
+        // The centre means “make child”. Near a depth/cycle boundary, gracefully use the
+        // closest sibling position so a normal reorder does not look permanently invalid.
+        if(plan==null && source!=null && source.Tag is long && target!=null && target.Tag is long && source!=target && zone==0){
+            zone=y<target.Bounds.Top+target.Bounds.Height/2?-1:1;plan=MakeDropPlan(source,target,zone);
+        }
+        return plan;
     }
     long ParentOf(long id){long parent;return taskParents.TryGetValue(id,out parent)?parent:0;}
     double PositionOf(long id){double value;return taskOrder.TryGetValue(id,out value)&&value>0?value:Double.MaxValue;}

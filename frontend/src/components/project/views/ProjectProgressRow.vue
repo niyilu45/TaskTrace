@@ -27,7 +27,13 @@
 					class="toggle-spacer"
 					aria-hidden="true"
 				/>
-				<span>{{ task.title }}</span>
+				<button
+					type="button"
+					class="task-edit-link"
+					@click="$emit('edit', task.id)"
+				>
+					{{ task.title }}
+				</button>
 			</div>
 			<small>{{ taskStatusLabel(task.status, task.done) }}<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
@@ -59,6 +65,13 @@
 						v-for="entry in pendingOutstanding"
 						:key="entry.item.id"
 						:value="entry.number"
+						class="outstanding-edit-link"
+						role="button"
+						tabindex="0"
+						aria-label="打开所属任务编辑卡片"
+						@click="$emit('edit', task.id)"
+						@keydown.enter.prevent="$emit('edit', task.id)"
+						@keydown.space.prevent="$emit('edit', task.id)"
 					>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
@@ -84,6 +97,13 @@
 						v-for="entry in completedOutstanding"
 						:key="entry.item.id"
 						:value="entry.number"
+						class="outstanding-edit-link"
+						role="button"
+						tabindex="0"
+						aria-label="打开所属任务编辑卡片"
+						@click="$emit('edit', task.id)"
+						@keydown.enter.prevent="$emit('edit', task.id)"
+						@keydown.space.prevent="$emit('edit', task.id)"
 					>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
@@ -92,6 +112,7 @@
 			<SubtaskOutstandingSummary
 				v-if="descendants?.length"
 				:tasks="descendants"
+				@edit="$emit('edit', $event)"
 			/>
 		</td>
 		<td class="progress-cell">
@@ -154,7 +175,7 @@ import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue
 import {taskStatusLabel} from '@/types/ITaskStatus'
 import {useAuthStore} from '@/stores/auth'
 const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number}>()
-defineEmits<{toggle: []}>()
+defineEmits<{toggle: [], edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const authStore = useAuthStore()
 const history = ref<TaskComment[]>([])
@@ -237,6 +258,27 @@ onBeforeUnmount(() => { disposed = true })
  align-items: baseline;
  gap: .25rem;
  }
+.task-edit-link {
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	font-weight: 600;
+	padding: 0;
+	cursor: pointer;
+	text-align: start;
+	text-decoration: underline;
+	text-decoration-color: transparent;
+	text-underline-offset: .18em;
+	&:hover {
+		color: var(--primary);
+		text-decoration-color: currentcolor;
+	}
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
+}
 .toggle-spacer { inline-size: 1.5rem;
  flex-shrink: 0;
  }
@@ -286,6 +328,15 @@ onBeforeUnmount(() => { disposed = true })
 	padding-inline-start: 1.5rem;
 	li { padding-block-end: .35rem; }
 	li::marker { font-weight: 600; }
+}
+.outstanding-edit-link {
+	cursor: pointer;
+	border-radius: .2rem;
+	&:hover { color: var(--primary); }
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
 }
 .completed-outstanding {
 	margin-block-start: .4rem;

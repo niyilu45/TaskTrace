@@ -34,6 +34,12 @@
 			v-for="entry in entries"
 			:key="entry.task.id"
 			class="outstanding-source"
+			role="button"
+			tabindex="0"
+			aria-label="打开所属任务编辑卡片"
+			@click="$emit('edit', entry.task.id)"
+			@keydown.enter.prevent="$emit('edit', entry.task.id)"
+			@keydown.space.prevent="$emit('edit', entry.task.id)"
 		>
 			<span>{{ entry.task.title }}{{ entry.task.done ? '（已完成）' : '' }}：</span>
 			<ReadonlyRichText :html="entry.html" />
@@ -49,6 +55,7 @@ import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
 import {outstandingHtml} from '@/helpers/sharedOutstanding'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 const props = defineProps<{tasks: ProgressTask[]}>()
+defineEmits<{edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const loading = ref(false)
 const entries = ref<{task: ProgressTask, html: string}[]>([])
@@ -95,7 +102,14 @@ onBeforeUnmount(() => { disposed = true })
 }
 .outstanding-source {
     margin-block-start: .5rem;
+	cursor: pointer;
+	border-radius: .2rem;
     > span { font-weight: 600; }
+	&:hover { color: var(--primary); }
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
 }
 .empty { color: var(--grey-600); }
 </style>
