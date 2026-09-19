@@ -20,6 +20,24 @@
 				v-model="scope"
 				class="input"
 			><option value="all">全部事项</option><option value="pending">未完成</option><option value="done">已完成</option></select></label>
+			<label>最近进展 <select
+				v-model="activityRange"
+				class="input"
+				aria-label="按最近有进展的天数筛选事项"
+				@change="changeActivityRange"
+			><option value="all">不限</option><option value="1">1 天内</option><option value="7">7 天内</option><option value="30">30 天内</option><option value="custom">自定义</option></select></label>
+			<label v-if="activityRange === 'custom'">最近 <input
+				v-model="activityDaysInput"
+				class="input progress-days-input"
+				type="number"
+				min="1"
+				max="36500"
+				step="1"
+				aria-label="筛选多少天内有进展的事项"
+				:aria-invalid="!!activityFilterError"
+				@change="applyActivityDays"
+				@keydown.enter.prevent="applyActivityDays"
+			> 天内有进展</label>
 			<label>进展范围 <select
 				v-model="progressRange"
 				class="input"
@@ -73,6 +91,30 @@
 			{{ progressRangeStorageError }}
 		</p>
 		<p
+			v-if="progressActivityLoading"
+			role="status"
+		>
+			正在检查各事项最近的每日进展…
+		</p>
+		<p
+			v-if="activityFilterError"
+			role="alert"
+		>
+			{{ activityFilterError }} <XButton
+				v-if="recentProgressDays > 0"
+				variant="secondary"
+				@click="loadProgressActivity()"
+			>
+				重试筛选
+			</XButton>
+		</p>
+		<p
+			v-if="recentProgressDays > 0"
+			class="browse-hint"
+		>
+			仅显示最近 {{ recentProgressDays }} 个自然日内填写过每日进展的事项，并保留其父任务作为层级上下文；未命中的同级任务不会显示。
+		</p>
+		<p
 			:id="`progress-range-hint-${projectId}`"
 			class="browse-hint"
 		>
@@ -98,7 +140,7 @@
 				重试
 			</XButton>
 		</p>
-		<p v-if="!loading && !error && !groups.length">
+		<p v-if="!loading && !progressActivityLoading && !error && !groups.length">
 			{{ tasks.length ? '没有匹配的事项，请调整筛选。' : '项目还没有事项，进入编辑模式后即可添加。' }}
 		</p>
 		<section
@@ -146,7 +188,7 @@
 					>
 						<ProjectProgressRow
 							:task="group.root"
-							:descendants="group.rows.slice(1).map(row => row.task)"
+							:descendants="group.matching.slice(1).map(row => row.task)"
 							:depth="0"
 							:progress-days="progressDays"
 							@edit="openTaskEditor"
@@ -208,9 +250,10 @@
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount, nextTick} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
-import {projectTasksList} from '@/client/generated'
+import {projectTasksList, taskCommentsList, type TaskComment} from '@/client/generated'
 import {useElementSize, useStorage} from '@vueuse/core'
-import {visibleProgressRows, groupProgressTasks, type ProgressTask} from '@/helpers/projectProgress'
+import {visibleProgressRows, groupProgressTasks, latestProgressDate, queueProgressRead, recentProgressTaskIds, type ProgressTask} from '@/helpers/projectProgress'
+import {sortProgressNotes} from '@/helpers/progressNotes'
 import ProjectProgressRow from './ProjectProgressRow.vue'
 import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
@@ -297,20 +340,30 @@ const loading = ref(false)
 const error = ref('')
 const search = ref('')
 const scope = ref('all')
+const activityRange = ref('all')
+const customActivityDays = ref(7)
+const activityDaysInput = ref('7')
+const activityFilterError = ref('')
+const progressActivityLoading = ref(false)
+const latestProgressDates = ref<Record<number, string>>({})
+const progressActivityReady = ref(false)
 const page = ref(1)
 const revision = ref(0)
 let requestId = 0
+let progressActivityRequestId = 0
+const recentProgressDays = computed(() => activityRange.value === 'all' ? 0 : activityRange.value === 'custom' ? customActivityDays.value : Number(activityRange.value))
+const recentProgressMatches = computed(() => recentProgressDays.value === 0 ? null : progressActivityReady.value ? recentProgressTaskIds(latestProgressDates.value, recentProgressDays.value) : new Set<number>())
 const completed = computed(() => tasks.value.filter(task => task.done).length)
 const grouped = computed(() => groupProgressTasks(tasks.value))
 const collapsed = useStorage<number[]>('tasktrace:overview-collapsed', [])
 const collapsedIds = computed(() => new Set(collapsed.value))
 const searchExpanded = ref(new Set<number>())
-const parents = computed(() => new Set(grouped.value.flatMap(group => group.rows.filter((row, i, rows) => rows[i + 1]?.depth > row.depth).map(row => row.task.id))))
+const hierarchyFilterActive = computed(() => !!search.value.trim() || scope.value !== 'all' || recentProgressDays.value > 0)
 function isExpanded(id: number) {
-	return search.value.trim() ? !searchExpanded.value.has(id) : !collapsedIds.value.has(id)
+	return hierarchyFilterActive.value ? !searchExpanded.value.has(id) : !collapsedIds.value.has(id)
 }
 function toggle(id: number) {
-	if (search.value.trim()) {
+	if (hierarchyFilterActive.value) {
 		const next = new Set(searchExpanded.value)
 		if (next.has(id)) next.delete(id); else next.add(id)
 		searchExpanded.value = next
@@ -319,15 +372,71 @@ function toggle(id: number) {
 	collapsed.value = collapsedIds.value.has(id) ? collapsed.value.filter(value => value !== id) : [...collapsed.value, id]
 }
 const groups = computed(() => grouped.value.map(group => {
-	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set())
-	const visible = visibleProgressRows(matching, 'all', '', search.value.trim() ? searchExpanded.value : collapsedIds.value)
+	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set(), recentProgressMatches.value)
+	const visible = visibleProgressRows(matching, 'all', '', hierarchyFilterActive.value ? searchExpanded.value : collapsedIds.value)
 	return {...group, matching, visibleRows: visible.filter(row => row.depth > 0)}
 }).filter(group => group.matching.length))
-watch(search, () => { searchExpanded.value = new Set() })
+const parents = computed(() => new Set(groups.value.flatMap(group => group.matching.filter((row, i, rows) => rows[i + 1]?.depth > row.depth).map(row => row.task.id))))
+watch([search, scope, recentProgressDays], () => { searchExpanded.value = new Set() })
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
-watch([search, scope], () => { page.value = 1 })
+watch([search, scope, recentProgressDays], () => { page.value = 1 })
+
+async function loadProgressActivity(sourceTasks = tasks.value) {
+	if (recentProgressDays.value <= 0) return
+	const version = ++progressActivityRequestId
+	const today = new Date()
+	progressActivityLoading.value = true
+	activityFilterError.value = ''
+	try {
+		const entries = await Promise.all(sourceTasks.map(async task => {
+			if (task.comment_count === 0) return [task.id, ''] as const
+			const history: TaskComment[] = []
+			for (let next = 1; ; next++) {
+				const result = await queueProgressRead(() => taskCommentsList({path: {task: task.id}, query: {page: next, per_page: 100, order_by: 'desc'}}))
+				if (version !== progressActivityRequestId) return [task.id, ''] as const
+				const items = result.data.items || []
+				history.push(...items)
+				if (next >= (result.data.total_pages || 1) || items.length === 0) break
+			}
+			return [task.id, latestProgressDate(sortProgressNotes(history), today)] as const
+		}))
+		if (version !== progressActivityRequestId) return
+		latestProgressDates.value = Object.fromEntries(entries)
+		progressActivityReady.value = true
+	} catch {
+		if (version === progressActivityRequestId) {
+			progressActivityReady.value = false
+			activityFilterError.value = '最近进展筛选读取失败，请重试。'
+		}
+	} finally {
+		if (version === progressActivityRequestId) progressActivityLoading.value = false
+	}
+}
+function changeActivityRange() {
+	activityFilterError.value = ''
+	activityDaysInput.value = String(customActivityDays.value)
+	if (recentProgressDays.value === 0) {
+		progressActivityRequestId++
+		progressActivityLoading.value = false
+		return
+	}
+	if (!progressActivityReady.value) void loadProgressActivity()
+}
+function applyActivityDays() {
+	const days = Number(activityDaysInput.value)
+	if (!validProgressDays(days)) {
+		activityFilterError.value = `请输入 1～36500 之间的整数天数。当前仍筛选最近 ${customActivityDays.value} 天。`
+		return
+	}
+	customActivityDays.value = days
+	activityDaysInput.value = String(days)
+	activityFilterError.value = ''
+	if (!progressActivityReady.value) void loadProgressActivity()
+}
 async function load(options: {preserveView?: boolean} = {}) {
 	const version = ++requestId
+	progressActivityRequestId++
+	progressActivityLoading.value = false
 	loading.value = true; error.value = ''
 	if (!options.preserveView) {
 		tasks.value = []
@@ -343,6 +452,10 @@ async function load(options: {preserveView?: boolean} = {}) {
 			if (next >= (result.data.total_pages || 1) || items.length === 0) break
 		}
 		tasks.value = [...new Map(collected.map(task => [task.id, task])).values()]; revision.value++
+		progressActivityRequestId++
+		progressActivityReady.value = false
+		latestProgressDates.value = {}
+		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value)
 	} catch { if (version === requestId) error.value = '项目读取失败，请重试。' }
 	finally { if (version === requestId) loading.value = false }
 }
@@ -370,7 +483,7 @@ watch(() => route.name, async name => {
 	requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
 })
 watch(() => props.projectId, () => load(), {immediate: true})
-onBeforeUnmount(() => requestId++)
+onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
 </script>
 
 <style scoped lang="scss">
