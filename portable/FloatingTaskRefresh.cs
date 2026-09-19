@@ -207,6 +207,7 @@ internal sealed partial class FloatingWindow {
         }
         InvalidateSimpleOutstanding();
         ApplyBackgroundOutstanding(sharedLists);
+        tasks.RefreshWrappedLayout();
         if(background) {
             rendering=true;
             try {

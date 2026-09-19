@@ -221,18 +221,19 @@ internal sealed partial class FloatingWindow {
                 content.Controls.Remove(tasks);content.Visible=false;toolbar.Visible=false;
                 FormBorderStyle=FormBorderStyle.None;Padding=Padding.Empty;
                 Controls.Add(tasks);tasks.Dock=DockStyle.None;tasks.Visible=true;tasks.BringToFront();
+                tasks.SetWrappedText(!singleLine.Checked);
                 simpleActionsHeight=MeasureSimpleActions(Math.Max(160,simpleSize.Width)-2*SimpleEdge);
                 simpleViewportHeight=Math.Max(SimpleMinimumViewport,simpleSize.Height-2*SimpleEdge-SimpleActionGap-simpleActionsHeight);
                 simpleActionsShown=ContainsFocus || ActiveForm==this;
                 MinimumSize=new Size(160,SimpleMinimumViewport+2*SimpleEdge);ClientSize=new Size(Math.Max(160,simpleSize.Width),Math.Max(120,simpleSize.Height));
             } else {
                 // simpleSize already contains the stable expanded dimensions, even while unfocused.
-                simpleMode=false;simpleWindowWasMinimized=false;Controls.Remove(tasks);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
+                simpleMode=false;simpleWindowWasMinimized=false;tasks.SetWrappedText(false);Controls.Remove(tasks);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
                 FormBorderStyle=FormBorderStyle.Sizable;MinimumSize=new Size(350,420);
                 content.Controls.Add(tasks,0,3);tasks.Dock=DockStyle.Fill;tasks.Visible=true;content.Visible=true;toolbar.Visible=true;Bounds=fullBounds;
             }
         } finally {simpleLayout=false;content.ResumeLayout(true);ResumeLayout(true);}
-        PerformLayout();PositionSimpleModeControls();UpdateSimpleModeState();
+        PerformLayout();PositionSimpleModeControls();tasks.RefreshWrappedLayout();UpdateSimpleModeState();
         if(selected!=null && selected.TreeView==tasks)tasks.SelectedNode=selected;
         if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
         tasks.Invalidate();SaveSimpleMode();

@@ -347,6 +347,7 @@ internal sealed partial class FloatingWindow : Form {
     void ApplyTaskTreeLayout() {
         bool flat=singleLine.Checked;
         tasks.SingleLinePaths=flat;
+        tasks.SetWrappedText(simpleMode && !flat);
         tasks.ShowLines=!flat;
         tasks.ShowRootLines=true;
         tasks.ShowPlusMinus=!flat;

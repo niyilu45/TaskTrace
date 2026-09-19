@@ -35,7 +35,8 @@ internal sealed partial class TaskTreeView {
         int width=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width;
         var numbered=TaskPriorityMatch(node);
         int left=bounds.Left+2+(numbered.Success?PriorityTextAdvance(numbered.Groups["prefix"].Value,font):0);
-        return new Rectangle(left,bounds.Top,width+4,bounds.Height);
+        int height=simpleImageLinks && WrapNodeText?Math.Min(bounds.Height,TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+4):bounds.Height;
+        return new Rectangle(left,bounds.Top,width+4,height);
     }
     internal void ReserveSimpleImageSpace(TreeNode node) {
         if(!simpleImageLinks || SimpleImageAvailable==null || !SimpleImageAvailable(node))return;
@@ -73,7 +74,8 @@ internal sealed partial class TaskTreeView {
             TextRenderer.DrawText(e.Graphics,"图片",underline,link,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
         }
         var title=new Rectangle(textLeft,e.Bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),e.Bounds.Height);
-        TextRenderer.DrawText(e.Graphics,titleText,font,title,foreground,TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
+        var flags=TextFormatFlags.NoPadding|(WrapNodeText?TextFormatFlags.NoPrefix|TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
+        TextRenderer.DrawText(e.Graphics,titleText,font,title,foreground,flags);
         if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,bounds,foreground,background);
         base.OnDrawNode(e);
     }
