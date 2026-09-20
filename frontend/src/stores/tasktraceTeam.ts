@@ -5,11 +5,17 @@ import {
 	tasksTeamShare,
 	tasktraceTeamConfigure,
 	tasktraceTeamImport,
+	tasktraceTeamMembersAccessCreate,
+	tasktraceTeamMembersAccessDelete,
+	tasktraceTeamMembersImport,
+	tasktraceTeamMembersSearch,
 	tasktraceTeamNotificationsRead,
 	tasktraceTeamResolve,
 	tasktraceTeamStatus,
 	tasktraceTeamSync,
 	type TaskTraceTeamBindingStatus,
+	type TaskTraceTeamMemberCandidate,
+	type TaskTraceTeamMemberImportResult,
 	type TaskTraceTeamResolution,
 	type TaskTraceTeamStatus,
 } from '@/client/generated'
@@ -69,6 +75,32 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return run(() => tasktraceTeamNotificationsRead({body: {ids}}))
 	}
 
+	async function searchMembers(query: string): Promise<TaskTraceTeamMemberCandidate[]> {
+		const result = await tasktraceTeamMembersSearch({query: {q: query}})
+		return result.data.candidates ?? []
+	}
+
+	async function grantMember(accountName: string) {
+		return run(() => tasktraceTeamMembersAccessCreate({body: {account_name: accountName}}))
+	}
+
+	async function removeMember(accountName: string) {
+		return run(() => tasktraceTeamMembersAccessDelete({path: {member: accountName}}))
+	}
+
+	async function importMembers(link: string): Promise<TaskTraceTeamMemberImportResult> {
+		pending++
+		loading.value = true
+		try {
+			const result = await tasktraceTeamMembersImport({body: {link}})
+			if (result.data.status) apply(result.data.status)
+			return result.data
+		} finally {
+			pending--
+			loading.value = pending > 0
+		}
+	}
+
 	function bindingForTask(taskId: number): TaskTraceTeamBindingStatus | undefined {
 		return status.value.bindings?.find(binding => binding.root_task_id === taskId || binding.task_ids?.includes(taskId))
 	}
@@ -77,5 +109,5 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const notificationCount = computed(() => status.value.notifications?.length ?? 0)
 	const activityCount = computed(() => conflictCount.value + notificationCount.value)
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, resolve, dismissNotifications, bindingForTask}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask}
 })

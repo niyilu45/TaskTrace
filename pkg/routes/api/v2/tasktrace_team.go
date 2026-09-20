@@ -52,6 +52,26 @@ func RegisterTaskTraceTeamRoutes(api huma.API) {
 		Description: "Removes selected notification files for the current Windows username. An empty list dismisses all visible team notifications.",
 		Method:      http.MethodPost, Path: "/tasktrace/team/notifications/read", Tags: tags,
 	}, taskTraceTeamNotificationsRead)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-members-search", Summary: "Search Windows collaboration accounts",
+		Description: "Returns matching local or domain Windows accounts while the user types a team member name.",
+		Method:      http.MethodGet, Path: "/tasktrace/team/members/search", Tags: tags,
+	}, taskTraceTeamMembersSearch)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-members-access-create", Summary: "Grant teamData access to a member",
+		Description: "Grants the selected Windows account read/write access to both the teamData folder and its SMB share.",
+		Method:      http.MethodPost, Path: "/tasktrace/team/members/access", Tags: tags,
+	}, taskTraceTeamMembersAccessCreate)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-members-access-delete", Summary: "Remove unassigned teamData access",
+		Description: "Removes folder and SMB access only when the account does not belong to any local collaboration team.",
+		Method:      http.MethodDelete, Path: "/tasktrace/team/members/access/{member}", Tags: tags, DefaultStatus: http.StatusOK,
+	}, taskTraceTeamMembersAccessDelete)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-members-import", Summary: "Import members from a team link",
+		Description: "Grants access to every valid member, skips the current user, and reports individual failures without rolling back successful members.",
+		Method:      http.MethodPost, Path: "/tasktrace/team/members/import", Tags: tags,
+	}, taskTraceTeamMembersImport)
 }
 
 func taskTraceTeamReadSession(ctx context.Context) (*xorm.Session, web.Auth, error) {
@@ -190,4 +210,73 @@ func taskTraceTeamNotificationsRead(ctx context.Context, in *struct {
 		return nil, huma.Error500InternalServerError("save notification state", err)
 	}
 	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
+}
+
+func taskTraceTeamMembersSearch(ctx context.Context, in *struct {
+	Query string `query:"q" doc:"A partial Windows username, account name, or display name."`
+}) (*singleBody[models.TaskTraceTeamMemberSearchResult], error) {
+	s, _, err := taskTraceTeamReadSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	result, err := models.TaskTraceTeamSearchMembers(in.Query)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("search Windows accounts", err)
+	}
+	return &singleBody[models.TaskTraceTeamMemberSearchResult]{Body: &result}, nil
+}
+
+func taskTraceTeamMembersAccessCreate(ctx context.Context, in *struct {
+	Body models.TaskTraceTeamMemberAccessRequest
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
+	s, a, err := taskTraceTeamWriteSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	status, err := models.TaskTraceTeamGrantMemberAccess(s, a, in.Body)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("grant teamData access", err)
+	}
+	if err := s.Commit(); err != nil {
+		return nil, huma.Error500InternalServerError("save teamData access", err)
+	}
+	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
+}
+
+func taskTraceTeamMembersAccessDelete(ctx context.Context, in *struct {
+	Member string `path:"member" doc:"The Windows account whose unassigned access should be removed."`
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
+	s, a, err := taskTraceTeamWriteSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	status, err := models.TaskTraceTeamRemoveMemberAccess(s, a, in.Member)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("remove teamData access", err)
+	}
+	if err := s.Commit(); err != nil {
+		return nil, huma.Error500InternalServerError("save teamData access", err)
+	}
+	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
+}
+
+func taskTraceTeamMembersImport(ctx context.Context, in *struct {
+	Body models.TaskTraceTeamMemberImportRequest
+}) (*singleBody[models.TaskTraceTeamMemberImportResult], error) {
+	s, a, err := taskTraceTeamWriteSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	result, err := models.TaskTraceTeamImportMembers(s, a, in.Body)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("import team members", err)
+	}
+	if err := s.Commit(); err != nil {
+		return nil, huma.Error500InternalServerError("save imported team members", err)
+	}
+	return &singleBody[models.TaskTraceTeamMemberImportResult]{Body: result}, nil
 }

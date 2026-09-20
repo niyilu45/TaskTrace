@@ -180,16 +180,18 @@ type TaskTraceTeamResolveRequest struct {
 }
 
 type TaskTraceTeamBindingStatus struct {
-	ShareID    string                  `json:"share_id"`
-	Owner      string                  `json:"owner"`
-	Members    []string                `json:"members"`
-	RootTaskID int64                   `json:"root_task_id"`
-	TaskIDs    []int64                 `json:"task_ids"`
-	Link       string                  `json:"link"`
-	Notify     bool                    `json:"notify"`
-	LastSync   time.Time               `json:"last_sync,omitempty"`
-	LastError  string                  `json:"last_error,omitempty"`
-	Conflicts  []TaskTraceTeamConflict `json:"conflicts"`
+	ShareID       string                  `json:"share_id"`
+	Owner         string                  `json:"owner"`
+	Members       []string                `json:"members"`
+	RootTaskID    int64                   `json:"root_task_id"`
+	RootTaskTitle string                  `json:"root_task_title,omitempty" readOnly:"true" doc:"The local title of the shared task root."`
+	TaskIDs       []int64                 `json:"task_ids"`
+	Link          string                  `json:"link"`
+	MemberLink    string                  `json:"member_link" readOnly:"true" doc:"A portable link containing the members of this collaboration team."`
+	Notify        bool                    `json:"notify"`
+	LastSync      time.Time               `json:"last_sync,omitempty"`
+	LastError     string                  `json:"last_error,omitempty"`
+	Conflicts     []TaskTraceTeamConflict `json:"conflicts"`
 }
 
 type TaskTraceTeamNotification struct {
@@ -211,13 +213,14 @@ type TaskTraceTeamMemberProfile struct {
 }
 
 type TaskTraceTeamStatus struct {
-	Enabled       bool                         `json:"enabled"`
-	Username      string                       `json:"username"`
-	Repository    TaskTraceTeamRepositoryInfo  `json:"repository"`
-	Bindings      []TaskTraceTeamBindingStatus `json:"bindings"`
-	Conflicts     []TaskTraceTeamConflict      `json:"conflicts"`
-	Notifications []TaskTraceTeamNotification  `json:"notifications"`
-	Profiles      []TaskTraceTeamMemberProfile `json:"profiles"`
+	Enabled           bool                         `json:"enabled"`
+	Username          string                       `json:"username"`
+	Repository        TaskTraceTeamRepositoryInfo  `json:"repository"`
+	UnassignedMembers []string                     `json:"unassigned_members" readOnly:"true" doc:"Accounts with teamData read/write access that do not belong to any collaboration team."`
+	Bindings          []TaskTraceTeamBindingStatus `json:"bindings"`
+	Conflicts         []TaskTraceTeamConflict      `json:"conflicts"`
+	Notifications     []TaskTraceTeamNotification  `json:"notifications"`
+	Profiles          []TaskTraceTeamMemberProfile `json:"profiles"`
 }
 
 type taskTraceTeamLink struct {
@@ -326,6 +329,9 @@ func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
 		info.Path = root
 	}
 	info.Paths = taskTraceTeamAppendRepository(info.Paths, info.Path)
+	if candidates, err := taskTraceTeamListWindowsAccess(root); err == nil {
+		info.Candidates = candidates
+	}
 	return info
 }
 
@@ -346,7 +352,7 @@ func taskTraceTeamNormalizeMembers(members []string, owner string) []string {
 	seen := map[string]bool{}
 	result := make([]string, 0, len(members)+1)
 	for _, member := range append([]string{owner}, members...) {
-		member = strings.TrimSpace(member)
+		member = taskTraceTeamMembershipName(member)
 		if member == "" {
 			continue
 		}
@@ -1492,7 +1498,19 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		}
 		return nil, ErrGenericForbidden{}
 	}
-	members := taskTraceTeamNormalizeMembers(request.Members, u.Username)
+	root := taskTraceTeamRoot()
+	grantedMembers := make([]string, 0, len(request.Members))
+	for _, member := range request.Members {
+		if taskTraceTeamMembersEqual(member, u.Username) {
+			continue
+		}
+		resolved, grantErr := taskTraceTeamGrantWindowsAccess(root, member)
+		if grantErr != nil {
+			return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, grantErr)
+		}
+		grantedMembers = append(grantedMembers, resolved)
+	}
+	members := taskTraceTeamNormalizeMembers(grantedMembers, u.Username)
 	if len(members) < 2 {
 		return nil, errors.New("at least one other team member is required")
 	}
@@ -1510,7 +1528,6 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		return nil, err
 	}
 	shareID := uuid.NewString()
-	root := taskTraceTeamRoot()
 	info := taskTraceTeamRepositoryInfo(root)
 	binding := TaskTraceTeamBinding{ShareID: shareID, Repository: root, Secret: secret, Owner: u.Username, Members: members, RootTaskID: request.TaskID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
 	snapshot, err := taskTraceTeamBuildSnapshot(s, &binding, u.Username, state.DeviceID)
@@ -1575,7 +1592,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	}
 	isMember := false
 	for _, member := range manifest.Members {
-		if strings.EqualFold(member, u.Username) {
+		if taskTraceTeamMembersEqual(member, u.Username) {
 			isMember = true
 			break
 		}
@@ -1858,7 +1875,8 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		return TaskTraceTeamStatus{}, err
 	}
 	root := taskTraceTeamRoot()
-	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
+	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), UnassignedMembers: []string{}, Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
+	status.UnassignedMembers = taskTraceTeamUnassignedMembers(state, status.Repository.Candidates, u.Username)
 	profiles := map[string]TaskTraceTeamMemberProfile{
 		strings.ToLower(u.Username): {Username: u.Username, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
 	}
@@ -1875,7 +1893,11 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 			linkPath = info.Path
 			linkPaths = info.Paths
 		}
-		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
+		rootTitle := ""
+		if task, taskErr := GetTaskByIDSimple(s, binding.RootTaskID); taskErr == nil {
+			rootTitle = task.Title
+		}
+		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle, TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(binding.Members), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
 		status.Bindings = append(status.Bindings, row)
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(s, &binding, u.Username)...)

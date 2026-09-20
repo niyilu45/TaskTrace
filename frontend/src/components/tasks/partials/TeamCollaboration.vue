@@ -42,6 +42,13 @@
 				>
 					共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。
 				</p>
+				<XButton
+					v-if="binding.member_link"
+					variant="secondary"
+					@click="copyMemberLink"
+				>
+					分享成员
+				</XButton>
 			</div>
 			<div class="field">
 				<label
@@ -59,6 +66,7 @@
 					</div>
 					<div class="control">
 						<XButton
+							type="button"
 							variant="secondary"
 							@click="copyLink"
 						>
@@ -110,25 +118,61 @@
 				</label>
 			</div>
 			<div class="field">
+				<TeamMemberPicker
+					:input-id="`team-members-${taskId}`"
+					:excluded="[teamStore.status.username || '', ...selectedMembers]"
+					@select="addMember"
+				/>
+				<div
+					v-if="selectedMembers.length"
+					class="team-selected-members"
+				>
+					<button
+						v-for="member in selectedMembers"
+						:key="member"
+						type="button"
+						class="team-member-chip team-member-chip--remove"
+						:title="`移除 ${member}`"
+						@click="removeSelected(member)"
+					>
+						{{ member }} ×
+					</button>
+				</div>
+			</div>
+			<div class="field">
 				<label
 					class="label"
-					:for="`team-members-${taskId}`"
-				>其他成员用户名</label>
-				<input
-					:id="`team-members-${taskId}`"
-					v-model="manualMembers"
-					class="input"
-					placeholder="多个用户名用逗号分隔"
-				>
+					:for="`team-member-link-${taskId}`"
+				>通过成员链接创建团队</label>
+				<div class="field has-addons">
+					<div class="control is-expanded">
+						<input
+							:id="`team-member-link-${taskId}`"
+							v-model="memberLink"
+							class="input"
+							placeholder="粘贴 tasktrace-team-members:// 链接"
+						>
+					</div>
+					<div class="control">
+						<XButton
+							type="button"
+							variant="secondary"
+							:loading="teamStore.loading"
+							@click="importMembersForShare"
+						>
+							导入成员
+						</XButton>
+					</div>
+				</div>
 				<p class="help">
-					同一用户名在多台电脑上会被识别为同一个人。
+					有效成员会加入上方列表并自动获得 teamData 读写权限；失效成员会单独提示。
 				</p>
 			</div>
 			<div
 				v-if="!teamStore.status.repository?.shared"
 				class="notification is-warning is-light"
 			>
-				尚未检测到 Windows 共享。请先在 teamData 文件夹属性中授予成员访问权限；程序重启后会自动识别共享路径和候选成员。
+				尚未检测到 Windows 共享。添加成员时程序会明确提示需要先创建 teamData 共享。
 			</div>
 			<XButton
 				type="submit"
@@ -145,6 +189,8 @@
 import {computed, onMounted, ref} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
+import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
+import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {error, success} from '@/message'
@@ -153,7 +199,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 const props = defineProps<{taskId: number}>()
 const teamStore = useTasktraceTeamStore()
 const selectedMembers = ref<string[]>([])
-const manualMembers = ref('')
+const memberLink = ref('')
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const candidateMembers = computed(() => (teamStore.status.repository?.candidates ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
@@ -171,8 +217,7 @@ onMounted(() => {
 })
 
 async function shareTask() {
-	const manual = manualMembers.value.split(/[,，;；\n]/).map(value => value.trim()).filter(Boolean)
-	const members = [...new Set([...selectedMembers.value, ...manual].filter(value => value.toLowerCase() !== teamStore.status.username?.toLowerCase()))]
+	const members = [...new Set(selectedMembers.value.filter(value => value.toLowerCase() !== teamStore.status.username?.toLowerCase()))]
 	if (!members.length) {
 		error({message: '请至少选择或填写一位其他成员。'})
 		return
@@ -185,10 +230,47 @@ async function shareTask() {
 	}
 }
 
+function addMember(candidate: TaskTraceTeamMemberCandidate) {
+	const member = candidate.account_name || candidate.username
+	if (member && !selectedMembers.value.includes(member)) selectedMembers.value.push(member)
+}
+
+function removeSelected(member: string) {
+	selectedMembers.value = selectedMembers.value.filter(value => value !== member)
+}
+
+async function importMembersForShare() {
+	if (!memberLink.value.trim()) {
+		error({message: '请先粘贴团队成员链接。'})
+		return
+	}
+	try {
+		const result = await teamStore.importMembers(memberLink.value.trim())
+		for (const member of result.added ?? []) {
+			if (!selectedMembers.value.includes(member)) selectedMembers.value.push(member)
+		}
+		memberLink.value = ''
+		const failed = result.failed ?? []
+		if (failed.length) {
+			error({message: `已导入其余有效成员；以下成员失败：${failed.map(item => item.username).join('、')}`})
+		} else {
+			success({message: '成员已导入，可以创建团队任务。'})
+		}
+	} catch (cause) {
+		error(cause)
+	}
+}
+
 async function copyLink() {
 	if (!binding.value?.link) return
 	await navigator.clipboard.writeText(binding.value.link)
 	success({message: '任务链接已复制。'})
+}
+
+async function copyMemberLink() {
+	if (!binding.value?.member_link) return
+	await navigator.clipboard.writeText(binding.value.member_link)
+	success({message: '团队成员链接已复制。'})
 }
 
 async function setNotify(notify: boolean) {
@@ -226,6 +308,18 @@ async function setNotify(notify: boolean) {
 	border: 1px solid var(--grey-200);
 	border-radius: 999px;
 	background: var(--grey-50);
+}
+
+.team-member-chip--remove {
+	color: var(--text);
+	cursor: pointer;
+}
+
+.team-selected-members {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .4rem;
+	margin-block-start: .5rem;
 }
 
 .team-member-avatar {
