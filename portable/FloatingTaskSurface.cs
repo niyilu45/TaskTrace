@@ -61,6 +61,11 @@ internal sealed class TaskTreeSurface : Panel {
         foreach(var row in rows)if(row.Bounds.Bottom>verticalOffset && row.Bounds.Top<viewportBottom)right=Math.Max(right,row.Bounds.Right);
         return Math.Max(0,right-ClientSize.Width);
     }
+    int RowHorizontalOffset(Row row) {
+        int requested=-AutoScrollPosition.X,maximum=Math.Max(0,row.Bounds.Right-ClientSize.Width);
+        return -Math.Min(requested,maximum);
+    }
+    Point RowPaintOffset(Row row) {return new Point(RowHorizontalOffset(row),AutoScrollPosition.Y);}
     void ClampHorizontalScrollToVisibleRows() {
         if(correctingScroll || rows.Count==0)return;
         int x=-AutoScrollPosition.X,y=-AutoScrollPosition.Y,maxX=VisibleHorizontalMaximum(y);
@@ -113,12 +118,14 @@ internal sealed class TaskTreeSurface : Panel {
             string prefix=match.Success?match.Groups["prefix"].Value:"";string priority=match.Success?match.Groups["priority"].Value:"";string title=match.Success?match.Groups["title"].Value:current;
             int level=flat?0:node.Level;int left=4+level*Math.Max(18,model.Indent);int expandLeft=left;int checkLeft=left+14;int textLeft=checkLeft+20;
             bool image=HasImage(node);int prefixWidth=Advance(prefix,font);int imageWidth=image?Advance("图片",font)+8:0;int priorityWidth=Advance(priority,font);int headerWidth=prefixWidth+(image?6+imageWidth:0)+(priority.Length>0?6+priorityWidth:0)+(title.Length>0?6:0);
-            int titleLeft=textLeft+headerWidth;int baseHeight=BaseHeight(font);int titleWidth;
-            bool wrap=!flat && model.WrapNodeText;
-            if(wrap)titleWidth=Math.Max(40,viewport-titleLeft);
+            int inlineTitleLeft=textLeft+headerWidth;int baseHeight=BaseHeight(font);int titleWidth;
+            bool wrap=!flat && model.WrapNodeText;int fullTitleWidth=Math.Max(40,viewport-textLeft-6);int inlineTitleWidth=Math.Max(40,viewport-inlineTitleLeft);
+            bool stacked=wrap&&title.Length>0&&Advance(title,font)+4>inlineTitleWidth&&inlineTitleWidth<Math.Max(80,fullTitleWidth*2/3);
+            int titleLeft=stacked?textLeft:inlineTitleLeft;
+            if(wrap)titleWidth=stacked?fullTitleWidth:inlineTitleWidth;
             else titleWidth=Math.Max(1,Advance(title,font)+4);
             int textHeight=TextRenderer.MeasureText(title.Length==0?" ":title,font,new Size(titleWidth,Int32.MaxValue),TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|(wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.SingleLine)).Height;
-            int height=wrap?Math.Max(baseHeight,textHeight+8):baseHeight;
+            int height=wrap?Math.Max(baseHeight,(stacked?baseHeight:0)+textHeight+(stacked?2:8)):baseHeight;
             var row=new Row{Node=node,Font=font,PrefixText=prefix,PriorityText=priority,TitleText=title,AncestorText=ancestors,HasChildren=node.Nodes.Cast<TreeNode>().Any(Real),Done=node.Tag is FloatingWindow.OutstandingLeaf?((FloatingWindow.OutstandingLeaf)node.Tag).Done:node.Checked,Wrap=wrap};
             row.Bounds=new Rectangle(0,y,Math.Max(viewport,titleLeft+titleWidth+6),height);row.AnchorY=y+baseHeight/2;
             row.Expand=new Rectangle(expandLeft,y+(baseHeight-12)/2,12,12);row.Check=new Rectangle(checkLeft,y+(baseHeight-16)/2,16,16);
@@ -126,8 +133,9 @@ internal sealed class TaskTreeSurface : Panel {
             int cursor=textLeft;row.Prefix=new Rectangle(cursor,textTop,prefixWidth,headerHeight);cursor+=prefixWidth;
             if(image){cursor+=6;row.Image=new Rectangle(cursor,textTop,imageWidth,headerHeight);cursor+=imageWidth;}
             if(priority.Length>0){cursor+=6;row.Priority=new Rectangle(cursor,textTop,priorityWidth,headerHeight);cursor+=priorityWidth;}
-            if(title.Length>0)cursor+=6;
-            row.Title=new Rectangle(cursor,textTop,wrap?Math.Max(40,viewport-cursor):titleWidth,Math.Max(1,height-8));
+            if(title.Length>0&&!stacked)cursor+=6;
+            int titleTop=stacked?y+baseHeight-2:textTop;
+            row.Title=new Rectangle(stacked?titleLeft:cursor,titleTop,titleWidth,Math.Max(1,height-(titleTop-y)-(stacked?0:4)));
             int titlePixels=Advance(title,font)+4;int ancestorWidth=Advance(ancestors,font)+4;
             if(flat && ancestors.Length>0)row.Ancestors=new Rectangle(row.Title.Left+titlePixels,textTop,ancestorWidth,headerHeight);
             int right=flat?(row.Ancestors.IsEmpty?row.Title.Left+titlePixels:row.Ancestors.Right)+8:viewport;
@@ -139,14 +147,15 @@ internal sealed class TaskTreeSurface : Panel {
     static Color NodeColor(TreeNode node,Color fallback) {return node.ForeColor.IsEmpty?fallback:node.ForeColor;}
     static Rectangle OffsetRectangle(Rectangle value,Point offset) {value.Offset(offset);return value;}
     protected override void OnPaint(PaintEventArgs e) {
-        base.OnPaint(e);if(model==null)return;var offset=AutoScrollPosition;
+        base.OnPaint(e);if(model==null)return;
         using(var linePen=new Pen(Color.FromArgb(185,192,201)))foreach(var row in rows) {
+            var offset=RowPaintOffset(row);
             var bounds=OffsetRectangle(row.Bounds,offset);
             if(bounds.Bottom<0 || bounds.Top>ClientSize.Height)continue;
             var expand=OffsetRectangle(row.Expand,offset);var check=OffsetRectangle(row.Check,offset);var prefix=OffsetRectangle(row.Prefix,offset);
             var image=OffsetRectangle(row.Image,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
             bool selected=model.SelectedNode==row.Node;Color background=selected?SystemColors.Highlight:BackColor;Color foreground=selected?SystemColors.HighlightText:NodeColor(row.Node,ForeColor);
-            using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,bounds);
+            using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,new Rectangle(0,bounds.Top,ClientSize.Width,bounds.Height));
             if(!model.SingleLinePaths) {
                 for(int level=0;level<row.Node.Level;level++){int x=offset.X+10+level*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,bounds.Top,x,bounds.Bottom);}
                 if(row.Node.Level>0){int x=offset.X+10+(row.Node.Level-1)*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,offset.Y+row.AnchorY,expand.Left,offset.Y+row.AnchorY);}
@@ -164,12 +173,12 @@ internal sealed class TaskTreeSurface : Panel {
             if(row.Node==dropNode){int y=dropZone<0?bounds.Top:dropZone>0?bounds.Bottom-2:bounds.Top+bounds.Height/2;using(var pen=new Pen(Color.FromArgb(36,94,210),2))e.Graphics.DrawLine(pen,Math.Max(2,bounds.Left+2),y,Math.Max(2,bounds.Right-4),y);}
         }
     }
-    Point ContentPoint(Point client) {return new Point(client.X-AutoScrollPosition.X,client.Y-AutoScrollPosition.Y);}
-    Row RowAt(Point client) {Point point=ContentPoint(client);return rows.FirstOrDefault(row=>row.Bounds.Contains(point));}
+    Point ContentPoint(Row row,Point client) {return new Point(client.X-RowHorizontalOffset(row),client.Y-AutoScrollPosition.Y);}
+    Row RowAt(Point client) {int y=client.Y-AutoScrollPosition.Y;return rows.FirstOrDefault(row=>y>=row.Bounds.Top&&y<row.Bounds.Bottom);}
     enum Part {None,Expand,Check,Priority,Image,Title}
     static Part HitPart(Row row,Point point) {if(row==null)return Part.None;if(row.Expand.Contains(point)&&row.HasChildren)return Part.Expand;if(row.Check.Contains(point))return Part.Check;if(row.Priority.Contains(point))return Part.Priority;if(row.Image.Contains(point))return Part.Image;return row.Bounds.Contains(point)?Part.Title:Part.None;}
     protected override void OnMouseDown(MouseEventArgs e) {
-        base.OnMouseDown(e);Focus();var row=RowAt(e.Location);Point point=ContentPoint(e.Location);
+        base.OnMouseDown(e);Focus();var row=RowAt(e.Location);Point point=row==null?Point.Empty:ContentPoint(row,e.Location);
         if(row==null){if(e.Button==MouseButtons.Left&&BlankDragEnabled!=null&&BlankDragEnabled()&&BlankDragRequested!=null)BlankDragRequested(e.Location);return;}
         model.SelectedNode=row.Node;pressedNode=row.Node;pressedAt=e.Location;Part part=HitPart(row,point);
         if(e.Button!=MouseButtons.Left)return;
@@ -181,7 +190,7 @@ internal sealed class TaskTreeSurface : Panel {
         Invalidate();
     }
     protected override void OnMouseUp(MouseEventArgs e) {base.OnMouseUp(e);pressedNode=null;dragNode=null;dragging=false;}
-    protected override void OnMouseDoubleClick(MouseEventArgs e) {base.OnMouseDoubleClick(e);var row=RowAt(e.Location);if(e.Button==MouseButtons.Left&&row!=null&&HitPart(row,ContentPoint(e.Location))==Part.Title&&NodeDoubleClicked!=null)NodeDoubleClicked(row.Node);}
+    protected override void OnMouseDoubleClick(MouseEventArgs e) {base.OnMouseDoubleClick(e);var row=RowAt(e.Location);if(e.Button==MouseButtons.Left&&row!=null&&HitPart(row,ContentPoint(row,e.Location))==Part.Title&&NodeDoubleClicked!=null)NodeDoubleClicked(row.Node);}
     protected override void OnMouseMove(MouseEventArgs e) {
         base.OnMouseMove(e);var row=RowAt(e.Location);TreeNode node=row==null?null:row.Node;
         if(node!=hoverNode){hoverNode=node;if(HoverChanged!=null)HoverChanged(node,e.Location);}
@@ -204,19 +213,19 @@ internal sealed class TaskTreeSurface : Panel {
     protected override void OnDragEnter(DragEventArgs e) {base.OnDragEnter(e);e.Effect=e.Data.GetDataPresent(typeof(TreeNode))?DragDropEffects.Move:DragDropEffects.None;}
     protected override void OnDragOver(DragEventArgs e) {
         base.OnDragOver(e);var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;var row=RowAt(PointToClient(new Point(e.X,e.Y)));var target=row==null?null:row.Node;int zone=0;
-        if(row!=null){int y=ContentPoint(PointToClient(new Point(e.X,e.Y))).Y;int edge=Math.Max(7,(int)Math.Round(row.Bounds.Height*.3));zone=y<row.Bounds.Top+edge?-1:y>=row.Bounds.Bottom-edge?1:0;}
+        if(row!=null){int y=ContentPoint(row,PointToClient(new Point(e.X,e.Y))).Y;int edge=Math.Max(7,(int)Math.Round(row.Bounds.Height*.3));zone=y<row.Bounds.Top+edge?-1:y>=row.Bounds.Bottom-edge?1:0;}
         bool allowed=source!=null&&target!=null&&CanDrop!=null&&CanDrop(source,target,zone);e.Effect=allowed?DragDropEffects.Move:DragDropEffects.None;dropNode=allowed?target:null;dropZone=zone;Invalidate();
     }
     protected override void OnDragLeave(EventArgs e) {base.OnDragLeave(e);ClearDropMark();}
     protected override void OnDragDrop(DragEventArgs e) {base.OnDragDrop(e);var source=e.Data.GetData(typeof(TreeNode)) as TreeNode;var target=dropNode;int zone=dropZone;ClearDropMark();if(source!=null&&target!=null&&DropRequested!=null)DropRequested(source,target,zone);}
     internal void ClearDropMark(){dropNode=null;dropZone=0;Invalidate();}
-    Rectangle ClientBounds(Rectangle value){var offset=AutoScrollPosition;return new Rectangle(value.X+offset.X,value.Y+offset.Y,value.Width,value.Height);}
-    internal Rectangle NodeBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Bounds);}
-    internal Rectangle CheckBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Check);}
-    internal Rectangle PrefixBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Prefix);}
-    internal Rectangle ImageBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Image);}
-    internal Rectangle PriorityBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Priority);}
-    internal Rectangle TitleBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Title);}
+    Rectangle ClientBounds(Row row,Rectangle value){var offset=RowPaintOffset(row);return new Rectangle(value.X+offset.X,value.Y+offset.Y,value.Width,value.Height);}
+    internal Rectangle NodeBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Bounds);}
+    internal Rectangle CheckBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Check);}
+    internal Rectangle PrefixBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Prefix);}
+    internal Rectangle ImageBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Image);}
+    internal Rectangle PriorityBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Priority);}
+    internal Rectangle TitleBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Title);}
     internal Size ContentExtent {get{return AutoScrollMinSize;}}
     internal Point ScrollOffset {get{return new Point(-AutoScrollPosition.X,-AutoScrollPosition.Y);}}
     internal void TestWheel(int delta,bool horizontal){ScrollByWheel(delta,horizontal);}
@@ -265,6 +274,8 @@ internal sealed partial class FloatingWindow {
             tasks.SingleLinePaths=false;tasks.SetWrappedText(true);taskSurface.Rebuild(false);taskSurface.Update();
             var shortBounds=taskSurface.NodeBounds(shortNode);var longBounds=taskSurface.NodeBounds(longNode);
             if(shortBounds.IsEmpty || longBounds.Height<=shortBounds.Height)throw new Exception("Long text did not increase only its own row height");
+            var wrappedImageBounds=taskSurface.NodeBounds(imageLeaf);var wrappedPlainBounds=taskSurface.NodeBounds(plainLeaf);
+            if(wrappedImageBounds.Bottom!=wrappedPlainBounds.Top)throw new Exception("Wrapped rows contain an unexpected blank line");
             if(Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Wrapped text changed the task font size");
             var prefix=taskSurface.PrefixBounds(imageLeaf);var image=taskSurface.ImageBounds(imageLeaf);var priority=taskSurface.PriorityBounds(imageLeaf);var title=taskSurface.TitleBounds(imageLeaf);
             if(prefix.IsEmpty || image.IsEmpty || priority.IsEmpty || title.IsEmpty || prefix.Right>=image.Left || image.Right>=priority.Left || priority.Right>=title.Left)throw new Exception("Sequence, image, priority, and title spacing overlap");
@@ -272,6 +283,8 @@ internal sealed partial class FloatingWindow {
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-variable-rows-full-test.png"));}
             SetSimpleMode(true);Size=new Size(260,430);taskSurface.Rebuild(false);taskSurface.Update();
             if(taskSurface.NodeBounds(longNode).Height<=taskSurface.NodeBounds(shortNode).Height || Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Simple mode did not retain the shared variable-row renderer and font size");
+            var simpleImageTitle=taskSurface.TitleBounds(imageLeaf);var simpleImagePriority=taskSurface.PriorityBounds(imageLeaf);var simpleImagePrefix=taskSurface.PrefixBounds(imageLeaf);
+            if(simpleImageTitle.Top<=simpleImagePriority.Top || simpleImageTitle.Left!=simpleImagePrefix.Left)throw new Exception("Narrow wrapped text did not use the full content width below its markers");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-variable-rows-simple-test.png"));}
             for(int index=0;index<24;index++) {
                 string text=(index+3)+". [P"+(index%10)+"] "+(index%2==0?"滚动测试短事项":"用于验证简洁模式单行显示横向与纵向滚动可以同时稳定工作的长事项 "+index+" / 上级任务 / 项目总表");
@@ -300,7 +313,8 @@ internal sealed partial class FloatingWindow {
             if(mixedOffset.X<=0 || mixedOffset.Y!=verticalOffset.Y)throw new Exception("Horizontal wheel scrolling changed the vertical position or did not move horizontally");
             var shortAfter=taskSurface.PriorityBounds(shortNode);var longAfter=taskSurface.PriorityBounds(longNode);
             int shortShift=shortAfterVertical.Left-shortAfter.Left,longShift=longAfterVertical.Left-longAfter.Left;
-            if(shortShift<=0 || shortShift!=longShift || shortAfter.Top!=shortAfterVertical.Top || longAfter.Top!=longAfterVertical.Top)throw new Exception("Different text lengths produced inconsistent mixed-axis scrolling");
+            if(shortShift!=0 || longShift<=0 || shortAfter.Top!=shortAfterVertical.Top || longAfter.Top!=longAfterVertical.Top)throw new Exception("Horizontal scrolling blanked a short row or failed to scroll a long row");
+            if(taskSurface.NodeBounds(shortNode).Height!=taskSurface.NodeBounds(longNode).Height)throw new Exception("Single-line rows with the same font have inconsistent heights");
             if(shortBefore.Top-shortAfterVertical.Top!=verticalOffset.Y || longBefore.Top-longAfterVertical.Top!=verticalOffset.Y)throw new Exception("Vertical scrolling produced inconsistent row positions");
             if(invalidations==0)throw new Exception("Scrolling did not invalidate the custom task surface");
             var preserved=taskSurface.ScrollOffset;taskSurface.Rebuild(true);taskSurface.Update();
@@ -317,7 +331,7 @@ internal sealed partial class FloatingWindow {
                 if(ink<3)throw new Exception("Scrolled short-row text was not painted until selection");
                 bitmap.Save(Path.Combine(data,"floating-scroll-visible-rows-test.png"));
             }
-            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; compact single-line mode handles simultaneous horizontal and vertical scrolling; every native and wheel scroll immediately repaints the custom surface; mixed-axis positions and refresh preservation are stable; shorter visible rows clamp stale horizontal offsets and retain painted text.");
+            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; narrow wrapped titles use the full content width below their markers; wrapped rows are contiguous; compact single-line rows keep a consistent height; horizontal scrolling advances long rows without blanking shorter rows; every native and wheel scroll immediately repaints the custom surface; mixed-axis positions and refresh preservation are stable; shorter visible rows clamp stale horizontal offsets and retain painted text.");
         } finally {
             if(simpleMode)SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);tasks.SingleLinePaths=originalFlat;tasks.SetWrappedText(originalWrap);Size=originalSize;taskSurface.Rebuild(false);
             if(originalMode)SetSimpleMode(true);if(originalSelection!=null&&originalSelection.TreeView==tasks)tasks.SelectedNode=originalSelection;rendering=originalRendering;
