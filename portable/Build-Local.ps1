@@ -50,12 +50,14 @@ try {
         Download-TaskTraceGoDependencies $dependencies.GoModules
         $env:CGO_ENABLED = '1'
         $env:CC = 'gcc'
-        # Go's internal PE linker produces a Windows x64 binary that works on
-        # both Windows 10 and 11. Some MinGW versions emit a statically linked
-        # PE which Windows reports as error 193 even though its header is x64.
-        $ldflags = '-s -w -linkmode internal -X code.vikunja.io/api/pkg/version.Version=' + $Version
+        $ldflags = '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=' + $Version
         & go build -tags 'osusergo,timetzdata' -ldflags $ldflags -o (Join-Path $packageRoot 'TaskTrace-server.exe') .
         Assert-Exit 'Windows server build'
+        # Older MinGW versions leave Go's external-link sections in a layout
+        # which Windows may reject with error 193. Binutils strip rewrites the
+        # PE section table while retaining the statically linked SQLite code.
+        & strip --strip-all (Join-Path $packageRoot 'TaskTrace-server.exe')
+        Assert-Exit 'Windows server PE cleanup'
         & (Join-Path $packageRoot 'TaskTrace-server.exe') version | Out-Null
         Assert-Exit 'Windows server executable check'
     } finally { $env:CGO_ENABLED = $oldCGO; $env:CC = $oldCC }

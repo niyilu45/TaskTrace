@@ -83,6 +83,7 @@ function Write-TaskTraceDependencyManifest([string]$RepoRoot, [string]$OutputFil
     $lines.Add('  pnpm >= 11.26.0')
     $lines.Add('  Go >= 1.27.0')
     $lines.Add('  Windows x64 GCC')
+    $lines.Add('  GNU Binutils strip（通常随 GCC 提供）')
     $lines.Add('  .NET Framework 4.8 C# 编译器')
     $lines.Add('')
     $lines.Add('前端锁定依赖（' + $frontend.Count + '）：')

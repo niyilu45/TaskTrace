@@ -15,6 +15,7 @@ dist\TaskTrace-local\TaskTrace.exe
 - pnpm 11.26.0 或更新版本
 - Go 1.27.0 或更新版本
 - Windows x64 GCC，推荐 MSYS2 UCRT64 GCC
+- GNU Binutils `strip`（通常随 GCC 提供）
 - .NET Framework 4.8 C# 编译器
 - 本机未缓存项目依赖时，可访问 npm 和 Go 依赖源；已经缓存完整时不会重复下载
 

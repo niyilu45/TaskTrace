@@ -295,6 +295,15 @@ try {
         } catch { Add-DependencyIssue ('GCC 无法运行：' + $_.Exception.Message) '重新安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
     }
 
+    $stripCandidates = @('C:\msys64\ucrt64\bin\strip.exe','C:\msys64\mingw64\bin\strip.exe','C:\MinGW\bin\strip.exe',(Join-Path $env:USERPROFILE 'scoop\apps\gcc\current\bin\strip.exe'))
+    $strip = Find-Command 'strip' $stripCandidates
+    if ($null -eq $strip) {
+        Add-DependencyIssue '未找到 GNU Binutils strip；Windows 服务端构建后需要它整理 PE 文件。' '安装 MSYS2 UCRT64 GCC（其中包含 strip）：https://www.msys2.org/'
+    } else {
+        try { Register-CommandPath $strip; Write-InstallLine ('strip：' + (Read-CommandText $strip.Source @('--version')).Split([Environment]::NewLine)[0] + ' · ' + $strip.Source) }
+        catch { Add-DependencyIssue ('strip 无法运行：' + $_.Exception.Message) '重新安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
+    }
+
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) {
         Add-DependencyIssue ('未找到 .NET Framework C# 编译器：' + $compiler) '在“启用或关闭 Windows 功能”中启用 .NET Framework 4.8，或安装 .NET Framework 4.8 Developer Pack。'
