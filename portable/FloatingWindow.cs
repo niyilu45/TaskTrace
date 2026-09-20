@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -265,9 +265,9 @@ internal sealed partial class FloatingWindow : Form {
     }
     static List<Dictionary<string,object>> DailyHistory(List<Dictionary<string,object>> notes) {
         var hidden = new HashSet<long>(notes.SelectMany(note => MergedIds((string)note["comment"])));
-        return notes.Where(note => DayOf(note)!="" && !hidden.Contains(Convert.ToInt64(note["id"]))).OrderByDescending(note => DayOf(note)).ThenByDescending(note => Convert.ToInt64(note["id"])).ToList();
-    }
-    static List<DateTime> ProgressDates(List<Dictionary<string,object>> notes) {
+        var hiddenTeam = new HashSet<string>(notes.SelectMany(note => TeamMergedIds((string)note["comment"])),StringComparer.OrdinalIgnoreCase);
+        return notes.Where(note => {var marker=ReadFloatingTeamMarker((string)note["comment"]);return DayOf(note)!="" && !hidden.Contains(Convert.ToInt64(note["id"])) && (marker==null || !hiddenTeam.Contains(marker.id));}).OrderByDescending(note => DayOf(note)).ThenByDescending(note => Convert.ToInt64(note["id"])).ToList();
+    }    static List<DateTime> ProgressDates(List<Dictionary<string,object>> notes) {
         var dates=new List<DateTime>();DateTime date;
         foreach(string value in DailyHistory(notes).Select(note=>DayOf(note)).Distinct())if(DateTime.TryParseExact(value,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))dates.Add(date.Date);
         return dates;
@@ -469,7 +469,7 @@ internal sealed partial class FloatingWindow : Form {
                 await Api("GET", "/tasks/" + id, null);
                 using(var body = new MultipartFormDataContent()) {
                     var image = new ByteArrayContent(picture.Bytes); image.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-                    body.Add(image, "files", "clipboard-" + DateTime.Now.Ticks + ".png");
+                    body.Add(image, "files", "tasktrace-progress-" + Guid.NewGuid().ToString("N") + ".png");
                     using(var request = new HttpRequestMessage(HttpMethod.Post, url + "/api/v2/tasks/" + id + "/attachments")) {
                         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token); request.Content = body;
                         using(var response = await http.SendAsync(request)) {
@@ -487,7 +487,7 @@ internal sealed partial class FloatingWindow : Form {
         var resultNote = await Api(commentId == 0 ? "POST" : "PUT", "/tasks/" + id + "/comments" + (commentId == 0 ? "" : "/" + commentId), new { comment = note });
         return Convert.ToInt64(resultNote["id"]);
     }
-    sealed class ProgressDraft { public string Text; public List<PastedImage> Pictures; public List<ProgressReference> References; }
+    sealed class ProgressDraft { public string Text, Html; public List<PastedImage> Pictures; public List<ProgressReference> References; }
     async void ShowProgress() {
         if(busy || closing) return;
         if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text="请先选中事项。";return; }
@@ -498,12 +498,10 @@ internal sealed partial class FloatingWindow : Form {
         try {
             var history = await ReadHistory(id);
             using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(580,780),MinimumSize=new Size(440,660),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
-                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,92));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
-                var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正",AccessibleDescription="当天进展与更正"};
-                var imageGroup=new GroupBox {Text="图片（0）· 点击缩略图查看大图",Dock=DockStyle.Fill,Padding=new Padding(7)};
-                var imagePreviews=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false,FlowDirection=FlowDirection.LeftToRight,AccessibleName="每日进展图片缩略图，点击查看大图"};imageGroup.Controls.Add(imagePreviews);
+                var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，选中后可按退格或 Delete 删除"};
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var historyButton=new Button {Text="查看历史进展",Dock=DockStyle.Fill,AccessibleName="查看所有历史进展"};
@@ -523,17 +521,12 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(imageGroup);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 图片直接嵌入正文，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="";long commentId=0;var mergedIds=new List<long>();bool submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false;
-                Action renderImages=null;renderImages=delegate {
-                    ClearImageThumbnails(imagePreviews);var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalBody,"每日进展 · "+selectedDay);
-                    foreach(var image in existingImages)AddImageThumbnail(imagePreviews,image,dialog);
-                    foreach(var picture in pictures.ToList())AddImageThumbnail(imagePreviews,new GalleryImage{Bytes=picture.Bytes,Caption="待保存的每日进展图片"},dialog,delegate{if(!submitting){pictures.Remove(picture);renderImages();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}});
-                    imageGroup.Text="图片（"+(existingImages.Count+pictures.Count)+"）· 点击缩略图查看大图";
-                };
-                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count,references=SerializeProgressReferences(references)});};
-                Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Text=progress.Text,Pictures=new List<PastedImage>(pictures),References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
+                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false;
+                Action renderImages=delegate { };
+                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,html=progress.Html,images=progress.ImageCount,references=SerializeProgressReferences(references)});};
+                Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Html=progress.Html,References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action cacheSelectedDay=delegate {
                     if(selectedDay=="")return;stash();ProgressDraft cached;
                     if(drafts.TryGetValue(selectedDay,out cached)){string current=snapshot();if(current!=lastCached){WriteDraftCache("progress",id,selectedDay,cached);lastCached=current;}feedback.Text="草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。";}
@@ -544,26 +537,30 @@ internal sealed partial class FloatingWindow : Form {
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
                     int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
                     toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
-                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[4].Height=referenceList.Visible?230:82;
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?230:82;
                     referenceLayout.RowStyles[2].Height=referenceActions.Visible?34:0;
                     referenceGroup.Text="引用历史进展";
                 };
-                Action loadDay=delegate {
+                Func<Task> loadDay=async delegate {
                     loadingDay=true;
                     selectedDay=day.Value.ToString("yyyy-MM-dd");
-                    var records=DailyHistory(history).Where(note=>DayOf(note)==selectedDay).OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
+                    var allRecords=DailyHistory(history).Where(note=>DayOf(note)==selectedDay).OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
+                    collaborativeProgress=history.Any(note=>ReadFloatingTeamMarker((string)note["comment"])!=null);
+                    var records=(collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker==null || String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}):allRecords).ToList();
                     commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));
                     mergedIds=records.Select(note=>Convert.ToInt64(note["id"])).Concat(records.SelectMany(note=>MergedIds((string)note["comment"]))).Where(value=>value!=commentId).Distinct().ToList();
+                    currentTeamId=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).LastOrDefault()??"";
+                    mergedTeamIds=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).Concat(records.SelectMany(note=>TeamMergedIds((string)note["comment"]))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                     originalBody=String.Join("",records.Select(note=>ProgressBody((string)note["comment"],id)));originalText=Plain(Regex.Replace(originalBody,"<img[^>]*>","",RegexOptions.IgnoreCase));
                     references=records.SelectMany(note=>SplitProgressReferences((string)note["comment"],id).References).GroupBy(item=>item.Id).Select(group=>group.First().Copy()).ToList();
-                    progress.Text=originalText;pictures=new List<PastedImage>();lastSaved=snapshot();ProgressDraft restored=null;
+                    progress.Html=await PrepareProgressEditorHtml(id,originalBody);pictures=new List<PastedImage>();lastSaved=snapshot();ProgressDraft restored=null;
                     if(drafts.ContainsKey(selectedDay))restored=drafts[selectedDay];else restored=ReadDraftCache<ProgressDraft>("progress",id,selectedDay);
-                    if(restored!=null){progress.Text=restored.Text??"";pictures=restored.Pictures??new List<PastedImage>();references=(restored.References??new List<ProgressReference>()).Select(item=>item.Copy()).ToList();drafts[selectedDay]=restored;lastCached=snapshot();}
+                    if(restored!=null){progress.Html=!String.IsNullOrWhiteSpace(restored.Html)?restored.Html:ProgressTextHtml(restored.Text??"")+String.Join("",(restored.Pictures??new List<PastedImage>()).Select(picture=>"<p><img src=\"data:image/png;base64,"+Convert.ToBase64String(picture.Bytes)+"\"></p>"));references=(restored.References??new List<ProgressReference>()).Select(item=>item.Copy()).ToList();drafts[selectedDay]=restored;lastCached=snapshot();}
                     else lastCached="";
-                    renderImages();refreshReferences();feedback.Text=restored!=null?"已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。":records.Count==0?"此日期尚无进展。修改后会缓存到 .cache，点击保存才会提交。":"已载入当天合并内容；修改后会缓存到 .cache，点击保存才会提交。";loadingDay=false;
+                    refreshReferences();feedback.Text=restored!=null?"已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。":records.Count==0?"此日期尚无进展。修改后会缓存到 .cache，点击保存才会提交。":"已载入当天合并内容；修改后会缓存到 .cache，点击保存才会提交。";loadingDay=false;
                 };
-                loadDay();day.ValueChanged+=delegate {if(!submitting){if(autoSaveEnabled)cacheSelectedDay();else stash();loadDay();}};
-                progress.TextChanged+=delegate{if(!loadingDay && !submitting && snapshot()!=lastSaved)feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
+                await loadDay();day.ValueChanged+=async delegate {if(!submitting){if(autoSaveEnabled)cacheSelectedDay();else stash();await loadDay();}};
+                progress.HtmlChanged+=delegate{if(!loadingDay && !submitting && snapshot()!=lastSaved)feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 toggleReferences.LinkClicked+=delegate{referenceExpanded=!referenceExpanded;refreshReferences();};
                 referenceList.SelectedIndexChanged+=delegate{previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;};
                 Func<bool,Task> selectReferences=async delegate(bool verifyPicker) {
@@ -584,33 +581,40 @@ internal sealed partial class FloatingWindow : Form {
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};
                 Func<bool,Task> write=async delegate(bool finish) {
-                    if(submitting || (String.IsNullOrWhiteSpace(progress.Text) && pictures.Count==0 && references.Count==0 && commentId==0))return;
+                    if(submitting || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return;
                     if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return;}
-                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.ReadOnly=true;
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);
                     try {
                         using(BeginUndoGroup()) {
                         var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
-                        string images=String.Join("",Regex.Matches(originalBody,"<img[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
-                        string body=progress.Text==originalText?originalBody:ProgressTextHtml(progress.Text)+images;
-                        commentId=await SaveProgress(id,day.Value,progress.Text,"",pictures,commentId,body,mergedIds,references);
-                        foreach(var picture in pictures) body+="<p><img src=\"/api/v1/tasks/"+id+"/attachments/"+picture.Id+"\"></p>";
-                        originalBody=body;originalText=progress.Text;pictures.Clear();renderImages();lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
+                        string body=await PersistProgressEditorImages(id,progress.Html);
+                        if(collaborativeProgress) {
+                            var absorbedIds=mergedIds.Concat(commentId>0?new[]{commentId}:new long[0]).Distinct().ToList();
+                            var absorbedTeamIds=mergedTeamIds.Concat(String.IsNullOrWhiteSpace(currentTeamId)?new string[0]:new[]{currentTeamId}).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                            string numericAttribute=absorbedIds.Count==0?"":" data-tasktrace-merged=\""+String.Join(",",absorbedIds)+"\"";
+                            string teamAttribute=absorbedTeamIds.Count==0?"":" data-tasktrace-team-merged=\""+String.Join(",",absorbedTeamIds)+"\"";
+                            string newTeamId=Guid.NewGuid().ToString("N");
+                            string comment="<h3"+numericAttribute+teamAttribute+">每日进展 · "+day.Value.ToString("yyyy-MM-dd")+"</h3>"+body+SerializeProgressReferences(references)+FloatingTeamMarkerHtml(newTeamId,Environment.UserName);
+                            var saved=await Api("POST","/tasks/"+id+"/comments",new {comment=comment});
+                            commentId=Convert.ToInt64(saved["id"]);mergedIds=absorbedIds;mergedTeamIds=absorbedTeamIds;currentTeamId=newTeamId;
+                        } else commentId=await SaveProgress(id,day.Value,Plain(body),"",null,commentId,body,mergedIds,references);
+                        originalBody=body;originalText=Plain(body);progress.Html=await PrepareProgressEditorHtml(id,body);lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
                         history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text="当天进展已正式保存，可以继续编辑。";
                         }
                     } catch {feedback.Text="保存失败，内容已保留，请重试。";}
-                    finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}
+                    finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}
                 };
                 save.Click+=async delegate {await write(true);};
                 var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate {if(autoSaveEnabled && !editingOutstanding && snapshot()!=lastSaved)try{cacheSelectedDay();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
                 deleteTask.Click+=async delegate {
                     if(submitting || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？删除后可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
-                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.ReadOnly=true;feedback.Text="正在删除任务…";
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);feedback.Text="正在删除任务…";
                     try {await Api("DELETE","/tasks/"+id,null);await RefreshUndo();taskDeleted=true;submitting=false;dialog.Close();}
                     catch(Exception e){feedback.Text=e.Message;}
-                    finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}}
+                    finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}}
                 };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}renderImages();feedback.Text="已粘贴 "+pictures.Count+" 张图片；点击缩略图查看大图，右上角 × 可移除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);progress.InsertImage(stream.ToArray());}feedback.Text="图片已嵌入进展正文，共 "+progress.ImageCount+" 张；选中图片后可按退格或 Delete 删除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 Exception verificationError=null;
@@ -622,12 +626,11 @@ internal sealed partial class FloatingWindow : Form {
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
                         var historyBounds=dialog.RectangleToClient(historyButton.RectangleToScreen(historyButton.ClientRectangle));if(historyButton.Height<28 || !dialog.ClientRectangle.Contains(historyBounds))throw new Exception("All-progress history button is clipped in progress dialog");
                         if(expectSavedImage && !Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase))throw new Exception("Saved progress image was not loaded into the editor");
-                        if(Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase) && imagePreviews.Controls.Count==0)throw new Exception("Saved progress images did not create thumbnails");
+                        if(Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase) && progress.ImageCount==0)throw new Exception("Saved progress images were not embedded in the editor");
                         byte[] previewBytes;using(var previewBitmap=new Bitmap(64,40))using(var previewStream=new MemoryStream()){using(var canvas=Graphics.FromImage(previewBitmap))canvas.Clear(Color.CornflowerBlue);previewBitmap.Save(previewStream,System.Drawing.Imaging.ImageFormat.Png);previewBytes=previewStream.ToArray();}
-                        var previewPicture=new PastedImage{Bytes=previewBytes};int thumbnailCount=imagePreviews.Controls.Count;pictures.Add(previewPicture);renderImages();if(imagePreviews.Controls.Count!=thumbnailCount+1)throw new Exception("Pasted progress image did not create a thumbnail");
-                        var thumbnailLoads=imagePreviews.Controls.Cast<Control>().SelectMany(control=>control.Controls.OfType<PictureBox>()).Select(box=>box.Tag as Task).Where(task=>task!=null).ToArray();if(thumbnailLoads.Length>0)await Task.WhenAll(thumbnailLoads);
-                        using(var imageBitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(imageBitmap,new Rectangle(Point.Empty,dialog.Size));imageBitmap.Save(Path.Combine(data,"floating-progress-image-thumbnails-test.png"));}
-                        await ShowImagePreview(new GalleryImage{Bytes=previewBytes,Caption="每日进展缩略图验收"},dialog,true);pictures.Remove(previewPicture);renderImages();
+                        int imageCountBefore=progress.ImageCount;progress.InsertImage(previewBytes);if(progress.ImageCount!=imageCountBefore+1)throw new Exception("Pasted progress image was not embedded in the editor");
+                        using(var imageBitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(imageBitmap,new Rectangle(Point.Empty,dialog.Size));imageBitmap.Save(Path.Combine(data,"floating-progress-inline-images-test.png"));}
+                        await ShowImagePreview(new GalleryImage{Bytes=previewBytes,Caption="每日进展内嵌图片验收"},dialog,true);
                         await ShowProgressHistory(id,taskTitle,history,dialog,true);
                         using(var calendar=day.RenderCalendarForTest())calendar.Save(Path.Combine(data,"floating-progress-calendar-test.png"));
                         DateTime beforeOutside=day.Value;day.OpenCalendarForTest();if(!day.CalendarVisibleForTest())throw new Exception("Progress calendar did not open modelessly");day.SimulateCalendarOutsideClickForTest();if(day.CalendarVisibleForTest() || day.Value!=beforeOutside)throw new Exception("Clicking outside progress calendar did not cancel selection");
@@ -640,12 +643,12 @@ internal sealed partial class FloatingWindow : Form {
                         await Api("PUT","/tasks/"+id+"/comments/"+sourceRecord["id"],new {comment=sourceOriginal});
                         if(!references.Any(item=>item.Date==first && item.Html.Contains("引用时的最新内容")))throw new Exception("Reference snapshot changed when its source changed");
                         if(DailyHistory(history).Select(note=>DayOf(note)).Distinct().Where(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date)).Contains(first))throw new Exception("Duplicate reference prevention failed");
-                        progress.Text="本日更正：以新结论为准";string draftSnapshot=snapshot();day.Value=DateTime.Today.AddDays(1);if(references.Count!=0)throw new Exception("Reference draft leaked to other date");day.Value=DateTime.Today;if(snapshot()!=draftSnapshot)throw new Exception("Reference date draft did not restore");
+                        progress.Html=ProgressTextHtml("本日更正：以新结论为准");string draftSnapshot=snapshot();day.Value=DateTime.Today.AddDays(1);if(references.Count!=0)throw new Exception("Reference draft leaked to other date");day.Value=DateTime.Today;if(snapshot()!=draftSnapshot)throw new Exception("Reference date draft did not restore");
                         await write(false);if(snapshot()!=lastSaved)throw new Exception("Reference automatic save failed: "+feedback.Text);
-                        var saved=SplitProgressReferences((string)(await ReadHistory(id)).First(note=>Convert.ToInt64(note["id"])==commentId)["comment"],id);if(saved.References.Count!=2 || Plain(ProgressBody(saved.Body,id))!=progress.Text)throw new Exception("Reference save mixed snapshot text into body");
+                        var saved=SplitProgressReferences((string)(await ReadHistory(id)).First(note=>Convert.ToInt64(note["id"])==commentId)["comment"],id);if(saved.References.Count!=2 || Plain(ProgressBody(saved.Body,id))!=Plain(progress.Html))throw new Exception("Reference save mixed snapshot text into body");
                         var citationHistory=await ReadHistory(id);var citations=ProgressCitationsForDay(id,first,citationHistory);if(!citations.Any(item=>item.Date==selectedDay && Plain(item.Html).Contains("本日更正")))throw new Exception("Referenced source did not expose citing progress");
-                        day.Value=DateTime.Today.AddDays(-1);day.Value=DateTime.Today;if(references.Count!=2 || progress.Text!="本日更正：以新结论为准")throw new Exception("Saved references failed date roundtrip");
-                        progress.Text="本日更正：再次确认";await write(true);if(references.Count!=2)throw new Exception("Ordinary edit lost references");
+                        day.Value=DateTime.Today.AddDays(-1);day.Value=DateTime.Today;if(references.Count!=2 || Plain(progress.Html)!="本日更正：以新结论为准")throw new Exception("Saved references failed date roundtrip");
+                        progress.Html=ProgressTextHtml("本日更正：再次确认");await write(true);if(references.Count!=2)throw new Exception("Ordinary edit lost references");
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-references-test.png"));}
                         dialog.Size=dialog.MinimumSize;dialog.PerformLayout();if(progress.Height<60 || referenceList.Height<35 || referenceActions.Bottom>referenceLayout.ClientSize.Height+2)throw new Exception("Reference controls overflow minimum dialog size");
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-references-small-test.png"));}
@@ -654,7 +657,7 @@ internal sealed partial class FloatingWindow : Form {
                     } catch(Exception e){verificationError=e;}finally{drafts.Clear();dialog.Close();}
                 };
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(taskDeleted)return;if(submitting){e.Cancel=true;return;}if(verify)return;if(autoSaveEnabled){try{cacheSelectedDay();}catch{}}else{stash();if(drafts.Count>0 && MessageBox.Show(dialog,"还有日期的进展未保存，确定放弃这些修改？","每日进展",MessageBoxButtons.YesNo)!=DialogResult.Yes)e.Cancel=true;}};
-                try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();ClearImageThumbnails(imagePreviews);}
+                try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
         }catch(Exception e){if(verify)throw;Error(e);}finally{SetBusy(false);timer.Start();}

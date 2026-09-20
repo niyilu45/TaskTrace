@@ -236,6 +236,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 
 import AttachmentService from '@/services/attachment'
 import {canPreviewAudio, canPreviewImage, previewKind, type PreviewKind} from '@/models/attachment'
+import {isProgressImageAttachment} from '@/helpers/progressEditorImages'
 import {getDisplayName} from '@/models/user'
 import type {IAttachment} from '@/modelTypes/IAttachment'
 import type {ITask} from '@/modelTypes/ITask'
@@ -292,7 +293,7 @@ const {t} = useI18n({useScope: 'global'})
 
 const attachmentService = shallowReactive(new AttachmentService())
 
-const attachments = computed(() => props.task.attachments ?? [])
+const attachments = computed(() => (props.task.attachments ?? []).filter(attachment => !isProgressImageAttachment(attachment)))
 
 const loading = computed(() => attachmentService.loading || taskStore.isLoading)
 

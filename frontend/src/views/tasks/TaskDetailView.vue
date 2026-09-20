@@ -682,6 +682,7 @@
 
 <script lang="ts" setup>
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {isProgressImageAttachment} from '@/helpers/progressEditorImages'
 import {undoAffectedTaskIds} from '@/helpers/tasktraceUndo'
 import {ref, reactive, shallowReactive, computed, watch, nextTick, onMounted, useTemplateRef} from 'vue'
 import {useRouter, useRoute, type RouteLocation, onBeforeRouteLeave} from 'vue-router'
@@ -771,7 +772,7 @@ const authStore = useAuthStore()
 const baseStore = useBaseStore()
 
 const task = ref<ITask>(new TaskModel())
-const hasAttachments = computed(() => (task.value.attachments?.length ?? 0) > 0)
+const hasAttachments = computed(() => (task.value.attachments ?? []).some(attachment => !isProgressImageAttachment(attachment)))
 const remindersDefaultRelativeTo = computed(() => {
 	if (task.value.dueDate) {
 		return REMINDER_PERIOD_RELATIVE_TO_TYPES.DUEDATE
@@ -1056,7 +1057,7 @@ function setActiveFields() {
 
 	// Set all active fields based on values in the model
 	activeFields.assignees = task.value.assignees.length > 0
-	activeFields.attachments = task.value.attachments.length > 0
+	activeFields.attachments = (task.value.attachments ?? []).some(attachment => !isProgressImageAttachment(attachment))
 	activeFields.timeTracking = (task.value.timeEntriesCount ?? 0) > 0
 	activeFields.dueDate = task.value.dueDate !== null
 	activeFields.endDate = task.value.endDate !== null

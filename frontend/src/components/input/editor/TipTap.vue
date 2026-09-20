@@ -237,6 +237,7 @@ const props = withDefaults(defineProps<{
 	enableMentions?: boolean,
 	projectId?: number,
 	storageKey?: string,
+	alwaysEditing?: boolean,
 }>(), {
 	uploadCallback: undefined,
 	isEditEnabled: true,
@@ -250,6 +251,7 @@ const props = withDefaults(defineProps<{
 	enableMentions: false,
 	projectId: 0,
 	storageKey: '',
+	alwaysEditing: false,
 })
 
 const emit = defineEmits(['save', 'discard'])
@@ -271,7 +273,7 @@ const defaultSetContentOptions: SetContentOptions = {
 type Mode = 'edit' | 'preview'
 
 const internalMode = ref<Mode>('preview')
-const isEditing = computed(() => internalMode.value === 'edit' && props.isEditEnabled)
+const isEditing = computed(() => props.isEditEnabled && (props.alwaysEditing || internalMode.value === 'edit'))
 const contentHasChanged = ref<boolean>(false)
 
 // TipTap crashes when inserting an image into an empty editor.
@@ -650,7 +652,7 @@ onBeforeUnmount(() => {
 })
 
 function setModeAndValue(value: string) {
-	internalMode.value = isEditorContentEmpty(value) && props.startInEditWhenEmpty ? 'edit' : 'preview'
+	internalMode.value = props.alwaysEditing || isEditorContentEmpty(value) && props.startInEditWhenEmpty ? 'edit' : 'preview'
 	editor.value?.commands.setContent(value, {
 		...defaultSetContentOptions,
 		emitUpdate: false,

@@ -1,7 +1,14 @@
 <template>
 	<div
 		class="readonly-rich-text"
+		@click="handleContentClick"
 		v-html="rendered"
+	/>
+	<ImageLightbox
+		v-if="lightboxSrc"
+		:blob-url="lightboxSrc"
+		:alt="lightboxAlt"
+		@close="lightboxSrc = null"
 	/>
 </template>
 
@@ -10,8 +17,20 @@ import {ref, watch, onBeforeUnmount} from 'vue'
 import DOMPurify from 'dompurify'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
+import ImageLightbox from '@/components/misc/ImageLightbox.vue'
+
 const props = defineProps<{html?: string}>()
 const rendered = ref('')
+const lightboxSrc = ref<string | null>(null)
+const lightboxAlt = ref('')
+
+function handleContentClick(event: MouseEvent) {
+	const target = event.target
+	if (!(target instanceof HTMLImageElement) || !target.src.startsWith('blob:')) return
+	lightboxSrc.value = target.src
+	lightboxAlt.value = target.alt || '每日进展图片'
+}
+
 let version = 0
 watch(() => props.html, async value => {
 	const current = ++version
@@ -21,7 +40,7 @@ watch(() => props.html, async value => {
 		anchor.setAttribute('rel', 'noopener noreferrer')
 		if (anchor.closest('blockquote[data-tasktrace-reference="1"]') && /^\/tasks\/\d+#comment-\d+$/.test(anchor.getAttribute('href') || '')) anchor.setAttribute('target', '_blank')
 	}
-	for (const quote of Array.from(doc.querySelectorAll('blockquote[data-tasktrace-reference="1"]'))) {
+	for (const quote of Array.from(doc.body.querySelectorAll('blockquote[data-tasktrace-reference="1"]'))) {
 		const date = quote.getAttribute('data-date') || '历史日期'
 		const details = doc.createElement('details')
 		details.className = 'progress-reference-details'
@@ -80,16 +99,17 @@ onBeforeUnmount(() => version++)
 		}
 	}
 	:deep(img) {
-	max-inline-size: 100%;
-	max-block-size: 24rem;
-	object-fit: contain;
+		max-inline-size: 100%;
+		max-block-size: 24rem;
+		object-fit: contain;
+		cursor: zoom-in;
 	}
 	:deep(p) {
-	margin-block: .4rem;
+		margin-block: .4rem;
 	}
 	:deep(h3) {
-	font-size: 1rem;
-	margin-block: .75rem .4rem;
+		font-size: 1rem;
+		margin-block: .75rem .4rem;
 	}
 }
 </style>
