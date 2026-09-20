@@ -127,7 +127,8 @@ internal sealed partial class FloatingWindow : Form {
             try {
                 var history = DailyHistory(await ReadHistory((long)node.Tag));
                 var latest = history.FirstOrDefault();
-                string text = latest == null ? "暂无每日进展" : DayOf(latest) + "：" + String.Join("\r\n",history.Where(note=>DayOf(note)==DayOf(latest)).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>Plain(ProgressDisplayBody((string)note["comment"]))));
+                string progress = latest == null ? "暂无每日进展" : DayOf(latest) + "：" + String.Join("\r\n",history.Where(note=>DayOf(note)==DayOf(latest)).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>Plain(ProgressDisplayBody((string)note["comment"]))));
+                string text = tasks.CurrentTaskText(node) + "\r\n\r\n" + progress;
                 if(text.Length > 1500) text = text.Substring(0, 1500) + "…";
                 if(!closing && node == hoverNode && node.TreeView == tasks) progressTip.Show(text, tasks, tasks.PointToClient(Cursor.Position).X + 12, tasks.PointToClient(Cursor.Position).Y + 18, 20000);
             } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }

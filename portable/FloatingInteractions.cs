@@ -23,6 +23,7 @@ internal sealed partial class TaskTreeView : TreeView {
     bool swallowCompletionUp;
 
     internal TaskTreeView() {
+        DoubleBuffered=true;
         CheckBoxes=false;
         StateImageList=completionImages;
     }
