@@ -97,11 +97,17 @@ internal sealed partial class TaskTreeView : TreeView {
         base.OnKeyDown(e);
     }
     protected override void WndProc(ref Message message) {
+        bool repaintAfterScroll=message.Msg==0x114 || message.Msg==0x20E;
         if(HandleCompletionMessage(ref message)) return;
         if(HandleSimpleImageMessage(ref message)) return;
         if(HandleTaskDoubleClick(ref message)) return;
         if(HandleWindowDragMessage(ref message)) return;
         base.WndProc(ref message);
+        if(repaintAfterScroll) {
+            // Native TreeView does not reliably invalidate owner-drawn labels after horizontal
+            // scrolling. Repaint now so text and clickable markers move without requiring a click.
+            Invalidate();Update();
+        }
         if(message.Msg != 0xF || !Dropping) return;
         using(var canvas = CreateGraphics()) using(var pen = new Pen(Color.FromArgb(36,94,210), 2)) {
             if(DropNode == null) canvas.DrawLine(pen, 8, ClientSize.Height-3, ClientSize.Width-8, ClientSize.Height-3);

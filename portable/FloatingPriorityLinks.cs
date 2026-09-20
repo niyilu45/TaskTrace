@@ -48,13 +48,13 @@ internal sealed partial class TaskTreeView {
         return strikeNodeFont;
     }
     internal void DisposeDisplayFonts() {foreach(var font in new[]{boldNodeFont,strikeNodeFont,boldStrikeNodeFont})if(font!=null)font.Dispose();boldNodeFont=strikeNodeFont=boldStrikeNodeFont=null;}
-    protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);QueueWrappedLayout();}
-    protected override void OnSizeChanged(EventArgs e) {base.OnSizeChanged(e);QueueWrappedLayout();}
+    protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);RefreshWrappedLayout(true);QueueWrappedLayout();}
+    protected override void OnSizeChanged(EventArgs e) {base.OnSizeChanged(e);RefreshWrappedLayout(true);Invalidate();Update();QueueWrappedLayout();}
     protected override void OnAfterExpand(TreeViewEventArgs e) {base.OnAfterExpand(e);QueueWrappedLayout();}
     protected override void OnAfterCollapse(TreeViewEventArgs e) {base.OnAfterCollapse(e);QueueWrappedLayout();}
 
     int TextLineHeight(Font font) {
-        return TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+4;
+        return TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+1;
     }
     int WrappedTextHeight(string text,Font font,int width) {
         if(String.IsNullOrEmpty(text))return TextLineHeight(font);
@@ -81,16 +81,19 @@ internal sealed partial class TaskTreeView {
         else RefreshWrappedLayout();
         Invalidate();
     }
-    internal void RefreshWrappedLayout() {
+    internal void RefreshWrappedLayout(bool forceRepaint=false) {
         if(!WrapNodeText || !IsHandleCreated || ClientSize.Width<=0)return;
-        int height=Math.Max(1,normalItemHeight);
-        for(var node=Nodes.Count>0?Nodes[0]:null;node!=null;node=node.NextVisibleNode)height=Math.Max(height,WrappedNodeHeight(node));
-        if(ItemHeight!=height) {ItemHeight=height;Invalidate();}
+        // TreeView exposes one native ItemHeight for the whole control. Keep it stable instead of
+        // letting one long title resize every short row whenever the window width changes.
+        // Two compact text lines fit in this fixed slot; short rows stay visually single-line.
+        int height=Math.Max(Math.Max(1,normalItemHeight),TextLineHeight(Font)*2);
+        if(ItemHeight!=height){ItemHeight=height;Invalidate();}
+        else if(forceRepaint)Invalidate();
     }
     void QueueWrappedLayout() {
         if(!WrapNodeText || wrapLayoutQueued || !IsHandleCreated || IsDisposed)return;
         wrapLayoutQueued=true;
-        BeginInvoke(new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed)RefreshWrappedLayout();}));
+        BeginInvoke(new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed){RefreshWrappedLayout(true);Update();}}));
     }
     internal string CurrentTaskText(TreeNode node) {
         var task=node as FloatingWindow.TaskNode;var leaf=node==null?null:node.Tag as FloatingWindow.OutstandingLeaf;string text=node==null?"":node.Text.TrimEnd(' ');
@@ -213,9 +216,10 @@ internal sealed partial class FloatingWindow {
         bool originalMode=simpleMode,originalBusy=busy,originalRendering=rendering,originalTesting=simpleDetailsTesting;
         var originalSize=Size;var originalSelected=tasks.SelectedNode;
         simpleDetailsTesting=true;InvalidateSimpleOutstanding();rendering=true;SetBusy(false);
-        int clicks=0,checks=0,drags=0,doubleClicks=0,taskDoubleClicks=0,expands=0;TreeNode clicked=null;
+        int clicks=0,checks=0,drags=0,doubleClicks=0,taskDoubleClicks=0,expands=0,layoutInvalidations=0;TreeNode clicked=null;
         TreeViewCancelEventHandler check=delegate{checks++;};ItemDragEventHandler drag=delegate{drags++;};
         TreeNodeMouseClickEventHandler doubleClick=delegate{doubleClicks++;};TreeViewEventHandler expand=delegate{expands++;};
+        InvalidateEventHandler layoutInvalidated=delegate{layoutInvalidations++;};
         try {
             SetSimpleMode(false);Size=new Size(470,700);tasks.Nodes.Clear();
             for(int priority=0;priority<=9;priority++)tasks.Nodes.Add(new TreeNode((priority+1)+". [P"+priority+"] 优先级验收事项"){Tag=910000L+priority});
@@ -260,18 +264,22 @@ internal sealed partial class FloatingWindow {
                 var bodyMessage=Message.Create(tasks.Handle,0x201,new IntPtr(1),new IntPtr(((nestedBounds.Top+nestedBounds.Height/2)<<16)|(bodyX&0xffff)));
                 if(tasks.HandleSimpleImageMessage(ref bodyMessage))throw new Exception("A priority marker inside the task title triggered the link");
             }
-            var longNode=tasks.Nodes[0];longNode.Text="1. [P0] 这是一个用于验证窄窗口自动换行并在加宽后恢复紧凑行高的较长任务标题";longNode.EnsureVisible();Size=new Size(230,420);tasks.RefreshWrappedLayout();tasks.Refresh();
+            tasks.Invalidated+=layoutInvalidated;
+            var longNode=tasks.Nodes[0];longNode.Text="1. [P0] 这是一个用于验证窄窗口自动换行且不改变其它条目行高的较长任务标题";longNode.EnsureVisible();Size=new Size(230,420);tasks.RefreshWrappedLayout();tasks.Update();
             int narrowWrappedHeight=tasks.ItemHeight;
-            if(!tasks.WrapNodeText || narrowWrappedHeight<=28)throw new Exception("Simple mode did not wrap a long task title at narrow width");
+            if(!tasks.WrapNodeText || narrowWrappedHeight<=28 || layoutInvalidations==0)throw new Exception("Simple mode resize did not immediately reflow and repaint wrapped text");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-wrapped-title-test.png"));}
-            Size=new Size(900,570);tasks.RefreshWrappedLayout();
-            if(tasks.ItemHeight>=narrowWrappedHeight)throw new Exception("Wrapped task rows did not shrink after widening the simple window");
+            layoutInvalidations=0;Size=new Size(900,570);tasks.RefreshWrappedLayout();tasks.Update();
+            if(tasks.ItemHeight!=narrowWrappedHeight)throw new Exception("One wrapped title changed every task row height after resizing");
+            if(layoutInvalidations==0)throw new Exception("Widening the simple window did not immediately repaint task text");
             // Keep the existing horizontal-scroll interaction check independent from simple-mode wrapping.
-            tasks.SetWrappedText(false);Size=new Size(230,420);tasks.Refresh();
+            tasks.SetWrappedText(false);layoutInvalidations=0;Size=new Size(230,420);tasks.Update();
+            if(layoutInvalidations==0)throw new Exception("Full/single-line text did not repaint immediately after resizing");
             var beforeScroll=tasks.PriorityLinkBounds(longNode);
-            SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);tasks.Refresh();
+            layoutInvalidations=0;SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);SendSimpleMessage(tasks.Handle,0x114,new IntPtr(1),IntPtr.Zero);
             var afterScroll=tasks.PriorityLinkBounds(longNode);
-            if(afterScroll.Left>=beforeScroll.Left || afterScroll.Right<=0)throw new Exception("Priority link did not follow horizontal scrolling: before="+beforeScroll+", after="+afterScroll+", client="+tasks.ClientSize+", node="+longNode.Bounds);
+            if(layoutInvalidations==0 || afterScroll.Left>=beforeScroll.Left || afterScroll.Right<=0)throw new Exception("Owner-drawn text did not repaint and follow horizontal scrolling: before="+beforeScroll+", after="+afterScroll+", client="+tasks.ClientSize+", node="+longNode.Bounds);
+            tasks.Invalidated-=layoutInvalidated;
             int visibleX=Math.Max(1,afterScroll.Left)+Math.Min(afterScroll.Width,afterScroll.Right-Math.Max(1,afterScroll.Left))/2;
             int scrollPoint=((afterScroll.Top+afterScroll.Height/2)<<16)|(visibleX&0xffff);int previousClicks=clicks;
             SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(scrollPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(scrollPoint));
@@ -282,9 +290,9 @@ internal sealed partial class FloatingWindow {
             if(clicks!=cancelBefore)throw new Exception("Releasing outside a priority link should cancel it");
             SendSimpleMessage(tasks.Handle,0x114,new IntPtr(6),IntPtr.Zero);tasks.SetWrappedText(true);longNode.Text="1. [P0] 点击优先级标记即可修改";Size=new Size(390,570);tasks.RefreshWrappedLayout();longNode.EnsureVisible();tasks.SelectedNode=null;tasks.Refresh();
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-priority-links-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 on tasks and outstanding items in full/simple mode; long simple-mode titles wrap and reflow on resize; body markers excluded; task double-click invokes its action without changing expanded/collapsed state; priority single/double-click isolated from checks, drag and expansion; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
+            File.WriteAllText(Path.Combine(data,"floating-priority-links-test.txt"),"PASS: priorities 0-9 on tasks and outstanding items in full/simple mode; owner-drawn text repaints immediately after resize/horizontal scrolling; long simple-mode titles wrap without resizing unrelated rows; body markers excluded; task double-click invokes its action without changing expanded/collapsed state; priority single/double-click isolated from checks, drag and expansion; native title hit target retained; narrow horizontal-scroll targeting; cancelled outside release.");
         } finally {
-            tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.AfterExpand-=expand;tasks.AfterCollapse-=expand;
+            tasks.BeforeCheck-=check;tasks.ItemDrag-=drag;tasks.NodeMouseDoubleClick-=doubleClick;tasks.AfterExpand-=expand;tasks.AfterCollapse-=expand;tasks.Invalidated-=layoutInvalidated;
             InvalidateSimpleOutstanding();tasks.PriorityClicked=originalCallback;tasks.NodeDoubleClicked=originalDoubleClick;SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
             if(originalMode)SetSimpleMode(true);tasks.SetSimpleImageLinks(true);Size=originalSize;
             if(originalSelected!=null && originalSelected.TreeView==tasks)tasks.SelectedNode=originalSelected;
