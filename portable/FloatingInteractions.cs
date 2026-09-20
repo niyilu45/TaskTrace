@@ -381,17 +381,16 @@ internal sealed partial class FloatingWindow {
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString();int originalPriority=defaultPriority;bool writing=false,loading=false,removeExistingImages=false;
-                Action disposePreviews=delegate{foreach(Control control in previews.Controls.Cast<Control>().ToArray()){var box=control as PictureBox;if(box!=null && box.Image!=null)box.Image.Dispose();control.Dispose();}previews.Controls.Clear();};
+                Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
-                    disposePreviews();foreach(var picture in pictures.ToList()){
-                        using(var stream=new MemoryStream(picture.Bytes))using(var image=Image.FromStream(stream)){
-                            var box=new PictureBox{Image=new Bitmap(image),SizeMode=PictureBoxSizeMode.Zoom,Width=62,Height=56,Cursor=Cursors.Hand,AccessibleName="点击移除此待保存图片"};
-                            box.Click+=delegate{if(!writing){pictures.Remove(picture);renderPreviews();}};previews.Controls.Add(box);
-                        }
+                    disposePreviews();
+                    if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog);}
+                    foreach(var picture in pictures.ToList()){
+                        var image=new GalleryImage{Bytes=picture.Bytes,Caption="待保存的遗留事项图片"};
+                        AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();}});
                     }
                     int existing=removeExistingImages?0:Regex.Matches(originalHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
-                    if(existing>0)previews.Controls.Add(new Label{AutoSize=true,Text="已保存 "+existing+" 张图片\r\n点击“查看图片”浏览",Padding=new Padding(3,10,0,0)});
-                    clearImages.Enabled=!writing && existing>0;
+                    previews.AccessibleName="遗留事项图片缩略图，点击查看大图";clearImages.Enabled=!writing && existing>0;
                 };
                 Action render=delegate{loading=true;list.Items.Clear();for(int i=0;i<shared.Items.Count;i++){shared.Items[i].Number=i+1;list.Items.Add(shared.Items[i]);}loading=false;};render();
                 Func<bool> dirty=delegate{return input.Text!=originalText || priority.SelectedIndex!=originalPriority || pictures.Count>0 || removeExistingImages;};
@@ -425,7 +424,7 @@ internal sealed partial class FloatingWindow {
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}renderPreviews();feedback.Text="已粘贴图片，点击保存；点击缩略图可移除待保存图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}renderPreviews();feedback.Text="已粘贴图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 Exception verificationError=null;
@@ -440,6 +439,9 @@ internal sealed partial class FloatingWindow {
                         await write(false);
                         if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=2 || !shared.Items.Last().Html.Contains("编辑器修改验收") || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=2)throw new Exception("Outstanding editor image or priority update failed: "+feedback.Text);
                         list.SelectedIndex=list.Items.Count-1;
+                        var editorImages=new List<GalleryImage>();CollectImages(editorImages,shared.Items.Last().Html,"遗留事项缩略图验收");
+                        if(editorImages.Count!=2 || previews.Controls.OfType<Panel>().Count()!=2)throw new Exception("Saved outstanding images did not create thumbnails");
+                        await ShowImagePreview(editorImages[0],dialog,true);
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
@@ -450,7 +452,7 @@ internal sealed partial class FloatingWindow {
         }catch(Exception e){if(verify)throw;Error(e);}finally{editingOutstanding=false;if(!nested){SetBusy(false);timer.Start();}}
     }
 
-    sealed class GalleryImage {public string Source,Caption;}
+    sealed class GalleryImage {public string Source,Caption;public byte[] Bytes;}
     string AttachmentPath(string source){
         string value=WebUtility.HtmlDecode(source??"");Uri address;
         if(!value.StartsWith("/api/",StringComparison.Ordinal)){

@@ -491,15 +491,17 @@ internal sealed partial class FloatingWindow : Form {
         if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text="请先选中事项。";return; }
         await EditProgress((long)tasks.SelectedNode.Tag,tasks.SelectedNode.Text);
     }
-    async Task EditProgress(long id,string taskTitle,bool verify=false) {
+    async Task EditProgress(long id,string taskTitle,bool verify=false,bool expectSavedImage=false) {
         SetBusy(true); timer.Stop();
         try {
             var history = await ReadHistory(id);
-            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(560,700),MinimumSize=new Size(420,580),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
-                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(580,780),MinimumSize=new Size(440,660),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,92));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new TextBox {Multiline=true,AcceptsReturn=true,ScrollBars=ScrollBars.Vertical,Dock=DockStyle.Fill,AccessibleName="当天进展与更正",AccessibleDescription="当天进展与更正"};
+                var imageGroup=new GroupBox {Text="图片（0）· 点击缩略图查看大图",Dock=DockStyle.Fill,Padding=new Padding(7)};
+                var imagePreviews=new FlowLayoutPanel {Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false,FlowDirection=FlowDirection.LeftToRight,AccessibleName="每日进展图片缩略图，点击查看大图"};imageGroup.Controls.Add(imagePreviews);
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var historyButton=new Button {Text="查看历史进展",Dock=DockStyle.Fill,AccessibleName="查看所有历史进展"};
@@ -518,9 +520,15 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 可填写当日进展，引用旧记录不会改写原记录。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(imageGroup);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="";long commentId=0;var mergedIds=new List<long>();bool submitting=false,referenceExpanded=false,taskDeleted=false;
+                Action renderImages=null;renderImages=delegate {
+                    ClearImageThumbnails(imagePreviews);var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalBody,"每日进展 · "+selectedDay);
+                    foreach(var image in existingImages)AddImageThumbnail(imagePreviews,image,dialog);
+                    foreach(var picture in pictures.ToList())AddImageThumbnail(imagePreviews,new GalleryImage{Bytes=picture.Bytes,Caption="待保存的每日进展图片"},dialog,delegate{if(!submitting){pictures.Remove(picture);renderImages();}});
+                    imageGroup.Text="图片（"+(existingImages.Count+pictures.Count)+"）· 点击缩略图查看大图";
+                };
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=progress.Text,images=pictures.Count,references=SerializeProgressReferences(references)});};
                 Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Text=progress.Text,Pictures=new List<PastedImage>(pictures),References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action refreshReferences=delegate {
@@ -528,7 +536,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
                     int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
                     toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
-                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?230:82;
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[4].Height=referenceList.Visible?230:82;
                     referenceLayout.RowStyles[2].Height=referenceActions.Visible?34:0;
                     referenceGroup.Text="引用历史进展";
                 };
@@ -541,7 +549,7 @@ internal sealed partial class FloatingWindow : Form {
                     references=records.SelectMany(note=>SplitProgressReferences((string)note["comment"],id).References).GroupBy(item=>item.Id).Select(group=>group.First().Copy()).ToList();
                     progress.Text=originalText;pictures=new List<PastedImage>();lastSaved=snapshot();
                     if(drafts.ContainsKey(selectedDay)){progress.Text=drafts[selectedDay].Text;pictures=new List<PastedImage>(drafts[selectedDay].Pictures);references=drafts[selectedDay].References.Select(item=>item.Copy()).ToList();}
-                    refreshReferences();feedback.Text=records.Count==0?"此日期尚无进展。支持 Ctrl+V 粘贴图片。":"已载入当天合并内容；正文、原图片和引用分别保留。";
+                    renderImages();refreshReferences();feedback.Text=records.Count==0?"此日期尚无进展。支持 Ctrl+V 粘贴图片。":"已载入当天合并内容；正文、原图片和引用分别保留。";
                 };
                 loadDay();day.ValueChanged+=delegate {if(!submitting){stash();loadDay();}};
                 toggleReferences.LinkClicked+=delegate{referenceExpanded=!referenceExpanded;refreshReferences();};
@@ -573,7 +581,7 @@ internal sealed partial class FloatingWindow : Form {
                         string body=progress.Text==originalText?originalBody:ProgressTextHtml(progress.Text)+images;
                         commentId=await SaveProgress(id,day.Value,progress.Text,"",pictures,commentId,body,mergedIds,references);
                         foreach(var picture in pictures) body+="<p><img src=\"/api/v1/tasks/"+id+"/attachments/"+picture.Id+"\"></p>";
-                        originalBody=body;originalText=progress.Text;pictures.Clear();lastSaved=snapshot();drafts.Remove(selectedDay);
+                        originalBody=body;originalText=progress.Text;pictures.Clear();renderImages();lastSaved=snapshot();drafts.Remove(selectedDay);
                         history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text=finish?"当天进展已保存，可以继续编辑。":"当天进展已自动保存。";
                         }
                     } catch {feedback.Text="保存失败，内容已保留，请重试。";}
@@ -589,7 +597,7 @@ internal sealed partial class FloatingWindow : Form {
                     finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.ReadOnly=false;}}
                 };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}feedback.Text="已粘贴 "+pictures.Count+" 张图片。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage {Bytes=stream.ToArray()});}renderImages();feedback.Text="已粘贴 "+pictures.Count+" 张图片；点击缩略图查看大图，右上角 × 可移除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 Exception verificationError=null;
@@ -600,6 +608,13 @@ internal sealed partial class FloatingWindow : Form {
                         if(chooseReferences.Height<28 || !dialog.ClientRectangle.Contains(chooseBounds))throw new Exception("Reference picker button is clipped in progress dialog");
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
                         var historyBounds=dialog.RectangleToClient(historyButton.RectangleToScreen(historyButton.ClientRectangle));if(historyButton.Height<28 || !dialog.ClientRectangle.Contains(historyBounds))throw new Exception("All-progress history button is clipped in progress dialog");
+                        if(expectSavedImage && !Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase))throw new Exception("Saved progress image was not loaded into the editor");
+                        if(Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase) && imagePreviews.Controls.Count==0)throw new Exception("Saved progress images did not create thumbnails");
+                        byte[] previewBytes;using(var previewBitmap=new Bitmap(64,40))using(var previewStream=new MemoryStream()){using(var canvas=Graphics.FromImage(previewBitmap))canvas.Clear(Color.CornflowerBlue);previewBitmap.Save(previewStream,System.Drawing.Imaging.ImageFormat.Png);previewBytes=previewStream.ToArray();}
+                        var previewPicture=new PastedImage{Bytes=previewBytes};int thumbnailCount=imagePreviews.Controls.Count;pictures.Add(previewPicture);renderImages();if(imagePreviews.Controls.Count!=thumbnailCount+1)throw new Exception("Pasted progress image did not create a thumbnail");
+                        var thumbnailLoads=imagePreviews.Controls.Cast<Control>().SelectMany(control=>control.Controls.OfType<PictureBox>()).Select(box=>box.Tag as Task).Where(task=>task!=null).ToArray();if(thumbnailLoads.Length>0)await Task.WhenAll(thumbnailLoads);
+                        using(var imageBitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(imageBitmap,new Rectangle(Point.Empty,dialog.Size));imageBitmap.Save(Path.Combine(data,"floating-progress-image-thumbnails-test.png"));}
+                        await ShowImagePreview(new GalleryImage{Bytes=previewBytes,Caption="每日进展缩略图验收"},dialog,true);pictures.Remove(previewPicture);renderImages();
                         await ShowProgressHistory(id,taskTitle,history,dialog,true);
                         using(var calendar=day.RenderCalendarForTest())calendar.Save(Path.Combine(data,"floating-progress-calendar-test.png"));
                         DateTime beforeOutside=day.Value;day.OpenCalendarForTest();if(!day.CalendarVisibleForTest())throw new Exception("Progress calendar did not open modelessly");day.SimulateCalendarOutsideClickForTest();if(day.CalendarVisibleForTest() || day.Value!=beforeOutside)throw new Exception("Clicking outside progress calendar did not cancel selection");
@@ -626,7 +641,7 @@ internal sealed partial class FloatingWindow : Form {
                     } catch(Exception e){verificationError=e;}finally{drafts.Clear();dialog.Close();}
                 };
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(taskDeleted)return;if(submitting){e.Cancel=true;return;}if(verify)return;stash();if(drafts.Count>0 && MessageBox.Show(dialog,"还有日期的进展未保存，确定放弃这些修改？","每日进展",MessageBoxButtons.YesNo)!=DialogResult.Yes)e.Cancel=true;};
-                try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
+                try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();ClearImageThumbnails(imagePreviews);}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
         }catch(Exception e){if(verify)throw;Error(e);}finally{SetBusy(false);timer.Start();}
@@ -1026,6 +1041,10 @@ internal sealed partial class FloatingWindow : Form {
             if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=9 || !parsedShared.Items[1].Done || String.IsNullOrWhiteSpace(parsedShared.Items[1].CompletedAt) || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding status, priority, completion time or merged history failed");
             sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
+            await SaveProgress(childId,DateTime.Today.AddDays(-3),"更早一日进展","");
+            var editorPictures=new List<PastedImage>();using(var editorBitmap=new Bitmap(48,32))using(var editorCanvas=Graphics.FromImage(editorBitmap))using(var editorStream=new MemoryStream()){editorCanvas.Clear(Color.MediumSeaGreen);editorBitmap.Save(editorStream,System.Drawing.Imaging.ImageFormat.Png);editorPictures.Add(new PastedImage{Bytes=editorStream.ToArray()});}
+            await SaveProgress(childId,DateTime.Today,"今日进展缩略图验收","",editorPictures);
+            await EditProgress(childId,"子任务验收改名",true,true);
             TestSimpleModeRecovery();
             var beforeSimple=Bounds;SetSimpleMode(true);Size=new Size(230,220);
             if(!simpleMode || content.Visible || toolbar.Visible || taskSurface.Parent!=this || FormBorderStyle!=FormBorderStyle.None)throw new Exception("Simple mode layout failed");
