@@ -74,12 +74,10 @@
 					</span>
 				</button>
 				<template v-if="isLocalBuild">
-					<button
+					<div
 						v-for="notice in teamStore.status.notifications"
 						:key="notice.id"
-						type="button"
 						class="single-notification team-notification-row"
-						@click="openTeamActivity"
 					>
 						<span class="read-indicator" />
 						<img
@@ -93,10 +91,20 @@
 							class="team-notification-avatar team-notification-avatar--fallback"
 						>{{ initials(notice.actor || '') }}</span>
 						<span class="detail">
-							<span><strong>{{ notice.actor || '协作成员' }}</strong> 更新了“{{ notice.task_title || '团队任务' }}”</span>
+							<span class="team-notification-message">
+								<strong>{{ notice.actor || '协作成员' }}</strong> 更新了事项
+								<button
+									type="button"
+									class="team-task-link"
+									:title="`打开“${notice.task_title || '团队任务'}”的对应评论`"
+									@click.stop="openTeamNotification(notice)"
+								>
+									“{{ notice.task_title || '团队任务' }}”
+								</button>
+							</span>
 							<span class="created">{{ notice.created ? formatDisplayDate(notice.created) : '刚刚' }}</span>
 						</span>
-					</button>
+					</div>
 				</template>
 				<div
 					v-for="(n, index) in notifications"
@@ -196,6 +204,7 @@ import {useI18n} from 'vue-i18n'
 import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import type {TaskTraceTeamNotification} from '@/client/generated'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
@@ -277,6 +286,32 @@ function openUpdateDetails() {
 function openTeamActivity() {
 	showNotifications.value = false
 	window.dispatchEvent(new CustomEvent('tasktrace-team-activity-open'))
+}
+
+async function openTeamNotification(notice: TaskTraceTeamNotification) {
+	const taskId = Number(notice.task_id || 0)
+	if (!taskId) {
+		openTeamActivity()
+		return
+	}
+	showNotifications.value = false
+	const commentId = Number(notice.comment_id || 0)
+	const route: RouteLocationRaw = {
+		name: 'task.detail',
+		params: {id: taskId},
+		...(commentId ? {hash: `#comment-${commentId}`} : {}),
+	}
+	const failure = await router.push(route)
+	if (isNavigationFailure(failure, NavigationFailureType.duplicated) && commentId) {
+		document.getElementById(`comment-${commentId}`)?.scrollIntoView({behavior: 'smooth', block: 'center'})
+	}
+	if (notice.id) {
+		try {
+			await teamStore.dismissNotifications([notice.id])
+		} catch (cause) {
+			console.warn('Failed to mark team notification as read:', cause)
+		}
+	}
 }
 
 function teamAvatar(username: string, preferred = '') {
@@ -426,6 +461,7 @@ async function clearAll() {
 		overflow-y: auto;
 
 		background: var(--white);
+		color: var(--text);
 		inline-size: 350px;
 		max-inline-size: calc(100vw - 2rem);
 		padding: .75rem .25rem;
@@ -557,13 +593,39 @@ async function clearAll() {
 		color: var(--grey-800);
 		font: inherit;
 		text-align: start;
-		cursor: pointer;
+		cursor: default;
 		.detail {
 			display: grid;
 			min-inline-size: 0;
 			gap: .125rem;
 		}
 		strong, .detail > span:first-child { overflow-wrap: anywhere; }
+	}
+
+	.team-notification-message {
+		color: var(--text);
+
+		strong {
+			color: var(--text-strong);
+		}
+	}
+
+	.team-task-link {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		color: var(--primary);
+		font: inherit;
+		font-weight: 700;
+		text-align: start;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+		cursor: pointer;
+
+		&:hover,
+		&:focus-visible {
+			color: var(--link-hover);
+		}
 	}
 
 	.team-notification-avatar {

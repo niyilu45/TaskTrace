@@ -127,7 +127,16 @@
 							class="team-avatar team-avatar--small team-avatar--fallback"
 						>{{ initials(notice.actor || '') }}</span>
 						<div class="team-notification__content">
-							<p><strong>{{ notice.actor }}</strong> 更新了“{{ notice.task_title }}”</p>
+							<p>
+								<strong>{{ notice.actor || '协作成员' }}</strong> 更新了事项
+								<button
+									type="button"
+									class="team-notification__task-link"
+									@click="openNotification(notice)"
+								>
+									“{{ notice.task_title || '团队任务' }}”
+								</button>
+							</p>
 							<span class="has-text-grey">{{ formatDisplayDate(notice.created) }}</span>
 						</div>
 					</div>
@@ -183,6 +192,7 @@
 
 <script setup lang="ts">
 import {onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
+import {useRouter} from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import Modal from '@/components/misc/Modal.vue'
@@ -193,8 +203,10 @@ import {formatDisplayDate} from '@/helpers/time/formatDate'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {error, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import type {TaskTraceTeamNotification} from '@/client/generated'
 
 const teamStore = useTasktraceTeamStore()
+const router = useRouter()
 const showImport = ref(false)
 const showActivity = ref(false)
 const link = ref('')
@@ -290,6 +302,21 @@ async function resolveConflicts() {
 async function dismissNotifications() {
 	try { await teamStore.dismissNotifications() } catch (cause) { error(cause) }
 }
+
+async function openNotification(notice: TaskTraceTeamNotification) {
+	const taskId = Number(notice.task_id || 0)
+	if (!taskId) return
+	showActivity.value = false
+	const commentId = Number(notice.comment_id || 0)
+	await router.push({
+		name: 'task.detail',
+		params: {id: taskId},
+		...(commentId ? {hash: `#comment-${commentId}`} : {}),
+	})
+	if (notice.id) {
+		try { await teamStore.dismissNotifications([notice.id]) } catch (cause) { error(cause) }
+	}
+}
 </script>
 
 <style scoped lang="scss">
@@ -376,6 +403,7 @@ async function dismissNotifications() {
 	border: 1px solid var(--grey-200);
 	border-radius: 10px;
 	background: var(--white);
+	color: var(--text);
 	box-shadow: var(--shadow-xs);
 }
 
@@ -385,7 +413,30 @@ async function dismissNotifications() {
 
 .team-notification__content p {
 	margin: 0 0 .2rem;
+	color: var(--text);
 	overflow-wrap: anywhere;
+}
+
+.team-notification__content strong {
+	color: var(--text-strong);
+}
+
+.team-notification__task-link {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--primary);
+	font: inherit;
+	font-weight: 700;
+	text-align: start;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	cursor: pointer;
+}
+
+.team-notification__task-link:hover,
+.team-notification__task-link:focus-visible {
+	color: var(--link-hover);
 }
 
 .team-notification__content span {

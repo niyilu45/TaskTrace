@@ -95,6 +95,60 @@ func TestTaskTraceTeamSnapshotHashIgnoresSyncTimeAndAvatar(t *testing.T) {
 	require.NotEqual(t, taskTraceTeamSnapshotHash(base), taskTraceTeamSnapshotHash(changedTask))
 }
 
+func TestTaskTraceTeamProgressNotificationIsCreatedOncePerSavedContent(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	previous := TaskTraceTeamSnapshot{
+		Actor: "alice",
+		Tasks: []TaskTraceTeamTask{{
+			NodeID: "node",
+			Title:  "具体事项",
+			Comments: []TaskTraceTeamComment{{
+				ID:      "progress",
+				Body:    taskTraceTeamAddMarker("<p>原进展</p>", "progress", "alice"),
+				Author:  "alice",
+				Created: now,
+				Updated: now,
+			}},
+		}},
+	}
+	current := previous
+	current.Tasks = append([]TaskTraceTeamTask(nil), previous.Tasks...)
+	current.Tasks[0].Comments = append([]TaskTraceTeamComment(nil), previous.Tasks[0].Comments...)
+	current.Tasks[0].Comments[0].Body = taskTraceTeamAddMarker("<p>更正后的进展</p>", "progress", "alice")
+	current.Tasks[0].Comments[0].Updated = now.Add(time.Minute)
+
+	change := taskTraceTeamLatestProgressChange(&previous, current, "Alice")
+	require.NotNil(t, change)
+	require.Equal(t, "具体事项", change.TaskTitle)
+	require.Equal(t, "progress", change.Comment.ID)
+	require.Equal(
+		t,
+		taskTraceTeamProgressNotificationID("share", "alice", change),
+		taskTraceTeamProgressNotificationID("share", "Alice", change),
+	)
+
+	unchanged := current
+	unchanged.Tasks = append([]TaskTraceTeamTask(nil), current.Tasks...)
+	unchanged.Tasks[0].Comments = append([]TaskTraceTeamComment(nil), current.Tasks[0].Comments...)
+	unchanged.Tasks[0].Comments[0].Body = taskTraceTeamAddMarker("<p>更正后的进展</p>", "progress", "alice")
+	unchanged.Tasks[0].Comments[0].Updated = now.Add(2 * time.Minute)
+	require.Nil(t, taskTraceTeamLatestProgressChange(&current, unchanged, "alice"), "同步标记或时间变化不能重复通知")
+}
+
+func TestTaskTraceTeamProgressNotificationIgnoresOtherAuthors(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	previous := TaskTraceTeamSnapshot{Actor: "alice", Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "事项"}}}
+	current := previous
+	current.Tasks = []TaskTraceTeamTask{{
+		NodeID: "node",
+		Title:  "事项",
+		Comments: []TaskTraceTeamComment{{
+			ID: "bob-progress", Body: "<p>Bob 的进展</p>", Author: "bob", Created: now, Updated: now,
+		}},
+	}}
+	require.Nil(t, taskTraceTeamLatestProgressChange(&previous, current, "alice"), "同步到本机的他人进展不能再由本机重复通知")
+}
+
 func TestTaskTraceTeamSafeAvatarRejectsActiveContent(t *testing.T) {
 	require.Equal(t, "data:image/png;base64,AAAA", taskTraceTeamSafeAvatar("data:image/png;base64,AAAA"))
 	require.Empty(t, taskTraceTeamSafeAvatar("data:image/svg+xml;base64,AAAA"))

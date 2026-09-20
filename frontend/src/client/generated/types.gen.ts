@@ -2781,9 +2781,13 @@ export type TaskTraceTeamMemberProfile = {
 export type TaskTraceTeamNotification = {
     actor?: string;
     avatar?: string;
+    comment_id?: number;
     created?: string;
     id?: string;
+    node_id?: string;
     share_id?: string;
+    shared_comment_id?: string;
+    task_id?: number;
     task_title?: string;
 };
 

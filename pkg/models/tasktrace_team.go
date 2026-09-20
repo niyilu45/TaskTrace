@@ -193,12 +193,16 @@ type TaskTraceTeamBindingStatus struct {
 }
 
 type TaskTraceTeamNotification struct {
-	ID        string    `json:"id"`
-	ShareID   string    `json:"share_id"`
-	Actor     string    `json:"actor"`
-	Avatar    string    `json:"avatar,omitempty"`
-	TaskTitle string    `json:"task_title"`
-	Created   time.Time `json:"created"`
+	ID              string    `json:"id"`
+	ShareID         string    `json:"share_id"`
+	Actor           string    `json:"actor"`
+	Avatar          string    `json:"avatar,omitempty"`
+	TaskTitle       string    `json:"task_title"`
+	NodeID          string    `json:"node_id,omitempty"`
+	SharedCommentID string    `json:"shared_comment_id,omitempty"`
+	TaskID          int64     `json:"task_id,omitempty"`
+	CommentID       int64     `json:"comment_id,omitempty"`
+	Created         time.Time `json:"created"`
 }
 
 type TaskTraceTeamMemberProfile struct {
@@ -725,6 +729,63 @@ func taskTraceTeamSnapshotHash(snapshot TaskTraceTeamSnapshot) string {
 	return hex.EncodeToString(sum[:])
 }
 
+type taskTraceTeamProgressChange struct {
+	NodeID    string
+	TaskTitle string
+	Comment   TaskTraceTeamComment
+}
+
+func taskTraceTeamCommentContent(body string) string {
+	return strings.TrimSpace(taskTraceTeamMarker.ReplaceAllString(body, ""))
+}
+
+func taskTraceTeamLatestProgressChange(previous *TaskTraceTeamSnapshot, current TaskTraceTeamSnapshot, actor string) *taskTraceTeamProgressChange {
+	if previous == nil {
+		return nil
+	}
+	previousComments := map[string]string{}
+	for _, task := range previous.Tasks {
+		for _, comment := range task.Comments {
+			previousComments[task.NodeID+"\x00"+comment.ID] = taskTraceTeamCommentContent(comment.Body)
+		}
+	}
+	var latest *taskTraceTeamProgressChange
+	for _, task := range current.Tasks {
+		for _, comment := range task.Comments {
+			if !strings.EqualFold(comment.Author, actor) {
+				continue
+			}
+			key := task.NodeID + "\x00" + comment.ID
+			body := taskTraceTeamCommentContent(comment.Body)
+			if previousBody, exists := previousComments[key]; exists && previousBody == body {
+				continue
+			}
+			candidate := &taskTraceTeamProgressChange{NodeID: task.NodeID, TaskTitle: task.Title, Comment: comment}
+			if latest == nil || candidate.Comment.Updated.After(latest.Comment.Updated) ||
+				(candidate.Comment.Updated.Equal(latest.Comment.Updated) && candidate.Comment.Created.After(latest.Comment.Created)) {
+				latest = candidate
+			}
+		}
+	}
+	return latest
+}
+
+func taskTraceTeamProgressNotificationID(shareID, actor string, change *taskTraceTeamProgressChange) string {
+	when := change.Comment.Updated
+	if when.IsZero() {
+		when = change.Comment.Created
+	}
+	source := strings.Join([]string{
+		shareID,
+		strings.ToLower(actor),
+		change.NodeID,
+		change.Comment.ID,
+		when.UTC().Format(time.RFC3339Nano),
+		taskTraceTeamCommentContent(change.Comment.Body),
+	}, "\x00")
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(source)).String()
+}
+
 func taskTraceTeamBaseFromSnapshot(snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTeamBase {
 	base := map[string]TaskTraceTeamBase{}
 	for _, task := range snapshot.Tasks {
@@ -1230,6 +1291,12 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
+	var previousLocal *TaskTraceTeamSnapshot
+	var storedLocal TaskTraceTeamSnapshot
+	if readErr := taskTraceTeamReadJSON(taskTraceTeamSnapshotPath(binding, actor, state.DeviceID), &storedLocal); readErr == nil {
+		previousLocal = &storedLocal
+	}
+	progressChange := taskTraceTeamLatestProgressChange(previousLocal, local, actor)
 	localHash := taskTraceTeamSnapshotHash(local)
 	localChanged := binding.LastSnapshotHash != "" && binding.LastSnapshotHash != localHash
 	if err := taskTraceTeamWriteSnapshot(binding, local); err != nil {
@@ -1369,16 +1436,28 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	binding.Conflicts = conflicts
 	binding.LastSync = time.Now().UTC()
 	binding.LastError = ""
-	if binding.Notify && localChanged {
-		rootTitle := "团队任务"
-		if root, err := GetTaskByIDSimple(s, binding.RootTaskID); err == nil {
-			rootTitle = root.Title
+	if binding.Notify && localChanged && progressChange != nil {
+		created := progressChange.Comment.Updated
+		if created.IsZero() {
+			created = progressChange.Comment.Created
+		}
+		if created.IsZero() {
+			created = time.Now().UTC()
+		}
+		notice := TaskTraceTeamNotification{
+			ID:              taskTraceTeamProgressNotificationID(binding.ShareID, actor, progressChange),
+			ShareID:         binding.ShareID,
+			Actor:           actor,
+			Avatar:          local.Avatar,
+			TaskTitle:       progressChange.TaskTitle,
+			NodeID:          progressChange.NodeID,
+			SharedCommentID: progressChange.Comment.ID,
+			Created:         created.UTC(),
 		}
 		for _, member := range binding.Members {
 			if strings.EqualFold(member, actor) {
 				continue
 			}
-			notice := TaskTraceTeamNotification{ID: uuid.NewString(), ShareID: binding.ShareID, Actor: actor, Avatar: local.Avatar, TaskTitle: rootTitle, Created: time.Now().UTC()}
 			path := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "notifications", strings.ToLower(member), notice.ID+".json")
 			_ = taskTraceTeamWriteJSON(path, &notice)
 		}
@@ -1706,7 +1785,27 @@ func TaskTraceTeamNotificationsRead(s *xorm.Session, a web.Auth, request TaskTra
 	return &status, err
 }
 
-func taskTraceTeamNotifications(binding *TaskTraceTeamBinding, username string) []TaskTraceTeamNotification {
+func taskTraceTeamResolveNotificationTarget(s *xorm.Session, binding *TaskTraceTeamBinding, notice *TaskTraceTeamNotification) {
+	if notice.NodeID == "" {
+		return
+	}
+	notice.TaskID = binding.NodeTasks[notice.NodeID]
+	if notice.TaskID == 0 || notice.SharedCommentID == "" {
+		return
+	}
+	var comments []*TaskComment
+	if err := s.Where("task_id = ?", notice.TaskID).Find(&comments); err != nil {
+		return
+	}
+	for _, comment := range comments {
+		if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok && marker.ID == notice.SharedCommentID {
+			notice.CommentID = comment.ID
+			return
+		}
+	}
+}
+
+func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, username string) []TaskTraceTeamNotification {
 	dir := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "notifications", strings.ToLower(username))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -1720,6 +1819,7 @@ func taskTraceTeamNotifications(binding *TaskTraceTeamBinding, username string) 
 		var notice TaskTraceTeamNotification
 		if taskTraceTeamReadJSON(filepath.Join(dir, entry.Name()), &notice) == nil {
 			notice.Avatar = taskTraceTeamSafeAvatar(notice.Avatar)
+			taskTraceTeamResolveNotificationTarget(s, binding, &notice)
 			result = append(result, notice)
 		}
 	}
@@ -1778,7 +1878,7 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
 		status.Bindings = append(status.Bindings, row)
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
-		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(&binding, u.Username)...)
+		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(s, &binding, u.Username)...)
 		for _, profile := range taskTraceTeamProfiles(&binding) {
 			key := strings.ToLower(profile.Username)
 			if current := profiles[key]; current.Avatar != "" && profile.Avatar == "" {
