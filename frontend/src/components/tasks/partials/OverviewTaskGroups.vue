@@ -34,6 +34,7 @@
 				v-for="row in visibleRows(project.rows)"
 				:key="row.task.id"
 				class="overview-task-row"
+				:class="{'is-context': row.context}"
 				:data-overview-task="row.task.id"
 				:data-depth="row.depth"
 				:style="{'--task-depth': Math.min(row.depth, 6)}"
@@ -60,13 +61,10 @@
 					<SingleTaskInProject
 						:the-task="row.task"
 						:show-project="false"
+						:title="row.context ? '为显示匹配的下级任务而保留的上级任务' : undefined"
 						:can-mark-as-done="(projectStore.projects[row.task.projectId]?.maxPermission ?? 0) > PERMISSIONS.READ"
 						@taskUpdated="emit('taskUpdated', $event)"
 					/>
-					<span
-						v-if="row.context"
-						class="ancestor-context"
-					>上级任务 · 为保留层级显示</span>
 				</div>
 			</li>
 		</ul>
@@ -128,7 +126,7 @@ function visibleRows(rows: ReturnType<typeof groupOverviewTasks>[number]['rows']
 }
 .overview-task-row {
 	display: flex;
-	align-items: start;
+	align-items: center;
 	padding-inline-start: calc(var(--task-depth) * 1.25rem);
 }
 .tree-toggle, .tree-spacer {
@@ -153,10 +151,6 @@ function visibleRows(rows: ReturnType<typeof groupOverviewTasks>[number]['rows']
 	flex: 1;
 	min-inline-size: 0;
 }
-.ancestor-context {
-	display: block;
-	font-size: .75rem;
-	padding-inline-start: .5rem;
-}
+.overview-task-row.is-context :deep(.single-task) { color: var(--grey-600); }
 .is-collapsed { transform: rotate(-90deg); }
 </style>

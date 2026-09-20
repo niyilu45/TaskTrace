@@ -93,12 +93,14 @@ internal sealed partial class TaskTreeView {
         BeginInvoke(new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed)RefreshWrappedLayout();}));
     }
     internal string CurrentTaskText(TreeNode node) {
-        var task=node as FloatingWindow.TaskNode;string text=node==null?"":node.Text.TrimEnd(' ');
-        return SingleLinePaths && task!=null && task.CurrentTextLength>0 && task.CurrentTextLength<=text.Length?text.Substring(0,task.CurrentTextLength):text;
+        var task=node as FloatingWindow.TaskNode;var leaf=node==null?null:node.Tag as FloatingWindow.OutstandingLeaf;string text=node==null?"":node.Text.TrimEnd(' ');
+        int length=task!=null?task.CurrentTextLength:leaf!=null?leaf.CurrentTextLength:0;
+        return SingleLinePaths && length>0 && length<=text.Length?text.Substring(0,length):text;
     }
     internal string AncestorTaskText(TreeNode node) {
-        var task=node as FloatingWindow.TaskNode;string text=node==null?"":node.Text.TrimEnd(' ');
-        return SingleLinePaths && task!=null && task.CurrentTextLength>0 && task.CurrentTextLength<text.Length?text.Substring(task.CurrentTextLength):"";
+        var task=node as FloatingWindow.TaskNode;var leaf=node==null?null:node.Tag as FloatingWindow.OutstandingLeaf;string text=node==null?"":node.Text.TrimEnd(' ');
+        int length=task!=null?task.CurrentTextLength:leaf!=null?leaf.CurrentTextLength:0;
+        return SingleLinePaths && length>0 && length<text.Length?text.Substring(length):"";
     }
 
     static Match TaskPriorityMatch(TreeNode node) {
@@ -109,7 +111,7 @@ internal sealed partial class TaskTreeView {
         return TextRenderer.MeasureText(text+"x",font,Size.Empty,TextFormatFlags.NoPadding).Width-TextRenderer.MeasureText("x",font,Size.Empty,TextFormatFlags.NoPadding).Width;
     }
     int NodeTextLeft(TreeNode node,Rectangle bounds) {
-        if(SingleLinePaths && node.Tag is long)return CompletionVisualBounds(node).Right+6;
+        if(SingleLinePaths && (node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf))return CompletionVisualBounds(node).Right+6;
         return bounds.Left+2;
     }
     internal Rectangle PriorityLinkBounds(TreeNode node) {
@@ -138,13 +140,13 @@ internal sealed partial class TaskTreeView {
         Color background=selected?SystemColors.Highlight:BackColor;
         Color foreground=selected?SystemColors.HighlightText:e.Node.ForeColor;
         if(foreground.IsEmpty)foreground=ForeColor;
-        if(SingleLinePaths && e.Node.Tag is long && !selected)foreground=Color.FromArgb(31,41,55);
+        if(SingleLinePaths && (e.Node.Tag is long || e.Node.Tag is FloatingWindow.OutstandingLeaf) && !selected)foreground=Color.FromArgb(31,41,55);
         if(!Enabled)foreground=SystemColors.GrayText;
-        var bounds=e.Node.Bounds;int rowLeft=SingleLinePaths && e.Node.Tag is long?0:bounds.Left;
+        var bounds=e.Node.Bounds;int rowLeft=SingleLinePaths && (e.Node.Tag is long || e.Node.Tag is FloatingWindow.OutstandingLeaf)?0:bounds.Left;
         using(var brush=new SolidBrush(background))e.Graphics.FillRectangle(brush,new Rectangle(rowLeft,bounds.Top,Math.Max(0,ClientSize.Width-rowLeft),bounds.Height));
         var image=SimpleImageBounds(e.Node);int textLeft=NodeTextLeft(e.Node,bounds);
-        if(SingleLinePaths && e.Node.Tag is long) {
-            var box=CompletionVisualBounds(e.Node);var checkState=e.Node.Checked?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
+        if(SingleLinePaths && (e.Node.Tag is long || e.Node.Tag is FloatingWindow.OutstandingLeaf)) {
+            var box=CompletionVisualBounds(e.Node);var leaf=e.Node.Tag as FloatingWindow.OutstandingLeaf;bool done=leaf!=null?leaf.Done:e.Node.Checked;var checkState=done?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
             CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(box.Left+1,box.Top+Math.Max(0,(box.Height-14)/2)),checkState);
         }
         if(!image.IsEmpty)using(var underline=new Font(font,font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);

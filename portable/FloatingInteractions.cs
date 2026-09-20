@@ -39,13 +39,13 @@ internal sealed partial class TaskTreeView : TreeView {
     internal void SyncCompletionState(TreeNode node) {
         if(node==null)return;
         var leaf=node.Tag as FloatingWindow.OutstandingLeaf;
-        node.StateImageIndex=node.Tag is long?(SingleLinePaths?0:(node.Checked?2:1)):leaf!=null?(leaf.Done?2:1):0;
+        node.StateImageIndex=(node.Tag is long || leaf!=null) && SingleLinePaths?0:node.Tag is long?(node.Checked?2:1):leaf!=null?(leaf.Done?2:1):0;
         foreach(TreeNode child in node.Nodes)SyncCompletionState(child);
     }
     internal void SyncCompletionStates() {foreach(TreeNode node in Nodes)SyncCompletionState(node);}
     internal Rectangle CompletionVisualBounds(TreeNode node) {
         if(node==null || node.TreeView!=this || !node.IsVisible)return Rectangle.Empty;
-        if(SingleLinePaths && node.Tag is long)return new Rectangle(4,node.Bounds.Top,18,node.Bounds.Height);
+        if(SingleLinePaths && (node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf))return new Rectangle(4,node.Bounds.Top,18,node.Bounds.Height);
         int y=node.Bounds.Top+node.Bounds.Height/2,left=-1,right=-1;
         for(int x=0;x<ClientSize.Width;x++) {
             var hit=HitTest(x,y);
@@ -56,10 +56,10 @@ internal sealed partial class TaskTreeView : TreeView {
     }
     TreeNode CompletionNodeAt(Point point) {
         if(SingleLinePaths && point.X>=4 && point.X<22) {
-            for(var node=TopNode;node!=null;node=node.NextVisibleNode)if(node.Tag is long && CompletionVisualBounds(node).Contains(point))return node;
+            for(var node=TopNode;node!=null;node=node.NextVisibleNode)if((node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf) && CompletionVisualBounds(node).Contains(point))return node;
         }
         var hit=HitTest(point);
-        return hit.Node!=null && (!SingleLinePaths || !(hit.Node.Tag is long)) && (hit.Node.Tag is long || hit.Node.Tag is FloatingWindow.OutstandingLeaf) && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
+        return hit.Node!=null && !SingleLinePaths && (hit.Node.Tag is long || hit.Node.Tag is FloatingWindow.OutstandingLeaf) && (hit.Location&TreeViewHitTestLocations.StateImage)!=0?hit.Node:null;
     }
     internal Rectangle CompletionBounds(TreeNode node) {return CompletionVisualBounds(node);}
     bool HandleCompletionMessage(ref Message message) {
@@ -281,6 +281,7 @@ internal sealed partial class FloatingWindow {
     async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
         var shared=ReadShared(await ReadHistory(taskId));var item=shared.Items.FirstOrDefault(value=>value.Id==itemId);
         if(item==null)throw new Exception("这条遗留事项已被移动或移除，请刷新后重试。");
+        bool completionChanged=done.HasValue && item.Done!=done.Value;
         if(done.HasValue) {
             if(done.Value && !item.Done)item.CompletedAt=DateTimeOffset.UtcNow.ToString("o");
             else if(!done.Value)item.CompletedAt=null;
@@ -288,6 +289,7 @@ internal sealed partial class FloatingWindow {
         }
         if(priority.HasValue)item.Priority=Math.Max(0,Math.Min(9,priority.Value));
         await WriteShared(taskId,shared);
+        if(completionChanged)RememberOutstandingCompletion(taskId,itemId,done.Value);
     }
     async Task ShowPriority(){
         if(busy || closing)return;var selected=tasks.SelectedNode;long id=SelectedTaskId();var leaf=selected==null?null:selected.Tag as OutstandingLeaf;

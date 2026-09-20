@@ -12,20 +12,6 @@
 			<Icon icon="users" />
 			<span class="team-import-text">导入任务链接</span>
 		</BaseButton>
-		<BaseButton
-			class="team-import-button team-activity-button"
-			:aria-label="badgeLabel"
-			:title="badgeLabel"
-			@click="showActivity = true"
-		>
-			<Icon :icon="['far', 'bell']" />
-			<span
-				v-if="teamStore.activityCount"
-				class="team-badge"
-				:aria-label="`${teamStore.activityCount} 条未读团队消息`"
-			>{{ teamStore.activityCount > 99 ? '99+' : teamStore.activityCount }}</span>
-		</BaseButton>
-
 		<Modal
 			:enabled="showImport"
 			@close="closeImport"
@@ -196,7 +182,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
+import {onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import Modal from '@/components/misc/Modal.vue'
@@ -217,11 +203,6 @@ const targetProject = ref<IProject | null>(null)
 const resolutions = reactive<Record<string, string>>({})
 let timer: ReturnType<typeof setInterval> | null = null
 
-const badgeLabel = computed(() => {
-	const count = teamStore.activityCount
-	return count ? `团队通知，${count} 条未读消息或冲突` : '团队通知'
-})
-
 function avatarFor(username: string, preferred = '') {
 	return preferred || teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
 }
@@ -239,22 +220,27 @@ watch(() => teamStore.status.conflicts, conflicts => {
 async function poll() {
 	try {
 		await teamStore.sync()
-		if (teamStore.conflictCount) showActivity.value = true
 	} catch {
 		// An unavailable LAN share is reflected in each binding. Silent retry keeps offline work uninterrupted.
 	}
 }
 
 onMounted(async () => {
-	try { await teamStore.refresh() } catch { return }
-	timer = setInterval(poll, 15_000)
 	window.addEventListener('focus', poll)
+	window.addEventListener('tasktrace-team-activity-open', openActivity)
+	try { await teamStore.refresh() } catch { /* Offline team repositories retry on the next poll. */ }
+	timer = setInterval(poll, 15_000)
 })
 
 onBeforeUnmount(() => {
 	if (timer) clearInterval(timer)
 	window.removeEventListener('focus', poll)
+	window.removeEventListener('tasktrace-team-activity-open', openActivity)
 })
+
+function openActivity() {
+	showActivity.value = true
+}
 
 function closeImport() {
 	showImport.value = false
@@ -322,19 +308,6 @@ async function dismissNotifications() {
 	margin-inline-start: .4rem;
 	font-size: .85rem;
 	font-weight: 600;
-}
-
-.team-badge {
-	position: absolute;
-	inset-block-start: .35rem;
-	inset-inline-end: .2rem;
-	min-inline-size: 1.1rem;
-	padding: 0 .25rem;
-	border-radius: 1rem;
-	background: var(--danger);
-	color: white;
-	font-size: .65rem;
-	text-align: center;
 }
 
 .team-profile {

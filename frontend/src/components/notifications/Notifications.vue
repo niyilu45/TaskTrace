@@ -29,7 +29,7 @@
 					<span>{{ $t('notification.title') }}</span>
 					<div class="actions">
 						<BaseButton
-							v-if="notifications.length > 0"
+							v-if="notifications.length > 0 || teamStore.notificationCount > 0"
 							v-tooltip="$t('notification.clearAll')"
 							class="action-link"
 							:aria-label="$t('notification.clearAll')"
@@ -60,6 +60,44 @@
 						<span class="created">{{ displayReleaseDate(updateStore.state.published_at) }}</span>
 					</span>
 				</button>
+				<button
+					v-if="isLocalBuild && teamStore.conflictCount"
+					type="button"
+					class="single-notification team-notification-row"
+					@click="openTeamActivity"
+				>
+					<span class="read-indicator" />
+					<Icon icon="exclamation-circle" />
+					<span class="detail">
+						<strong>有 {{ teamStore.conflictCount }} 项团队协作冲突需要处理</strong>
+						<span class="created">点击查看并一次性选择处理结果</span>
+					</span>
+				</button>
+				<template v-if="isLocalBuild">
+					<button
+						v-for="notice in teamStore.status.notifications"
+						:key="notice.id"
+						type="button"
+						class="single-notification team-notification-row"
+						@click="openTeamActivity"
+					>
+						<span class="read-indicator" />
+						<img
+							v-if="teamAvatar(notice.actor || '', notice.avatar)"
+							:src="teamAvatar(notice.actor || '', notice.avatar)"
+							alt=""
+							class="team-notification-avatar"
+						>
+						<span
+							v-else
+							class="team-notification-avatar team-notification-avatar--fallback"
+						>{{ initials(notice.actor || '') }}</span>
+						<span class="detail">
+							<span><strong>{{ notice.actor || '协作成员' }}</strong> 更新了“{{ notice.task_title || '团队任务' }}”</span>
+							<span class="created">{{ notice.created ? formatDisplayDate(notice.created) : '刚刚' }}</span>
+						</span>
+					</button>
+				</template>
 				<div
 					v-for="(n, index) in notifications"
 					:key="n.id"
@@ -96,7 +134,7 @@
 					</div>
 				</div>
 				<XButton
-					v-if="notifications.length > 0 && unreadNotifications > 0"
+					v-if="markableUnread > 0"
 					variant="tertiary"
 					class="mbs-2 is-fullwidth"
 					@click="markAllRead"
@@ -104,7 +142,7 @@
 					{{ $t('notification.markAllRead') }}
 				</XButton>
 				<p
-					v-if="notifications.length === 0 && !updateStore.shouldNotify"
+					v-if="notifications.length === 0 && !updateStore.shouldNotify && teamStore.activityCount === 0"
 					class="nothing"
 				>
 					{{ $t('notification.none') }}<br>
@@ -156,6 +194,8 @@ import Modal from '@/components/misc/Modal.vue'
 import {error as showError, success} from '@/message'
 import {useI18n} from 'vue-i18n'
 import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
@@ -163,6 +203,7 @@ const authStore = useAuthStore()
 const router = useRouter()
 const {t} = useI18n()
 const updateStore = useTasktraceUpdateStore()
+const teamStore = useTasktraceTeamStore()
 
 const allNotifications = ref<INotification[]>([])
 const showNotifications = ref(false)
@@ -170,8 +211,9 @@ const showUpdateDetails = ref(false)
 const popup = ref(null)
 
 const unreadNotifications = computed(() => {
-	return notifications.value.filter(n => n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0)
+	return notifications.value.filter(n => n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0) + (isLocalBuild ? teamStore.activityCount : 0)
 })
+const markableUnread = computed(() => notifications.value.filter(n => n.readAt === null).length + (isLocalBuild ? teamStore.notificationCount : 0))
 const notifications = computed(() => {
 	return allNotifications.value ? allNotifications.value.filter(n => n.name !== '') : []
 })
@@ -230,6 +272,19 @@ onUnmounted(() => {
 function openUpdateDetails() {
 	showNotifications.value = false
 	showUpdateDetails.value = true
+}
+
+function openTeamActivity() {
+	showNotifications.value = false
+	window.dispatchEvent(new CustomEvent('tasktrace-team-activity-open'))
+}
+
+function teamAvatar(username: string, preferred = '') {
+	return preferred || teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+}
+
+function initials(username: string) {
+	return username.trim().slice(0, 2).toUpperCase() || '?'
 }
 
 async function declineUpdate() {
@@ -322,7 +377,10 @@ function to(n: INotification, index: number) {
 
 async function markAllRead() {
 	const notificationService = new NotificationService()
-	await notificationService.markAllRead()
+	await Promise.all([
+		notifications.value.some(n => n.readAt === null) ? notificationService.markAllRead() : Promise.resolve(),
+		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
+	])
 	success({message: t('notification.markAllReadSuccess')})
 
 	notifications.value.forEach(n => n.readAt = new Date())
@@ -330,7 +388,10 @@ async function markAllRead() {
 
 async function clearAll() {
 	const notificationService = new NotificationService()
-	await notificationService.delete(new NotificationModel({}))
+	await Promise.all([
+		notifications.value.length ? notificationService.delete(new NotificationModel({})) : Promise.resolve(),
+		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
+	])
 	success({message: t('notification.clearAllSuccess')})
 	allNotifications.value = []
 }
@@ -486,6 +547,40 @@ async function clearAll() {
 			display: grid;
 			gap: .125rem;
 		}
+	}
+
+	.team-notification-row {
+		inline-size: 100%;
+		gap: .45rem;
+		border: 0;
+		background: transparent;
+		color: var(--grey-800);
+		font: inherit;
+		text-align: start;
+		cursor: pointer;
+		.detail {
+			display: grid;
+			min-inline-size: 0;
+			gap: .125rem;
+		}
+		strong, .detail > span:first-child { overflow-wrap: anywhere; }
+	}
+
+	.team-notification-avatar {
+		inline-size: 1.5rem;
+		block-size: 1.5rem;
+		flex: 0 0 1.5rem;
+		border-radius: 50%;
+		object-fit: cover;
+	}
+
+	.team-notification-avatar--fallback {
+		display: inline-grid;
+		place-items: center;
+		background: var(--primary);
+		color: var(--white);
+		font-size: .6rem;
+		font-weight: 700;
 	}
 
 }

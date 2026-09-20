@@ -16,20 +16,42 @@ internal sealed partial class FloatingWindow {
         return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,singleLine.Checked,
             prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
     }
-    static string FieldText(Dictionary<string,object> source,string key) {object value;return source!=null && source.TryGetValue(key,out value) && value!=null?Convert.ToString(value):"";}
-    bool HideCompleted(bool done,string completedAt,ref DateTime nextRefreshUtc) {
-        if(!done || showCompleted.Checked)return false;
-        if(completedHideDelayMinutes<=0)return true;
-        DateTimeOffset completed;if(!DateTimeOffset.TryParse(completedAt,System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out completed))return true;
-        DateTime deadline=completed.UtcDateTime.AddMinutes(completedHideDelayMinutes);
-        if(deadline<=DateTime.UtcNow)return true;
-        if(deadline<nextRefreshUtc)nextRefreshUtc=deadline;
-        return false;
+    static string OutstandingCompletionKey(long taskId,string itemId) {return taskId+":"+itemId;}
+    void RememberTaskCompletion(long id,bool done) {
+        if(done && completedHideDelayMinutes>0)recentlyCompletedTasks[id]=DateTime.UtcNow;
+        else recentlyCompletedTasks.Remove(id);
     }
-    SharedList FilterCompletedOutstanding(SharedList source,ref DateTime nextRefreshUtc) {
+    void RememberOutstandingCompletion(long taskId,string itemId,bool done) {
+        string key=OutstandingCompletionKey(taskId,itemId);
+        if(done && completedHideDelayMinutes>0)recentlyCompletedOutstanding[key]=DateTime.UtcNow;
+        else recentlyCompletedOutstanding.Remove(key);
+    }
+    bool KeepRecentlyCompleted(DateTime completed,ref DateTime nextRefreshUtc) {
+        if(completedHideDelayMinutes<=0)return false;
+        DateTime deadline=completed.AddMinutes(completedHideDelayMinutes);
+        if(deadline<=DateTime.UtcNow)return false;
+        if(deadline<nextRefreshUtc)nextRefreshUtc=deadline;
+        return true;
+    }
+    bool HideCompletedTask(long id,bool done,ref DateTime nextRefreshUtc) {
+        if(!done){recentlyCompletedTasks.Remove(id);return false;}
+        if(showCompleted.Checked)return false;
+        DateTime completed;
+        if(recentlyCompletedTasks.TryGetValue(id,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
+        recentlyCompletedTasks.Remove(id);return true;
+    }
+    bool HideCompletedOutstanding(long taskId,PendingItem item,ref DateTime nextRefreshUtc) {
+        string key=OutstandingCompletionKey(taskId,item.Id);
+        if(!item.Done){recentlyCompletedOutstanding.Remove(key);return false;}
+        if(showCompleted.Checked)return false;
+        DateTime completed;
+        if(recentlyCompletedOutstanding.TryGetValue(key,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
+        recentlyCompletedOutstanding.Remove(key);return true;
+    }
+    SharedList FilterCompletedOutstanding(long taskId,SharedList source,ref DateTime nextRefreshUtc) {
         if(source==null)return null;
         var filtered=new SharedList {CommentId=source.CommentId};
-        for(int index=0;index<source.Items.Count;index++) {var item=source.Items[index];if(item.Number<=0)item.Number=index+1;if(!HideCompleted(item.Done,item.CompletedAt,ref nextRefreshUtc))filtered.Items.Add(item);}
+        for(int index=0;index<source.Items.Count;index++) {var item=source.Items[index];if(item.Number<=0)item.Number=index+1;if(!HideCompletedOutstanding(taskId,item,ref nextRefreshUtc))filtered.Items.Add(item);}
         return filtered;
     }
     bool TaskLoadCurrent(int version,string context,bool background) {
@@ -64,17 +86,32 @@ internal sealed partial class FloatingWindow {
         return null;
     }
     object[] TaskTreeShape(IEnumerable<TreeNode> nodes) {
-        return nodes.Where(node=>node.Tag is long).Select(node=>(object)new object[]{node.Tag,node.Text,node.Checked,
-            node.ToolTipText,TaskTreeShape(node.Nodes.Cast<TreeNode>())}).ToArray();
+        return nodes.Where(node=>node.Tag is long || (singleLine.Checked && node.Tag is OutstandingLeaf)).Select(node=>{
+            var leaf=node.Tag as OutstandingLeaf;
+            return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
+                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html};
+        }).ToArray();
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
         var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();
         flat.Add(node);foreach(var child in children)CollectFlatTaskNodes(child,flat);
     }
-    static List<TreeNode> FlattenTaskNodes(List<TreeNode> roots) {
+    List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists) {
         var flat=new List<TreeNode>();foreach(var root in roots)CollectFlatTaskNodes(root,flat);
+        var hasTaskChildren=flat.ToDictionary(node=>(long)node.Tag,node=>node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long));
         foreach(var node in flat)if(node.Parent!=null)node.Remove();
-        return flat;
+        var visible=new List<TreeNode>();
+        foreach(var node in flat) {
+            long id=(long)node.Tag;SharedList shared;sharedLists.TryGetValue(id,out shared);
+            bool hasPending=shared!=null && shared.Items.Any(item=>!item.Done);
+            if(!hasTaskChildren[id] && !hasPending)visible.Add(node);
+            if(shared==null)continue;
+            var titles=new List<string>();long cursor=id;
+            while(all.ContainsKey(cursor)) {titles.Add((string)all[cursor]["title"]);if(!parents.ContainsKey(cursor))break;cursor=parents[cursor];}
+            string path=TaskTreeView.SingleLineSeparator+String.Join(TaskTreeView.SingleLineSeparator,titles);
+            for(int index=0;index<shared.Items.Count;index++)visible.Add(CreateOutstandingNode(id,shared.Items[index],index,path));
+        }
+        return visible;
     }
     async Task ReadSharedLists(IEnumerable<long> ids,Dictionary<long,SharedList> destination) {
         using(var gate=new SemaphoreSlim(4,4)) {
@@ -126,12 +163,12 @@ internal sealed partial class FloatingWindow {
         var included=new HashSet<long>();var matches=new HashSet<long>();string query=search.Text.Trim();
         var sharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
         foreach(long id in ordered) {
-            if(HideCompleted(Convert.ToBoolean(all[id]["done"]),FieldText(all[id],"done_at"),ref nextCompletionRefreshUtc))continue;
+            if(HideCompletedTask(id,Convert.ToBoolean(all[id]["done"]),ref nextCompletionRefreshUtc))continue;
             if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
             candidates.Add(id);
         }
         if(PriorityFilterActive && visiblePriorities.Count>0)await ReadSharedLists(candidates,sharedLists);
-        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(sharedLists[id],ref nextCompletionRefreshUtc);
+        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
         if(!TaskLoadCurrent(version,context,background))return false;
         foreach(long id in candidates) {
             SharedList shared;bool outstandingMatch=sharedLists.TryGetValue(id,out shared) && shared.Items.Any(MatchesPriority);
@@ -154,19 +191,14 @@ internal sealed partial class FloatingWindow {
         }
         NumberTasks(roots,all);
         int groupCount=roots.Count;
-        if(singleLine.Checked)roots=FlattenTaskNodes(roots);
+        await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
+        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
+        if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
+        if(!TaskLoadCurrent(version,context,background))return false;
+        if(singleLine.Checked)roots=FlattenTaskNodes(roots,all,parents,sharedLists);
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
         var visibleRoots=roots.ToArray();
-        var needed=new HashSet<long>();
-        foreach(var node in nodes.Values) {
-            var ancestor=node;while(ancestor.Parent!=null)ancestor=ancestor.Parent;
-            if(visibleRoots.Contains(ancestor))needed.Add((long)node.Tag);
-        }
-        await ReadSharedLists(needed.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
-        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(sharedLists[id],ref nextCompletionRefreshUtc);
-        if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
-        if(!TaskLoadCurrent(version,context,background))return false;
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
             (oldProject==null?0:oldProject.Id)!=(project==null?0:project.Id);
         bool treeChanged=!background || json.Serialize(TaskTreeShape(tasks.Nodes.Cast<TreeNode>()))!=json.Serialize(TaskTreeShape(visibleRoots));
@@ -206,7 +238,7 @@ internal sealed partial class FloatingWindow {
             if(!background || treeChanged || projectChanged)UpdateSimpleModeState();
         }
         InvalidateSimpleOutstanding();
-        ApplyBackgroundOutstanding(sharedLists);
+        if(!singleLine.Checked)ApplyBackgroundOutstanding(sharedLists);
         tasks.RefreshWrappedLayout();
         if(background) {
             rendering=true;

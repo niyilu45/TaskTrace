@@ -46,6 +46,8 @@ internal sealed partial class FloatingWindow : Form {
     bool strikeCompleted;
     int completedHideDelayMinutes;
     DateTime completedHideRefreshAfterUtc = DateTime.MaxValue;
+    readonly Dictionary<long,DateTime> recentlyCompletedTasks = new Dictionary<long,DateTime>();
+    readonly Dictionary<string,DateTime> recentlyCompletedOutstanding = new Dictionary<string,DateTime>();
     int page = 1, total, expandedHeight = 560;
     readonly bool selfTest;
     bool allowExit, simpleMode;
@@ -60,7 +62,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, CompletedAt; public bool Done; public int Priority=9; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, CompletedAt; public bool Done; public int Priority=9, CurrentTextLength; }
     sealed class PendingItem {
         public string Id, Html, CompletedAt; public int Number; public bool Done; public int Priority=9;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
@@ -717,7 +719,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(writing) return;
                     writing = true;
                     dialog.BeginInvoke(new Action(async delegate {
-                        try { await Api("PATCH", "/tasks/" + id, new { done = done }); await reload(); }
+                        try { await Api("PATCH", "/tasks/" + id, new { done = done }); RememberTaskCompletion(id,done); await reload(); }
                         catch { feedback.Text = "状态未保存，请重试。"; }
                         finally { writing = false; }
                     }));
@@ -738,7 +740,7 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task Complete(long id, bool done = true) {
         if(busy || closing) return; SetBusy(true);
-        try { await Api("PATCH", "/tasks/" + id, new { done = done }); await LoadTasks(); }
+        try { await Api("PATCH", "/tasks/" + id, new { done = done }); RememberTaskCompletion(id,done); await LoadTasks(); }
         catch(Exception e) { Error(e); } finally { SetBusy(false); }
     }
     async Task CompleteOutstanding(OutstandingLeaf leaf,bool done) {
@@ -877,9 +879,9 @@ internal sealed partial class FloatingWindow : Form {
             var completedLabel = new Label { Text = "完成事项显示（同时作用于任务和遗留事项）", Location = new Point(18, 326), AutoSize = true };
             var completedGray = new CheckBox { Text = "完成后字体变灰", Checked = grayCompleted, Location = new Point(18, 354), AutoSize = true, AccessibleName = "完成后字体变灰" };
             var completedStrike = new CheckBox { Text = "完成后添加删除线", Checked = strikeCompleted, Location = new Point(190, 354), AutoSize = true, AccessibleName = "完成后添加删除线" };
-            var hideDelayLabel = new Label { Text = "未勾选“显示已完成”时，完成后延迟隐藏", Location = new Point(18, 390), AutoSize = true };
+            var hideDelayLabel = new Label { Text = "本次刚勾选完成的条目延迟隐藏", Location = new Point(18, 390), AutoSize = true };
             var hideDelay = new NumericUpDown { Minimum = 0, Maximum = 525600, Value = completedHideDelayMinutes, Location = new Point(18, 418), Width = 100, AccessibleName = "完成后延迟隐藏分钟数" };
-            var hideDelayUnit = new Label { Text = "分钟（0 为立即隐藏）", Location = new Point(128, 422), AutoSize = true };
+            var hideDelayUnit = new Label { Text = "分钟（仅本次切换，0 为立即隐藏）", Location = new Point(128, 422), AutoSize = true };
             var apply = new Button { Text = "保存设置", Location = new Point(320, 416), Size = new Size(110, 32) };
             var startWithWindows = new CheckBox { Text = "Windows 登录后自动启动 TaskTrace（默认关闭）", Checked = IsStartWithWindowsEnabled(), Location = new Point(18, 462), AutoSize = true, AccessibleName = "开机启动" };
             settings.AcceptButton=apply;
@@ -1004,6 +1006,11 @@ internal sealed partial class FloatingWindow : Form {
             grayCompleted=true;strikeCompleted=true;completedHideDelayMinutes=90;tasks.StrikeCompleted=true;
             var sharedTest = new SharedList(); sharedTest.Items.Add(new PendingItem {Id="test-one",Html="跨日期待办一"}); sharedTest.Items.Add(new PendingItem {Id="test-two",Html="跨日期待办二",Done=true,CompletedAt=DateTimeOffset.UtcNow.ToString("o"),Priority=2});
             await WriteShared(childId,sharedTest);
+            await LoadTasks();
+            var historicalSharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();
+            if(historicalSharedChild.Nodes.Cast<TreeNode>().Any(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Id=="test-two"))throw new Exception("Historical completed outstanding item did not hide immediately");
+            RememberOutstandingCompletion(childId,"test-two",true);await LoadTasks();
+            if(tasks.Nodes.Find(childId.ToString(),true).Single().Nodes.Cast<TreeNode>().Count(node=>node.Tag is OutstandingLeaf)!=2)throw new Exception("Newly completed outstanding item did not honor the current-session hide delay");
             long oldDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第一条", "");
             long sameDay=await SaveProgress(childId,DateTime.Today.AddDays(-2),"第二条", "");
             await SaveProgress(childId,DateTime.Today.AddDays(-2),"合并编辑", "",null,sameDay,"<p>合并编辑</p>",new List<long>{oldDay});
@@ -1029,17 +1036,20 @@ internal sealed partial class FloatingWindow : Form {
             rendering=true;singleLine.Checked=true;rendering=false;ApplyTaskTreeLayout();await LoadTasks();
             var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
             string expectedAncestors=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
-            if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || !flatGrandchild.IsVisible || tasks.Nodes.Count!=3)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+flatGrandchild.IsVisible);
-            var flatRoot=tasks.Nodes.Find(id.ToString(),true).Single();var flatChild=tasks.Nodes.Find(childId.ToString(),true).Single();
-            var rootCheck=tasks.CompletionBounds(flatRoot);var childCheck=tasks.CompletionBounds(flatChild);var grandchildCheck=tasks.CompletionBounds(flatGrandchild);
-            if(rootCheck.Left!=childCheck.Left || childCheck.Left!=grandchildCheck.Left || flatRoot.StateImageIndex!=0 || flatChild.StateImageIndex!=0 || flatGrandchild.StateImageIndex!=0)throw new Exception("Single-line task completion boxes are not aligned");
+            if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || !flatGrandchild.IsVisible || tasks.Nodes.Count!=2)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+flatGrandchild.IsVisible);
+            if(tasks.Nodes.Find(id.ToString(),true).Length!=0 || tasks.Nodes.Find(childId.ToString(),true).Length!=0)throw new Exception("Single-line mode retained a task that has child tasks or unfinished outstanding items");
+            sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            string expectedOutstandingPath=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
+            if(sharedLeaf.Parent!=null || tasks.AncestorTaskText(sharedLeaf)!=expectedOutstandingPath)throw new Exception("Single-line outstanding path layout failed");
+            var grandchildCheck=tasks.CompletionBounds(flatGrandchild);
+            if(grandchildCheck.IsEmpty || flatGrandchild.StateImageIndex!=0)throw new Exception("Single-line task completion box is not visible");
             SaveBounds();var singleLineSettings=ReadObject(File.ReadAllText(Path.Combine(data,"floating-window.json")));if(!Convert.ToBoolean(singleLineSettings["singleLine"]))throw new Exception("Single-line preference was not persisted");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-full-test.png")); }
             int flatCompletionPoint=((grandchildCheck.Top+grandchildCheck.Height/2)<<16)|((grandchildCheck.Left+grandchildCheck.Width/2)&0xffff);
             SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(flatCompletionPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(flatCompletionPoint));
             bool flatCompleted=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+grandchildId,null))["done"])){flatCompleted=true;break;}}
             if(!flatCompleted)throw new Exception("Single-line custom completion box did not persist");while(busy)await Task.Delay(20);await Complete(grandchildId,false);
-            sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
             sharedLeaf.EnsureVisible();tasks.Refresh();var outstandingCheck=tasks.CompletionBounds(sharedLeaf);if(outstandingCheck.IsEmpty)throw new Exception("Outstanding completion box is not visible");
             int outstandingPoint=((outstandingCheck.Top+outstandingCheck.Height/2)<<16)|((outstandingCheck.Left+outstandingCheck.Width/2)&0xffff);
             SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(outstandingPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(outstandingPoint));
@@ -1049,11 +1059,11 @@ internal sealed partial class FloatingWindow : Form {
             grayCompleted=styleGrayBeforeTest;strikeCompleted=styleStrikeBeforeTest;completedHideDelayMinutes=hideDelayBeforeTest;tasks.StrikeCompleted=strikeCompleted;
             await UpdateOutstandingState(childId,"test-two",null,4);var updatedShared=ReadShared(await ReadHistory(childId));
             if(updatedShared.Items.Count!=1 || updatedShared.Items[0].Done || updatedShared.Items[0].Priority!=4)throw new Exception("Outstanding completion or priority update failed");
-            await LoadTasks();sharedChild=tasks.Nodes.Find(childId.ToString(),true).Single();sharedLeaf=sharedChild.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
-            if(sharedLeaf.Text!="1. [P4] 跨日期待办二" || leafState.Done || sharedLeaf.StateImageIndex!=1)throw new Exception("Outstanding completion or priority refresh failed");
+            await LoadTasks();sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            if(tasks.CurrentTaskText(sharedLeaf)!="1. [P4] 跨日期待办二" || leafState.Done || sharedLeaf.StateImageIndex!=0 || tasks.CompletionBounds(sharedLeaf).IsEmpty)throw new Exception("Outstanding completion or priority refresh failed");
             tasks.SelectedNode=sharedLeaf;int beforeModeLoad=taskLoadVersion;
             SetSimpleMode(true);Size=new Size(330,260);
-            if(tasks.Nodes.Find(childId.ToString(),true).Single()!=sharedChild || sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");
+            if(sharedLeaf.Parent!=null || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");
             flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
             if(!singleLine.Checked || !tasks.SingleLinePaths || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || !flatGrandchild.IsVisible || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Simple mode did not retain single-line paths or bold outstanding items");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-simple-test.png")); }
@@ -1061,7 +1071,7 @@ internal sealed partial class FloatingWindow : Form {
             ShowSimpleModeRestore();
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-selected-test.png")); }
             restoreSimple.PerformClick();if(simpleMode)throw new Exception("Simple mode restore button failed");
-            if(sharedLeaf.Parent!=sharedChild || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Full mode restore changed shared task data or selection");
+            if(sharedLeaf.Parent!=null || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Full mode restore changed shared task data or selection");
             rendering=true;singleLine.Checked=false;rendering=false;ApplyTaskTreeLayout();SaveBounds();await LoadTasks();
             tasks.Nodes[0].Collapse(); collapsedTasks.Clear(); LoadTreePreferences(); await LoadTasks();
             if(tasks.Nodes[0].IsExpanded || !collapsedTasks.Contains(id)) throw new Exception("Collapsed state not retained");
@@ -1086,11 +1096,17 @@ internal sealed partial class FloatingWindow : Form {
             await Api("DELETE", "/tasks/" + levelFour, null);
             await Api("DELETE", "/tasks/" + grandchildId, null);
             await Api("DELETE", "/tasks/" + childId, null);
+            int completionDelayBeforeFinal=completedHideDelayMinutes;completedHideDelayMinutes=90;recentlyCompletedTasks.Remove(id);
+            await Api("PATCH","/tasks/"+id,new{done=true});await LoadTasks();
+            if(tasks.Nodes.Count!=0)throw new Exception("Historical completed task did not hide immediately");
+            await Api("PATCH","/tasks/"+id,new{done=false});await LoadTasks();
             await Complete(id);
             var saved = await Api("GET", "/tasks/" + id, null);
             if(!Convert.ToBoolean(saved["done"])) throw new Exception("Completion was not persisted");
             if((string)saved["description"] != "保留已有进展") throw new Exception("Completion changed the description");
-            if(tasks.Nodes.Count != 0) throw new Exception("Completed task was not hidden");
+            if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked) throw new Exception("Newly completed task did not honor the current-session hide delay");
+            recentlyCompletedTasks[id]=DateTime.UtcNow.AddMinutes(-91);await LoadTasks();
+            if(tasks.Nodes.Count != 0) throw new Exception("Completed task remained visible after the current-session hide delay expired");
             rendering = true; showCompleted.Checked = true; rendering = false; await Reload();
             if(tasks.Nodes.Count != 1 || !tasks.Nodes[0].Checked) throw new Exception("Completed task not visible or not checked");
             search.Text = createdTitle; await Reload();
@@ -1098,12 +1114,14 @@ internal sealed partial class FloatingWindow : Form {
             await Complete(id, false);
             saved = await Api("GET", "/tasks/" + id, null);
             if(Convert.ToBoolean(saved["done"]) || tasks.Nodes[0].Checked) throw new Exception("Reopen failed");
+            completedHideDelayMinutes=0;
             await Complete(id);
             SaveBounds();
             var settings = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
             if(!Convert.ToBoolean(settings["showCompleted"])) throw new Exception("Filter preference not saved");
             rendering = true; showCompleted.Checked = false; rendering = false; search.Clear(); await Reload();
             if(tasks.Nodes.Count != 0) throw new Exception("Hide completed failed");
+            completedHideDelayMinutes=completionDelayBeforeFinal;
             var project = projects.SelectedItem as Project;
             var ids = new List<long>();
             {

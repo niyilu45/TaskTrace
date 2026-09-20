@@ -169,6 +169,7 @@
 					>
 						{{ group.root.title }}
 					</button>
+					<TaskCollaborationMembers :task-id="group.root.id" />
 				</h3><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
 			</header>
 			<template v-if="isExpanded(group.root.id)">
@@ -191,6 +192,7 @@
 							:descendants="group.matching.slice(1).map(row => row.task)"
 							:depth="0"
 							:progress-days="progressDays"
+							:show-collaboration="false"
 							@edit="openTaskEditor"
 						/>
 					</ProjectProgressTable>
@@ -258,6 +260,7 @@ import ProjectProgressRow from './ProjectProgressRow.vue'
 import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
+import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
 const props = defineProps<{projectId: number}>()
 const route = useRoute()
 const router = useRouter()

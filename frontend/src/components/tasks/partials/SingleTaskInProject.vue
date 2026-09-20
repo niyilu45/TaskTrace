@@ -320,7 +320,7 @@ const emit = defineEmits<{
 
 function getTaskById(taskId: number): ITask | undefined {
 	if (typeof props.allTasks === 'undefined' || props.allTasks.length === 0) {
-		return null
+		return undefined
 	}
 
 	return props.allTasks.find(t => t.id === taskId)

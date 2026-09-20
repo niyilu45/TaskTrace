@@ -35,6 +35,10 @@
 					{{ task.title }}
 				</button>
 			</div>
+			<TaskCollaborationMembers
+				v-if="showCollaboration !== false"
+				:task-id="task.id"
+			/>
 			<small>{{ taskStatusLabel(task.status, task.done) }}<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
 		<td>
@@ -174,7 +178,8 @@ import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 import {useAuthStore} from '@/stores/auth'
-const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number}>()
+import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
+const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean}>()
 defineEmits<{toggle: [], edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const authStore = useAuthStore()
