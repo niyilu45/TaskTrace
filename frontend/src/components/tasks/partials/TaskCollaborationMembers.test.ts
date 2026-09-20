@@ -25,7 +25,7 @@ describe('TaskCollaborationMembers', () => {
 			global: {stubs: {Icon: true}},
 		})
 
-		expect(wrapper.get('button').text()).toContain('协作 3 人')
+		expect(wrapper.get('button').text()).toContain('3 人协作')
 		expect(wrapper.find('ul').exists()).toBe(false)
 		await wrapper.get('button').trigger('click')
 		expect(wrapper.findAll('li > span:last-child').map(item => item.text())).toEqual(['owner', 'current', 'teammate'])

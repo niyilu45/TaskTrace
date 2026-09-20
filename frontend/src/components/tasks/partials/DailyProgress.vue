@@ -26,8 +26,30 @@
 			:disabled="saving || referenceLoading"
 			@update:modelValue="switchDate"
 		/>
+		<section
+			v-if="progressAuthors.length > 1"
+			class="progress-author-editor"
+		>
+			<label :for="`progress-author-${taskId}`">编辑成员进展</label>
+			<select
+				:id="`progress-author-${taskId}`"
+				class="input"
+				:value="selectedAuthor"
+				:disabled="saving || restoring || referenceLoading"
+				@change="switchAuthor"
+			>
+				<option
+					v-for="author in progressAuthors"
+					:key="author.toLowerCase()"
+					:value="author"
+				>
+					{{ author }}{{ author.toLowerCase() === currentUsername.toLowerCase() ? '（我）' : '' }}
+				</option>
+			</select>
+			<p>每位成员在同一天保留独立进展。切换成员后可查看并编辑该成员的最终版本。</p>
+		</section>
 		<div class="daily-progress__heading-row">
-			<label :for="`progress-text-${taskId}`">今日进展</label>
+			<label :for="`progress-text-${taskId}`">{{ progressAuthors.length > 1 ? `${selectedAuthor} 的进展` : '今日进展' }}</label>
 			<button
 				class="button is-primary"
 				type="submit"
@@ -42,7 +64,7 @@
 			v-model="progress"
 			class="textarea daily-progress__textarea"
 			rows="3"
-			placeholder="今天完成了什么？"
+			:placeholder="progressAuthors.length > 1 ? `填写或修改 ${selectedAuthor} 当天的进展` : '今天完成了什么？'"
 			:disabled="saving || restoring"
 		/>
 		<div class="reference-picker">
@@ -221,19 +243,38 @@ import {mergedDay, sortProgressNotes} from '@/helpers/progressNotes'
 import {createProgressReference, normalizeProgressReferences, serializeProgressReferences, type ProgressReference} from '@/helpers/progressReferences'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {useAuthStore} from '@/stores/auth'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import {collaborationMembers, createTeamCommentId, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 const props = defineProps<{taskId: number}>()
 const emit = defineEmits<{saved: []}>()
 const authStore = useAuthStore()
+const teamStore = useTasktraceTeamStore()
 const date = ref('')
 const progress = ref('')
+const selectedAuthor = ref('')
+const currentUsername = computed(() => authStore.info?.username || teamStore.status.username || '')
+const binding = computed(() => teamStore.bindingForTask(props.taskId))
+const progressAuthors = computed(() => {
+	const result = collaborationMembers(binding.value, currentUsername.value)
+	for (const note of sortProgressNotes(referenceHistory.value)) {
+		if (!note.daily || note.date !== date.value || !note.author) continue
+		if (!result.some(author => author.toLowerCase() === note.author.toLowerCase())) result.push(note.author)
+	}
+	if (selectedAuthor.value && !result.some(author => author.toLowerCase() === selectedAuthor.value.toLowerCase())) result.push(selectedAuthor.value)
+	return result
+})
+const collaborative = computed(() => !!binding.value && progressAuthors.value.length > 1)
 const {textarea: progressTextarea} = useAutoHeightTextarea(progress)
 const images = ref<{file?: File, preview: string, attachmentId?: number}[]>([])
 const existingImages = ref('')
 const originalHtml = ref('')
 const originalText = ref('')
 const mergedIds = ref<number[]>([])
+const mergedTeamIds = ref<string[]>([])
 const autoCommentId = ref<number>()
+const autoTeamId = ref('')
 const saving = ref(false)
 const sharedBusy = ref(false)
 const references = ref<ProgressReference[]>([])
@@ -255,18 +296,30 @@ const restoring = ref(true)
 const message = ref('')
 const lastSaved = ref('')
 let version = 0
-const snapshot = () => JSON.stringify([date.value, progress.value, images.value.map(image => image.attachmentId || image.preview), references.value])
+const snapshot = () => JSON.stringify([date.value, selectedAuthor.value, progress.value, images.value.map(image => image.attachmentId || image.preview), references.value])
 const drafts = reactive(new Map<string, {text: string, images: typeof images.value, references: ProgressReference[]}>())
 type CachedProgressDraft = {progress: string, references: ProgressReference[], images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>}
 const cachedSnapshots = new Map<string, string>()
+function authorCacheToken(author: string) {
+	const bytes = new TextEncoder().encode(author.trim().toLowerCase())
+	let binary = ''
+	for (const byte of bytes) binary += String.fromCharCode(byte)
+	return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') || 'member'
+}
+function draftServerKey(day = date.value, author = selectedAuthor.value) {
+	return !collaborative.value || !author || author.toLowerCase() === currentUsername.value.toLowerCase() ? day : `${day}--${authorCacheToken(author)}`
+}
+function draftKey(taskId = props.taskId, day = date.value, author = selectedAuthor.value) {
+	return `${taskId}:${draftServerKey(day, author)}`
+}
 useTasktraceUndoGuard(() => saving.value || referenceLoading.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
 function stash() {
 	if (undoInProgress.value || restoring.value || !date.value) return
 	if (snapshot() === lastSaved.value) {
-		drafts.delete(`${props.taskId}:${date.value}`)
+		drafts.delete(draftKey())
 		return
 	}
-	drafts.set(`${props.taskId}:${date.value}`, {text: progress.value, images: [...images.value], references: normalizeProgressReferences(references.value)})
+	drafts.set(draftKey(), {text: progress.value, images: [...images.value], references: normalizeProgressReferences(references.value)})
 }
 
 function draftSnapshot(value: {text: string, images: typeof images.value, references: ProgressReference[]}) {
@@ -307,15 +360,18 @@ async function switchDate(value: string, initial = false) {
 		const history = await readTaskHistory(taskId)
 		if (request !== version || taskId !== props.taskId) return false
 		referenceHistory.value = history; showReferencePicker.value = false; selectedReferenceDates.value = []
-		const selected = mergedDay(history, value, authStore.info?.username)
-		date.value = value; autoCommentId.value = selected.id; mergedIds.value = selected.mergedIds
+		const author = selectedAuthor.value || currentUsername.value
+		if (!selectedAuthor.value) selectedAuthor.value = author
+		const selected = mergedDay(history, value, author)
+		date.value = value; autoCommentId.value = selected.id; autoTeamId.value = selected.teamId; mergedIds.value = selected.mergedIds; mergedTeamIds.value = selected.mergedTeamIds
 		originalHtml.value = selected.html; originalText.value = selected.text; existingImages.value = selected.images
 		progress.value = selected.text; images.value = []; references.value = normalizeProgressReferences(selected.references)
-		let draft = drafts.get(`${taskId}:${value}`)
+		const cacheKey = draftServerKey(value, author)
+		let draft = drafts.get(`${taskId}:${cacheKey}`)
 		if (!draft) {
 			try {
-				let saved = await readTaskTraceDraft<CachedProgressDraft>('progress', taskId, value)
-				const legacy = JSON.parse(localStorage.getItem(`tasktrace-progress-draft-${taskId}`) || 'null')
+				let saved = await readTaskTraceDraft<CachedProgressDraft>('progress', taskId, cacheKey)
+				const legacy = author.toLowerCase() === currentUsername.value.toLowerCase() ? JSON.parse(localStorage.getItem(`tasktrace-progress-draft-${taskId}`) || 'null') : null
 				if (!saved && legacy?.date === value) saved = legacy
 				if (saved && typeof saved.progress === 'string') {
 					const pictures: typeof images.value = []
@@ -324,7 +380,7 @@ async function switchDate(value: string, initial = false) {
 						else if (picture.data) { const file = await dataUrlAsFile(picture.data, picture.name, picture.type); pictures.push({file, preview: URL.createObjectURL(file)}) }
 					}
 					draft = {text: saved.progress, images: pictures, references: normalizeProgressReferences(saved.references)}
-					cachedSnapshots.set(`${taskId}:${value}`, draftSnapshot(draft))
+					cachedSnapshots.set(`${taskId}:${cacheKey}`, draftSnapshot(draft))
 				}
 			} catch { message.value = '草稿恢复失败，已保留服务器内容。' }
 		}
@@ -332,12 +388,23 @@ async function switchDate(value: string, initial = false) {
 		lastSaved.value = snapshot()
 		if (draft) { progress.value = draft.text; images.value = draft.images; references.value = normalizeProgressReferences(draft.references) }
 		loaded = true
-		message.value = draft ? '已恢复 .cache 中的草稿，内容尚未保存；点击“保存进展”后才会正式提交。' : selected.id ? '已载入当天进展；同日记录合并编辑，保存会更新当天内容。' : '此日期尚无进展。'
+		message.value = draft ? '已恢复 .cache 中的草稿，内容尚未保存；点击“保存进展”后才会正式提交。' : selected.id ? `已载入 ${author || '当前成员'} 当天的最终进展；保存后评论区会保留修改记录。` : `${author || '当前成员'} 在此日期尚无进展。`
 	} catch { message.value = '历史读取失败，已暂停保存，请重新选择日期重试。'; return false }
 	finally { if (request === version) restoring.value = !loaded }
 	return loaded
 }
+async function switchAuthor(event: Event) {
+	const author = (event.target as HTMLSelectElement).value
+	if (!author || author === selectedAuthor.value || saving.value || restoring.value || referenceLoading.value) return
+	stash()
+	selectedAuthor.value = author
+	await switchDate(date.value, true)
+}
 watch(() => props.taskId, async () => {
+	if (isLocalBuild && !teamStore.loaded) {
+		try { await teamStore.refresh() } catch { /* Personal progress remains available while collaboration status is unavailable. */ }
+	}
+	selectedAuthor.value = currentUsername.value
 	const now = new Date()
 	const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
 	await switchDate(today, true)
@@ -419,17 +486,29 @@ async function save() {
 			}
 			body += `<p><img src="/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}" alt="进展图片"></p>`
 		}
-		const comment = `<h3 data-tasktrace-merged="${mergedIds.value.join(',')}">每日进展 · ${date.value}</h3>${body}${serializeProgressReferences(references.value)}`
-		if (snapshot() !== lastSaved.value || mergedIds.value.length) {
-			if (autoCommentId.value) await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}, headers: undoHeaders})
+		const author = selectedAuthor.value || currentUsername.value
+		const latestSelected = mergedDay(latestHistory, date.value, author)
+		const absorbedIds = [...new Set([...mergedIds.value, ...latestSelected.mergedIds, autoCommentId.value, latestSelected.id].filter((id): id is number => !!id))]
+		const absorbedTeamIds = [...new Set([...mergedTeamIds.value, ...latestSelected.mergedTeamIds, autoTeamId.value, latestSelected.teamId].filter(Boolean))]
+		const numericAttribute = absorbedIds.length ? ` data-tasktrace-merged="${absorbedIds.join(',')}"` : ''
+		const teamAttribute = absorbedTeamIds.length ? ` data-tasktrace-team-merged="${absorbedTeamIds.join(',')}"` : ''
+		let comment = `<h3${numericAttribute}${teamAttribute}>每日进展 · ${date.value}</h3>${body}${serializeProgressReferences(references.value)}`
+		if (snapshot() !== lastSaved.value || mergedIds.value.length || mergedTeamIds.value.length) {
+			if (collaborative.value) {
+				autoTeamId.value = createTeamCommentId()
+				comment += serializeTeamCommentMarker({id: autoTeamId.value, author})
+				autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoHeaders})).data.id
+				mergedIds.value = absorbedIds
+				mergedTeamIds.value = absorbedTeamIds
+			} else if (autoCommentId.value) await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}, headers: undoHeaders})
 			else autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoHeaders})).data.id
 		}
 		if (taskId !== props.taskId) return
 		originalHtml.value = body; originalText.value = progress.value
 		existingImages.value = Array.from(new DOMParser().parseFromString(body,'text/html').querySelectorAll('img')).map(img => img.outerHTML).join('')
-		images.value.filter(picture => picture.file).forEach(picture => URL.revokeObjectURL(picture.preview)); images.value = []; lastSaved.value = snapshot(); drafts.delete(`${taskId}:${date.value}`)
-		cachedSnapshots.delete(`${taskId}:${date.value}`)
-		await deleteTaskTraceDraft('progress', taskId, date.value).catch(() => {})
+		images.value.filter(picture => picture.file).forEach(picture => URL.revokeObjectURL(picture.preview)); images.value = []; mergedIds.value = []; mergedTeamIds.value = []; lastSaved.value = snapshot(); const savedDraftKey = draftKey(taskId, date.value, author); drafts.delete(savedDraftKey)
+		cachedSnapshots.delete(savedDraftKey)
+		await deleteTaskTraceDraft('progress', taskId, draftServerKey(date.value, author)).catch(() => {})
 		try { localStorage.removeItem(`tasktrace-progress-draft-${taskId}`); localStorage.removeItem(`tasktrace-day-draft-${taskId}-${date.value}`) } catch { /* Remove legacy browser drafts. */ }
 		message.value = '当天进展已正式保存，可继续修改。'; emit('saved')
 	} catch { message.value = '保存失败，内容已保留，请重试。' }
@@ -449,6 +528,25 @@ onBeforeUnmount(() => { ++version; stash(); if (autoSaveSettings.enabled) void c
 
 	input { max-inline-size: 12rem; }
 	label { font-weight: 600; }
+}
+.progress-author-editor {
+	display: grid;
+	grid-template-columns: minmax(8rem, 14rem) 1fr;
+	align-items: end;
+	gap: .35rem .75rem;
+	padding: .65rem .75rem;
+	border: 1px solid var(--grey-200);
+	border-radius: $radius;
+	background: var(--grey-50);
+	.input {
+		inline-size: 100%;
+		max-inline-size: 14rem;
+	}
+	p {
+		margin: 0;
+		color: var(--grey-600);
+		font-size: .8125rem;
+	}
 }
 .daily-progress__heading-row {
 	display: flex;

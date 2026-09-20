@@ -161,16 +161,18 @@
 						aria-hidden="true"
 						:class="{expanded: isExpanded(group.root.id)}"
 					><path d="m6 3 5 5-5 5" /></svg>
-				</button><h3>
-					<button
-						type="button"
-						class="task-edit-link"
-						@click="openTaskEditor(group.root.id)"
-					>
-						{{ group.root.title }}
-					</button>
+				</button><div class="progress-group__title">
+					<h3>
+						<button
+							type="button"
+							class="task-edit-link"
+							@click="openTaskEditor(group.root.id)"
+						>
+							{{ group.root.title }}
+						</button>
+					</h3>
 					<TaskCollaborationMembers :task-id="group.root.id" />
-				</h3><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
+				</div><span>任务{{ taskStatusLabel(group.root.status, group.root.done) }} · {{ group.rows.length - 1 }} 个子任务</span>
 			</header>
 			<template v-if="isExpanded(group.root.id)">
 				<ReadonlyRichText
@@ -261,9 +263,12 @@ import ProjectProgressTable from './ProjectProgressTable.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 const props = defineProps<{projectId: number}>()
 const route = useRoute()
 const router = useRouter()
+const teamStore = useTasktraceTeamStore()
 const overview = ref<HTMLElement>()
 const {width: overviewWidth} = useElementSize(overview)
 const customWidths = ref<number[] | null>(null)
@@ -438,6 +443,10 @@ function applyActivityDays() {
 }
 async function load(options: {preserveView?: boolean} = {}) {
 	const version = ++requestId
+	if (isLocalBuild) {
+		try { await teamStore.refresh() } catch { /* The task list remains usable while a LAN repository is offline. */ }
+		if (version !== requestId) return
+	}
 	progressActivityRequestId++
 	progressActivityLoading.value = false
 	loading.value = true; error.value = ''
@@ -560,10 +569,13 @@ onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
 	padding: .7rem .8rem;
 	background: var(--grey-100);
 	}
+.progress-group__title {
+	flex: 1;
+	min-inline-size: 0;
+}
 .progress-group h3 {
 	font-size: 1rem;
 	margin: 0;
-	flex: 1;
 	}
 .task-edit-link {
 	border: 0;

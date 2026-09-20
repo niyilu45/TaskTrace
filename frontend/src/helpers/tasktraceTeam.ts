@@ -20,6 +20,17 @@ export function teamCommentAuthor(html: string, fallback: string) {
 	return readTeamCommentMarker(html)?.author || fallback
 }
 
+export function serializeTeamCommentMarker(value: TeamCommentMarker) {
+	const bytes = new TextEncoder().encode(JSON.stringify(value))
+	let binary = ''
+	for (const byte of bytes) binary += String.fromCharCode(byte)
+	return `<!--tasktrace-team:${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}-->`
+}
+
+export function createTeamCommentId() {
+	return globalThis.crypto?.randomUUID?.() || `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
 export function overrideTeamLinkRepository(link: string, repository: string) {
 	let normalized = repository.trim().replace(/^['"]|['"]$/g, '').replace(/[\\/]+$/, '')
 	if (!normalized) return link

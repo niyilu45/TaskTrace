@@ -11,7 +11,7 @@
 			@click.stop="expanded = !expanded"
 		>
 			<Icon icon="users" />
-			协作 {{ members.length }} 人
+			{{ members.length }} 人协作
 			<Icon
 				icon="chevron-down"
 				class="task-collaboration__chevron"

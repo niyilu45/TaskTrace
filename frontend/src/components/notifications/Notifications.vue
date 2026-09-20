@@ -203,6 +203,7 @@ import {error as showError, success} from '@/message'
 import {useI18n} from 'vue-i18n'
 import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import type {TaskTraceTeamNotification} from '@/client/generated'
 
@@ -288,22 +289,46 @@ function openTeamActivity() {
 	window.dispatchEvent(new CustomEvent('tasktrace-team-activity-open'))
 }
 
+async function waitForTeamComment(commentId: number) {
+	const deadline = Date.now() + 4000
+	do {
+		if (document.getElementById(`comment-${commentId}`)) {
+			scrollAndHighlightComment(commentId)
+			return true
+		}
+		await new Promise(resolve => window.setTimeout(resolve, 50))
+	} while (Date.now() < deadline)
+	return false
+}
+
 async function openTeamNotification(notice: TaskTraceTeamNotification) {
-	const taskId = Number(notice.task_id || 0)
+	let target = notice
+	if ((!target.task_id || (!target.comment_id && target.shared_comment_id)) && target.id) {
+		try {
+			await teamStore.sync()
+			target = teamStore.status.notifications?.find(candidate => candidate.id === target.id) || target
+		} catch (cause) {
+			console.warn('Failed to synchronize the team notification target:', cause)
+		}
+	}
+	const taskId = Number(target.task_id || 0)
 	if (!taskId) {
 		openTeamActivity()
 		return
 	}
 	showNotifications.value = false
-	const commentId = Number(notice.comment_id || 0)
+	const commentId = Number(target.comment_id || 0)
 	const route: RouteLocationRaw = {
 		name: 'task.detail',
 		params: {id: taskId},
 		...(commentId ? {hash: `#comment-${commentId}`} : {}),
 	}
 	const failure = await router.push(route)
-	if (isNavigationFailure(failure, NavigationFailureType.duplicated) && commentId) {
-		document.getElementById(`comment-${commentId}`)?.scrollIntoView({behavior: 'smooth', block: 'center'})
+	if (commentId) {
+		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
+			scrollAndHighlightComment(commentId)
+		}
+		await waitForTeamComment(commentId)
 	}
 	if (notice.id) {
 		try {

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {collaborationMembers, overrideTeamLinkRepository, readTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
+import {collaborationMembers, overrideTeamLinkRepository, readTeamCommentMarker, serializeTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
 
 function marker(value: object) {
 	const bytes = new TextEncoder().encode(JSON.stringify(value))
@@ -34,6 +34,11 @@ describe('TaskTrace team comment metadata', () => {
 	it('falls back to the local comment author for personal tasks', () => {
 		expect(teamCommentAuthor('<p>进展</p>', 'local-user')).toBe('local-user')
 		expect(readTeamCommentMarker('broken')).toBeNull()
+	})
+
+	it('round-trips stable comment identity and author metadata', () => {
+		const value = {id: 'shared-comment-id', author: '协作成员'}
+		expect(readTeamCommentMarker(serializeTeamCommentMarker(value))).toEqual(value)
 	})
 
 	it('replaces an unreachable computer name with an IPv4 teamData path', () => {

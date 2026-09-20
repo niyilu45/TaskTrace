@@ -1,6 +1,7 @@
 import {describe, it, expect} from 'vitest'
-import {parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes, progressBacklinks} from './progressNotes'
+import {finalProgressNotes, parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes, progressBacklinks} from './progressNotes'
 import {serializeProgressReferences, type ProgressReference} from './progressReferences'
+import {serializeTeamCommentMarker} from './tasktraceTeam'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
 	it('sorts by entered dates even when older progress was entered later', () => {
@@ -25,6 +26,27 @@ describe('daily progress display', () => {
 		const notes = sortProgressNotes([{comment: daily('2026-09-18', '全部完成')}, {comment: daily('2026-09-17', '处理中', '待确认')}])
 		expect(notes[0].outstanding).toBe('')
 	})
+})
+
+it('keeps comment revisions but only shows each member final same-day version in the overview', () => {
+	const aliceFirst = {id: 1, created: '2026-09-20T08:00:00Z', comment: daily('2026-09-20', 'alice first') + serializeTeamCommentMarker({id: 'alice-1', author: 'alice'})}
+	const bob = {id: 2, created: '2026-09-20T09:00:00Z', comment: daily('2026-09-20', 'bob final') + serializeTeamCommentMarker({id: 'bob-1', author: 'bob'})}
+	const aliceFinal = {id: 3, created: '2026-09-20T10:00:00Z', comment: daily('2026-09-20', 'alice final') + serializeTeamCommentMarker({id: 'alice-2', author: 'alice'})}
+	const history = [aliceFirst, bob, aliceFinal]
+
+	expect(sortProgressNotes(history).map(note => note.id)).toEqual([3, 2, 1])
+	expect(finalProgressNotes(history).map(note => note.id)).toEqual([3, 2])
+	const aliceEditor = mergedDay(history, '2026-09-20', 'alice')
+	expect(aliceEditor.text).toBe('alice final')
+	expect(aliceEditor.mergedIds).toEqual([1])
+})
+
+it('hides revisions absorbed by stable team ids even when local database ids differ', () => {
+	const first = {id: 41, created: '2026-09-20T08:00:00Z', comment: daily('2026-09-20', 'first') + serializeTeamCommentMarker({id: 'shared-first', author: 'alice'})}
+	const final = {id: 99, created: '2026-09-20T09:00:00Z', comment: '<h3 data-tasktrace-team-merged="shared-first">每日进展 · 2026-09-20</h3><p>final</p>' + serializeTeamCommentMarker({id: 'shared-final', author: 'alice'})}
+
+	expect(sortProgressNotes([first, final]).map(note => note.id)).toEqual([99])
+	expect(mergedDay([first, final], '2026-09-20', 'alice').mergedTeamIds).toEqual(['shared-first'])
 })
 
 it('merges same-day content and images while hiding absorbed source records', () => {
