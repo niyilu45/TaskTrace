@@ -19,6 +19,7 @@
 		<Editor
 			v-model="progress"
 			:always-editing="true"
+			:allow-base64-images="true"
 			:upload-callback="stageProgressImages"
 			:placeholder="`修改 ${author} 在 ${date} 的进展`"
 			@save="save"

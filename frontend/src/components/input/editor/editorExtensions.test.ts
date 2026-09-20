@@ -4,6 +4,7 @@ import {nextTick, ref} from 'vue'
 import {Editor} from '@tiptap/core'
 import {createEditorExtensions, type EditorExtensionDeps} from './editorExtensions'
 import {clearAttachmentBlobCache} from '@/helpers/attachments'
+import {stripEditorUploadPlaceholders} from '@/helpers/editorUploadPlaceholder'
 
 const {getBlobUrl} = vi.hoisted(() => ({getBlobUrl: vi.fn(async () => 'blob:real-attachment')}))
 
@@ -19,7 +20,7 @@ window.API_URL = API_URL
 
 const ATTACHMENT_URL = `${API_URL}/tasks/5/attachments/9`
 
-function createEditor(content: string) {
+function createEditor(content: string, allowBase64Images = false) {
 	const holder = document.createElement('div')
 	document.body.appendChild(holder)
 
@@ -34,6 +35,7 @@ function createEditor(content: string) {
 		getEditor: () => editor,
 		uploadCallback: undefined,
 		uploadAndInsertFiles: () => {},
+		allowBase64Images,
 	}
 
 	editor = new Editor({
@@ -62,6 +64,34 @@ afterEach(() => {
 })
 
 describe('CustomImage attachment id', () => {
+	it('round trips staged progress images only when base64 images are enabled', () => {
+		const staged = 'data:image/png;base64,AQID'
+		const progress = createEditor(`<p>已有文字</p><img src="${staged}"><p>后续文字</p>`, true)
+		expect(progress.editor.getHTML()).toContain(`<img src="${staged}">`)
+		expect(progress.editor.view.dom.querySelectorAll('img')).toHaveLength(1)
+
+		const regular = createEditor(`<p>普通描述</p><img src="${staged}">`)
+		expect(regular.editor.view.dom.querySelectorAll('img')).toHaveLength(0)
+	})
+
+	it.each([
+		['an empty progress editor', '<p></p>'],
+		['progress text already present', '<p>已有文字</p>'],
+	])('keeps a pasted image with %s and removes the upload placeholder', (_label, content) => {
+		const staged = 'data:image/png;base64,AQID'
+		const {editor} = createEditor(content, true)
+		if (editor.isEmpty) editor.chain().insertContent('<p>UPLOAD_PLACEHOLDER</p>').run()
+		editor.chain().setImage({src: staged}).run()
+
+		const html = stripEditorUploadPlaceholders(editor.getHTML())
+		editor.commands.setContent(html)
+
+		expect(editor.getHTML()).not.toContain('UPLOAD_PLACEHOLDER')
+		expect(editor.getHTML()).toContain(`<img src="${staged}">`)
+		expect(editor.view.dom.querySelectorAll('img')).toHaveLength(1)
+		if (content.includes('已有文字')) expect(editor.getHTML()).toContain('已有文字')
+	})
+
 	it('resolves the blob url for a freshly inserted image', async () => {
 		const {editor} = createEditor('<p>hi</p>')
 

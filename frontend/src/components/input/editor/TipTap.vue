@@ -222,6 +222,7 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import inputPrompt from '@/helpers/inputPrompt'
 import {setLinkInEditor} from '@/components/input/editor/setLinkInEditor'
 import {saveEditorDraft, loadEditorDraft, clearEditorDraft} from '@/helpers/editorDraftStorage'
+import {stripEditorUploadPlaceholders} from '@/helpers/editorUploadPlaceholder'
 import {error} from '@/message'
 
 const props = withDefaults(defineProps<{
@@ -238,6 +239,7 @@ const props = withDefaults(defineProps<{
 	projectId?: number,
 	storageKey?: string,
 	alwaysEditing?: boolean,
+	allowBase64Images?: boolean,
 }>(), {
 	uploadCallback: undefined,
 	isEditEnabled: true,
@@ -252,6 +254,7 @@ const props = withDefaults(defineProps<{
 	projectId: 0,
 	storageKey: '',
 	alwaysEditing: false,
+	allowBase64Images: false,
 })
 
 const emit = defineEmits(['save', 'discard'])
@@ -311,6 +314,7 @@ const extensions: Extensions = createEditorExtensions({
 	getEditor: () => editor.value,
 	uploadCallback: () => props.uploadCallback,
 	uploadAndInsertFiles,
+	allowBase64Images: () => props.allowBase64Images,
 })
 
 // Add mention extension if enabled
@@ -501,7 +505,7 @@ function uploadAndInsertFiles(files: File[] | FileList) {
 				.run()
 		})
 
-		const html = liveEditor()?.getHTML().replace(UPLOAD_PLACEHOLDER_ELEMENT, '') ?? ''
+		const html = stripEditorUploadPlaceholders(liveEditor()?.getHTML() ?? '')
 
 		liveEditor()?.commands.setContent(html, {
 			...defaultSetContentOptions,

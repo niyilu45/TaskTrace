@@ -48,6 +48,7 @@ export interface EditorExtensionDeps {
 	getEditor: () => Editor | undefined
 	uploadCallback: MaybeRefOrGetter<UploadCallback | undefined>
 	uploadAndInsertFiles: (files: File[] | FileList) => void
+	allowBase64Images?: MaybeRefOrGetter<boolean>
 }
 
 const CustomTableCell = TableCell.extend({
@@ -97,6 +98,7 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 		getEditor,
 		uploadCallback,
 		uploadAndInsertFiles,
+		allowBase64Images = false,
 	} = deps
 
 	const CustomImage = Image.extend({
@@ -162,7 +164,7 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 
 			return ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)]
 		},
-	})
+	}).configure({allowBase64: toValue(allowBase64Images)})
 
 	const PasteHandler = Extension.create({
 		name: 'pasteHandler',

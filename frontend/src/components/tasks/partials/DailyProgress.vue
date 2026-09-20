@@ -43,6 +43,7 @@
 			<Editor
 				v-model="progress"
 				:always-editing="true"
+				:allow-base64-images="true"
 				:upload-callback="stageProgressImages"
 				placeholder="今天完成了什么？可直接粘贴图片。"
 				@save="save"
