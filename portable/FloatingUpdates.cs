@@ -20,6 +20,12 @@ internal sealed partial class FloatingWindow {
     DateTime lastAutomaticUpdateCheck = DateTime.MinValue;
 
     static HttpClient CreateUpdateHttpClient() {
+        // This executable is compiled with the in-box .NET Framework compiler. On
+        // machines without the strong-crypto registry switch its process default
+        // can still be TLS 1.0, which GitHub rejects before an HTTP response exists.
+        // Keep this local to the updater traffic so both release checks and asset
+        // downloads use the protocol accepted by GitHub.
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         var proxy = WebRequest.DefaultWebProxy;
         if(proxy != null) proxy.Credentials = CredentialCache.DefaultCredentials;
         var handler = new HttpClientHandler { UseProxy = true, Proxy = proxy, UseDefaultCredentials = false };
@@ -186,7 +192,13 @@ internal sealed partial class FloatingWindow {
     static string DisplayReleaseDate(string value) { DateTime date;return DateTime.TryParse(value,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out date)?date.ToLocalTime().ToString("yyyy-MM-dd HH:mm"):"未知"; }
     static string SafeVersion(string value) { return new string(value.Where(c=>char.IsLetterOrDigit(c)||c=='.'||c=='-').ToArray()); }
     static void TryDelete(string path) { try{File.Delete(path);}catch{} }
-    static string FriendlyUpdateError(Exception e) { if(e is HttpRequestException || e is WebException || e is TaskCanceledException)return "无法连接 GitHub Releases。请检查网络或系统代理设置后重试。\r\n\r\n"+e.Message;return e.Message; }
+    static string FriendlyUpdateError(Exception e) {
+        if(!(e is HttpRequestException) && !(e is WebException) && !(e is TaskCanceledException))return e.Message;
+        Uri github=new Uri("https://api.github.com");string route="直连";
+        try { var proxy=WebRequest.DefaultWebProxy;var resolved=proxy==null?github:proxy.GetProxy(github);if(proxy!=null&&!proxy.IsBypassed(github)&&resolved!=github)route="Windows 系统代理 "+resolved.Scheme+"://"+resolved.Host+":"+resolved.Port; } catch {}
+        var messages=new List<string>();for(Exception current=e;current!=null;current=current.InnerException)if(!String.IsNullOrWhiteSpace(current.Message)&&!messages.Contains(current.Message))messages.Add(current.Message);
+        return "无法连接 GitHub Releases。\r\n已使用："+route+"（TLS 1.2）\r\n\r\n"+String.Join("\r\n",messages);
+    }
     static string ParseExpectedChecksum(string content,string fileName) { foreach(string line in content.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)){string trimmed=line.Trim();if(trimmed.EndsWith(fileName,StringComparison.OrdinalIgnoreCase)){string[] parts=trimmed.Split((char[])null,StringSplitOptions.RemoveEmptyEntries);if(parts.Length>0&&parts[0].Length==64)return parts[0];}}return ""; }
     static string Sha256(string path) { using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","").ToLowerInvariant(); }
 
