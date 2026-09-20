@@ -24,6 +24,7 @@ internal sealed class TaskTreeSurface : Panel {
     Point pressedAt;
     int dropZone;
     bool dragging;
+    int verticalWheelRemainder,horizontalWheelRemainder;
 
     internal Action<TreeNode> CompletionClicked,PriorityClicked,ImageClicked,NodeDoubleClicked;
     internal Action<TreeNode,Point> HoverChanged;
@@ -54,6 +55,21 @@ internal sealed class TaskTreeSurface : Panel {
     }
     protected override void OnResize(EventArgs e) {base.OnResize(e);QueueRebuild();}
     protected override void OnFontChanged(EventArgs e) {base.OnFontChanged(e);QueueRebuild();}
+    protected override void OnScroll(ScrollEventArgs e) {base.OnScroll(e);Invalidate();}
+    void SetScrollOffset(int x,int y) {
+        int maxX=Math.Max(0,AutoScrollMinSize.Width-ClientSize.Width),maxY=Math.Max(0,AutoScrollMinSize.Height-ClientSize.Height);
+        x=Math.Max(0,Math.Min(maxX,x));y=Math.Max(0,Math.Min(maxY,y));
+        if(x==-AutoScrollPosition.X && y==-AutoScrollPosition.Y)return;
+        AutoScrollPosition=new Point(x,y);Invalidate();
+    }
+    void ScrollByWheel(int delta,bool horizontal) {
+        int remainder=(horizontal?horizontalWheelRemainder:verticalWheelRemainder)+delta;
+        int notches=remainder/SystemInformation.MouseWheelScrollDelta;if(notches==0){if(horizontal)horizontalWheelRemainder=remainder;else verticalWheelRemainder=remainder;return;}
+        remainder-=notches*SystemInformation.MouseWheelScrollDelta;if(horizontal)horizontalWheelRemainder=remainder;else verticalWheelRemainder=remainder;
+        int lines=SystemInformation.MouseWheelScrollLines;int units=lines<0?3:Math.Max(1,lines);int step=Math.Max(18,model==null?28:model.ItemHeight)*units;
+        int x=-AutoScrollPosition.X,y=-AutoScrollPosition.Y;if(horizontal)x-=notches*step;else y-=notches*step;SetScrollOffset(x,y);
+    }
+    protected override void OnMouseWheel(MouseEventArgs e) {ScrollByWheel(e.Delta,(ModifierKeys&Keys.Shift)==Keys.Shift||(!VScroll&&HScroll));}
     static bool Real(TreeNode node) {return node!=null && (node.Tag is long || node.Tag is FloatingWindow.OutstandingLeaf);}
     static IEnumerable<TreeNode> VisibleNodes(TreeNodeCollection nodes) {
         foreach(TreeNode node in nodes)if(Real(node)) {
@@ -176,6 +192,8 @@ internal sealed class TaskTreeSurface : Panel {
     internal Rectangle PriorityBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Priority);}
     internal Rectangle TitleBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row.Title);}
     internal Size ContentExtent {get{return AutoScrollMinSize;}}
+    internal Point ScrollOffset {get{return new Point(-AutoScrollPosition.X,-AutoScrollPosition.Y);}}
+    internal void TestWheel(int delta,bool horizontal){ScrollByWheel(delta,horizontal);}
     internal TreeNode NodeAt(Point point){var row=RowAt(point);return row==null?null:row.Node;}
     internal void TestClick(Rectangle bounds,int clicks){var point=new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2);OnMouseDown(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));if(clicks>1)OnMouseDoubleClick(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));OnMouseUp(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));}
     internal void TestKey(Keys key){OnKeyDown(new KeyEventArgs(key));}
@@ -228,18 +246,35 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(true);Size=new Size(260,430);taskSurface.Rebuild(false);taskSurface.Update();
             if(taskSurface.NodeBounds(longNode).Height<=taskSurface.NodeBounds(shortNode).Height || Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Simple mode did not retain the shared variable-row renderer and font size");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-variable-rows-simple-test.png"));}
-            SetSimpleMode(false);Size=new Size(360,520);tasks.SingleLinePaths=true;tasks.SetWrappedText(false);
+            for(int index=0;index<24;index++) {
+                string text=(index+3)+". [P"+(index%10)+"] "+(index%2==0?"滚动测试短事项":"用于验证简洁模式单行显示横向与纵向滚动可以同时稳定工作的长事项 "+index+" / 上级任务 / 项目总表");
+                var node=new TaskNode(text){Tag=921000L+index};node.CurrentTextLength=text.Length;tasks.Nodes.Add(node);
+            }
+            SetSimpleMode(true);Size=new Size(360,360);tasks.SingleLinePaths=true;tasks.SetWrappedText(false);
             longNode.Text="2. [P4] 很长的最底层任务文字 / 1. [P7] 同样很长的父任务文字 / 0. [P9] 更长的祖先任务文字";longNode.CurrentTextLength="2. [P4] 很长的最底层任务文字".Length;
             taskSurface.Rebuild(false);taskSurface.Update();
             if(taskSurface.ContentExtent.Width<=taskSurface.ClientSize.Width)throw new Exception("Single-line mode did not calculate a horizontal range from the longest item");
+            if(taskSurface.ContentExtent.Height<=taskSurface.ClientSize.Height)throw new Exception("Single-line mode did not calculate a vertical range from all visible items");
             var imageRow=taskSurface.NodeBounds(imageLeaf);var plainRow=taskSurface.NodeBounds(plainLeaf);
             if(imageRow.Width<=plainRow.Width || taskSurface.ContentExtent.Width<imageRow.Right)throw new Exception("The image button was omitted from longest-item width calculation");
-            var shortBefore=taskSurface.PriorityBounds(shortNode);var longBefore=taskSurface.PriorityBounds(longNode);taskSurface.AutoScrollPosition=new Point(10000,0);taskSurface.Update();
+            taskSurface.AutoScrollPosition=Point.Empty;taskSurface.Update();
+            var shortBefore=taskSurface.PriorityBounds(shortNode);var longBefore=taskSurface.PriorityBounds(longNode);
+            int invalidations=0;InvalidateEventHandler invalidated=delegate{invalidations++;};taskSurface.Invalidated+=invalidated;
+            taskSurface.TestWheel(-SystemInformation.MouseWheelScrollDelta,false);taskSurface.Update();var verticalOffset=taskSurface.ScrollOffset;
+            if(verticalOffset.Y<=0 || verticalOffset.X!=0)throw new Exception("Mouse wheel did not scroll the single-line list vertically");
+            var shortAfterVertical=taskSurface.PriorityBounds(shortNode);var longAfterVertical=taskSurface.PriorityBounds(longNode);
+            taskSurface.TestWheel(-SystemInformation.MouseWheelScrollDelta,true);taskSurface.Update();var mixedOffset=taskSurface.ScrollOffset;
+            taskSurface.Invalidated-=invalidated;
+            if(mixedOffset.X<=0 || mixedOffset.Y!=verticalOffset.Y)throw new Exception("Horizontal wheel scrolling changed the vertical position or did not move horizontally");
             var shortAfter=taskSurface.PriorityBounds(shortNode);var longAfter=taskSurface.PriorityBounds(longNode);
-            int shortShift=shortBefore.Left-shortAfter.Left,longShift=longBefore.Left-longAfter.Left;
-            if(shortShift<=0 || shortShift!=longShift)throw new Exception("Different text lengths produced inconsistent horizontal scrolling");
+            int shortShift=shortAfterVertical.Left-shortAfter.Left,longShift=longAfterVertical.Left-longAfter.Left;
+            if(shortShift<=0 || shortShift!=longShift || shortAfter.Top!=shortAfterVertical.Top || longAfter.Top!=longAfterVertical.Top)throw new Exception("Different text lengths produced inconsistent mixed-axis scrolling");
+            if(shortBefore.Top-shortAfterVertical.Top!=verticalOffset.Y || longBefore.Top-longAfterVertical.Top!=verticalOffset.Y)throw new Exception("Vertical scrolling produced inconsistent row positions");
+            if(invalidations==0)throw new Exception("Scrolling did not invalidate the custom task surface");
+            var preserved=taskSurface.ScrollOffset;taskSurface.Rebuild(true);taskSurface.Update();
+            if(taskSurface.ScrollOffset!=preserved)throw new Exception("Refreshing the compact list did not preserve both scroll positions");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-single-line-scroll-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; long text keeps the normal font and changes only its row height; priority alignment and image spacing are stable; image buttons participate in longest-item width; single-line horizontal scrolling is based on the longest item.");
+            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; compact single-line mode handles simultaneous horizontal and vertical scrolling; every scroll invalidates the custom surface; mixed-axis positions and refresh preservation are stable.");
         } finally {
             if(simpleMode)SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);tasks.SingleLinePaths=originalFlat;tasks.SetWrappedText(originalWrap);Size=originalSize;taskSurface.Rebuild(false);
             if(originalMode)SetSimpleMode(true);if(originalSelection!=null&&originalSelection.TreeView==tasks)tasks.SelectedNode=originalSelection;rendering=originalRendering;
