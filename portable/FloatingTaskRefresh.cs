@@ -88,8 +88,9 @@ internal sealed partial class FloatingWindow {
     object[] TaskTreeShape(IEnumerable<TreeNode> nodes) {
         return nodes.Where(node=>node.Tag is long || (singleLine.Checked && node.Tag is OutstandingLeaf)).Select(node=>{
             var leaf=node.Tag as OutstandingLeaf;
-            return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
-                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html};
+            var task=node as TaskNode;
+            return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,task==null?0:task.ReminderCount,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
+                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html,leaf.ReminderAt};
         }).ToArray();
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
@@ -161,13 +162,13 @@ internal sealed partial class FloatingWindow {
             }
         }
         var included=new HashSet<long>();var matches=new HashSet<long>();string query=search.Text.Trim();
-        var sharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
+        var sharedLists=new Dictionary<long,SharedList>();var reminderSharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
         foreach(long id in ordered) {
             if(HideCompletedTask(id,Convert.ToBoolean(all[id]["done"]),ref nextCompletionRefreshUtc))continue;
             if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
             candidates.Add(id);
         }
-        if(PriorityFilterActive && visiblePriorities.Count>0)await ReadSharedLists(candidates,sharedLists);
+        if(PriorityFilterActive && visiblePriorities.Count>0){await ReadSharedLists(candidates,sharedLists);foreach(var pair in sharedLists)reminderSharedLists[pair.Key]=pair.Value;}
         if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
         if(!TaskLoadCurrent(version,context,background))return false;
         foreach(long id in candidates) {
@@ -181,7 +182,7 @@ internal sealed partial class FloatingWindow {
         foreach(long id in ordered) {
             if(!included.Contains(id))continue;bool done=Convert.ToBoolean(all[id]["done"]);
             string taskStatus=TaskStatusValue(all[id]);
-            nodes[id]=new TaskNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,
+            nodes[id]=new TaskNode((string)all[id]["title"]){Name=id.ToString(),Tag=id,Checked=done,ReminderCount=TaskReminderTimes(all[id]).Count,
                 ForeColor=done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
                 ToolTipText=TaskStatusText(taskStatus)+" · "+(string)all[id]["title"]+(matches.Contains(id)?"":"（为显示匹配子任务或遗留事项保留的父任务）")};
         }
@@ -192,6 +193,10 @@ internal sealed partial class FloatingWindow {
         NumberTasks(roots,all);
         int groupCount=roots.Count;
         await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
+        if(!TaskLoadCurrent(version,context,background))return false;
+        foreach(var pair in sharedLists)if(!reminderSharedLists.ContainsKey(pair.Key))reminderSharedLists[pair.Key]=pair.Value;
+        UpdateReminderTargets(all,reminderSharedLists);
+        foreach(var pair in nodes) {SharedList owned;reminderSharedLists.TryGetValue(pair.Key,out owned);var taskNode=pair.Value as TaskNode;if(taskNode!=null)taskNode.ReminderCount=DirectTaskReminderCount(all[pair.Key],owned);}
         if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
         if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;

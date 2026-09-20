@@ -61,10 +61,10 @@ internal sealed partial class FloatingWindow : Form {
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
-    internal sealed class TaskNode : TreeNode { public int CurrentTextLength; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, CompletedAt; public bool Done; public int Priority=9, CurrentTextLength; }
+    internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public TaskNode(string text) : base(text) {} }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, CompletedAt, ReminderAt; public bool Done; public int Priority=9, CurrentTextLength; }
     sealed class PendingItem {
-        public string Id, Html, CompletedAt; public int Number; public bool Done; public int Priority=9;
+        public string Id, Html, CompletedAt, ReminderAt; public int Number; public bool Done; public int Priority=9;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -207,6 +207,7 @@ internal sealed partial class FloatingWindow : Form {
         InitializeSimpleModeRecovery(menu);
         InitializeUpdates();
         InitializeAutoRefresh();
+        InitializeReminders();
         Shown += async delegate { ApplyDpiMetrics(); await Reload();
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
@@ -215,7 +216,7 @@ internal sealed partial class FloatingWindow : Form {
                 e.Cancel = true; HideToTray();
                 return;
             }
-            closing = true; timer.Stop(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
+            closing = true; timer.Stop(); DisposeReminders(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
         };
     }
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
@@ -286,8 +287,9 @@ internal sealed partial class FloatingWindow : Form {
                 var completedAt=Regex.Match(attrs,"\\bdata-completed-at\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
                 var done=Regex.Match(attrs,"\\bdata-done\\s*=\\s*\"(?<value>true|false)\"",RegexOptions.IgnoreCase);
                 var priority=Regex.Match(attrs,"\\bdata-priority\\s*=\\s*\"(?<value>[0-9])\"",RegexOptions.IgnoreCase);
+                var reminder=Regex.Match(attrs,"\\bdata-reminder\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
                 int value=9;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
-                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=match.Groups["body"].Value,Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,Priority=Math.Max(0,Math.Min(9,value))});
+                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=match.Groups["body"].Value,Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,ReminderAt=reminder.Success?WebUtility.HtmlDecode(reminder.Groups["value"].Value):null,Priority=Math.Max(0,Math.Min(9,value))});
             }
         } else {
             var latest = DailyHistory(notes).FirstOrDefault();
@@ -300,7 +302,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+">"+item.Html+"</li>"))+"</ul>";
+        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }
@@ -505,7 +507,8 @@ internal sealed partial class FloatingWindow : Form {
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var historyButton=new Button {Text="查看历史进展",Dock=DockStyle.Fill,AccessibleName="查看所有历史进展"};
-                var navigationRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=new Padding(0)};navigationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));navigationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,50));navigationRow.Controls.Add(historyButton,0,0);navigationRow.Controls.Add(sharedButton,1,0);
+                var reminderButton=new Button {Text="设置提醒",Dock=DockStyle.Fill,AccessibleName="设置任务提醒"};
+                var navigationRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=new Padding(0)};navigationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,34));navigationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33));navigationRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33));navigationRow.Controls.Add(historyButton,0,0);navigationRow.Controls.Add(sharedButton,1,0);navigationRow.Controls.Add(reminderButton,2,0);
                 var save=new Button {Text="保存当天进展 (Ctrl+Enter)",Dock=DockStyle.Fill};
                 var deleteTask=new Button {Text="删除此任务",Dock=DockStyle.Fill,BackColor=Color.Firebrick,ForeColor=Color.White,FlatStyle=FlatStyle.Flat};
                 var actionRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));actionRow.Controls.Add(save,0,0);actionRow.Controls.Add(deleteTask,1,0);
@@ -576,6 +579,7 @@ internal sealed partial class FloatingWindow : Form {
                     finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;}}
                 };
                 chooseReferences.Click+=async delegate {await selectReferences(false);};
+                reminderButton.Click+=async delegate {if(submitting)return;reminderButton.Enabled=false;try{if(await ShowReminderEditor(id,null,dialog)){await LoadTasks();feedback.Text="提醒已保存，并已同步到网页模式。";}}catch(Exception e){feedback.Text="提醒未保存："+e.Message;}finally{if(!dialog.IsDisposed)reminderButton.Enabled=true;}};
                 historyButton.Click+=async delegate {if(submitting)return;historyButton.Enabled=false;feedback.Text="正在读取全部历史进展…";try{history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));await ShowProgressHistory(id,taskTitle,history,dialog);feedback.Text="历史进展已关闭，可继续编辑。";}catch(Exception e){feedback.Text="历史进展读取失败："+e.Message;}finally{if(!dialog.IsDisposed)historyButton.Enabled=true;}};
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};

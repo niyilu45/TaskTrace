@@ -10,7 +10,7 @@ using System.Windows.Forms;
 internal sealed class TaskTreeSurface : Panel {
     sealed class Row {
         internal TreeNode Node;
-        internal Rectangle Bounds,Expand,Check,Prefix,Image,Priority,Title,Ancestors;
+        internal Rectangle Bounds,Expand,Check,Prefix,Image,Reminder,Priority,Title,Ancestors;
         internal string PrefixText="",PriorityText="",TitleText="",AncestorText="";
         internal Font Font;
         internal int AnchorY;
@@ -27,7 +27,7 @@ internal sealed class TaskTreeSurface : Panel {
     bool correctingScroll;
     int verticalWheelRemainder,horizontalWheelRemainder;
 
-    internal Action<TreeNode> CompletionClicked,PriorityClicked,ImageClicked,NodeDoubleClicked;
+    internal Action<TreeNode> CompletionClicked,PriorityClicked,ImageClicked,ReminderClicked,NodeDoubleClicked;
     internal Action<TreeNode,Point> HoverChanged;
     internal Func<TreeNode,bool> BeginItemDrag;
     internal Action EndItemDrag;
@@ -106,6 +106,7 @@ internal sealed class TaskTreeSurface : Panel {
         }
     }
     bool HasImage(TreeNode node) {return model!=null && model.ImageAvailableFor(node);}
+    static bool HasReminder(TreeNode node) {return FloatingWindow.NodeHasReminder(node);}
     static int Advance(string text,Font font) {return TextRenderer.MeasureText((text??"")+"x",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Width-TextRenderer.MeasureText("x",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Width;}
     int BaseHeight(Font font) {return Math.Max(model==null?28:model.ItemHeight,TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+8);}
     internal void Rebuild(bool preserveScroll) {
@@ -117,7 +118,7 @@ internal sealed class TaskTreeSurface : Panel {
             Font font=model.DisplayFont(node);string current=model.CurrentTaskText(node),ancestors=model.AncestorTaskText(node);var match=Parts.Match(current);
             string prefix=match.Success?match.Groups["prefix"].Value:"";string priority=match.Success?match.Groups["priority"].Value:"";string title=match.Success?match.Groups["title"].Value:current;
             int level=flat?0:node.Level;int left=4+level*Math.Max(18,model.Indent);int expandLeft=left;int checkLeft=left+14;int textLeft=checkLeft+20;
-            bool image=HasImage(node);int prefixWidth=Advance(prefix,font);int imageWidth=image?Advance("图片",font)+8:0;int priorityWidth=Advance(priority,font);int headerWidth=prefixWidth+(image?6+imageWidth:0)+(priority.Length>0?6+priorityWidth:0)+(title.Length>0?6:0);
+            bool image=HasImage(node),reminder=HasReminder(node);int prefixWidth=Advance(prefix,font);int imageWidth=image?Advance("图片",font)+8:0;int reminderWidth=reminder?Advance("提醒",font)+8:0;int priorityWidth=Advance(priority,font);int headerWidth=prefixWidth+(image?6+imageWidth:0)+(reminder?6+reminderWidth:0)+(priority.Length>0?6+priorityWidth:0)+(title.Length>0?6:0);
             int inlineTitleLeft=textLeft+headerWidth;int baseHeight=BaseHeight(font);int titleWidth;
             bool wrap=!flat && model.WrapNodeText;int fullTitleWidth=Math.Max(40,viewport-textLeft-6);int inlineTitleWidth=Math.Max(40,viewport-inlineTitleLeft);
             bool stacked=wrap&&title.Length>0&&Advance(title,font)+4>inlineTitleWidth&&inlineTitleWidth<Math.Max(80,fullTitleWidth*2/3);
@@ -132,6 +133,7 @@ internal sealed class TaskTreeSurface : Panel {
             int lineHeight=TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+2;int textTop=y+4;int headerHeight=Math.Max(1,Math.Min(height-8,lineHeight));
             int cursor=textLeft;row.Prefix=new Rectangle(cursor,textTop,prefixWidth,headerHeight);cursor+=prefixWidth;
             if(image){cursor+=6;row.Image=new Rectangle(cursor,textTop,imageWidth,headerHeight);cursor+=imageWidth;}
+            if(reminder){cursor+=6;row.Reminder=new Rectangle(cursor,textTop,reminderWidth,headerHeight);cursor+=reminderWidth;}
             if(priority.Length>0){cursor+=6;row.Priority=new Rectangle(cursor,textTop,priorityWidth,headerHeight);cursor+=priorityWidth;}
             if(title.Length>0&&!stacked)cursor+=6;
             int titleTop=stacked?y+baseHeight-2:textTop;
@@ -153,7 +155,7 @@ internal sealed class TaskTreeSurface : Panel {
             var bounds=OffsetRectangle(row.Bounds,offset);
             if(bounds.Bottom<0 || bounds.Top>ClientSize.Height)continue;
             var expand=OffsetRectangle(row.Expand,offset);var check=OffsetRectangle(row.Check,offset);var prefix=OffsetRectangle(row.Prefix,offset);
-            var image=OffsetRectangle(row.Image,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
+            var image=OffsetRectangle(row.Image,offset);var reminder=OffsetRectangle(row.Reminder,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
             bool selected=model.SelectedNode==row.Node;Color background=selected?SystemColors.Highlight:BackColor;Color foreground=selected?SystemColors.HighlightText:NodeColor(row.Node,ForeColor);
             using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,new Rectangle(0,bounds.Top,ClientSize.Width,bounds.Height));
             if(!model.SingleLinePaths) {
@@ -165,6 +167,7 @@ internal sealed class TaskTreeSurface : Panel {
             var single=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
             if(row.PrefixText.Length>0)TextRenderer.DrawText(e.Graphics,row.PrefixText,row.Font,prefix,foreground,single);
             if(!row.Image.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
+            if(!row.Reminder.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"提醒",underline,reminder,selected?SystemColors.HighlightText:Color.FromArgb(196,92,28),single);
             if(!row.Priority.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,row.PriorityText,underline,priority,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
             var titleFlags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.EndEllipsis|(row.Wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
             TextRenderer.DrawText(e.Graphics,row.TitleText,row.Font,title,foreground,titleFlags);
@@ -175,8 +178,8 @@ internal sealed class TaskTreeSurface : Panel {
     }
     Point ContentPoint(Row row,Point client) {return new Point(client.X-RowHorizontalOffset(row),client.Y-AutoScrollPosition.Y);}
     Row RowAt(Point client) {int y=client.Y-AutoScrollPosition.Y;return rows.FirstOrDefault(row=>y>=row.Bounds.Top&&y<row.Bounds.Bottom);}
-    enum Part {None,Expand,Check,Priority,Image,Title}
-    static Part HitPart(Row row,Point point) {if(row==null)return Part.None;if(row.Expand.Contains(point)&&row.HasChildren)return Part.Expand;if(row.Check.Contains(point))return Part.Check;if(row.Priority.Contains(point))return Part.Priority;if(row.Image.Contains(point))return Part.Image;return row.Bounds.Contains(point)?Part.Title:Part.None;}
+    enum Part {None,Expand,Check,Priority,Image,Reminder,Title}
+    static Part HitPart(Row row,Point point) {if(row==null)return Part.None;if(row.Expand.Contains(point)&&row.HasChildren)return Part.Expand;if(row.Check.Contains(point))return Part.Check;if(row.Priority.Contains(point))return Part.Priority;if(row.Image.Contains(point))return Part.Image;if(row.Reminder.Contains(point))return Part.Reminder;return row.Bounds.Contains(point)?Part.Title:Part.None;}
     protected override void OnMouseDown(MouseEventArgs e) {
         base.OnMouseDown(e);Focus();var row=RowAt(e.Location);Point point=row==null?Point.Empty:ContentPoint(row,e.Location);
         if(row==null){if(e.Button==MouseButtons.Left&&BlankDragEnabled!=null&&BlankDragEnabled()&&BlankDragRequested!=null)BlankDragRequested(e.Location);return;}
@@ -186,6 +189,7 @@ internal sealed class TaskTreeSurface : Panel {
         else if(part==Part.Check){if(CompletionClicked!=null)CompletionClicked(row.Node);pressedNode=null;}
         else if(part==Part.Priority){if(PriorityClicked!=null)PriorityClicked(row.Node);pressedNode=null;}
         else if(part==Part.Image){if(ImageClicked!=null)ImageClicked(row.Node);pressedNode=null;}
+        else if(part==Part.Reminder){if(ReminderClicked!=null)ReminderClicked(row.Node);pressedNode=null;}
         else dragNode=row.Node;
         Invalidate();
     }
@@ -224,6 +228,7 @@ internal sealed class TaskTreeSurface : Panel {
     internal Rectangle CheckBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Check);}
     internal Rectangle PrefixBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Prefix);}
     internal Rectangle ImageBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Image);}
+    internal Rectangle ReminderBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Reminder);}
     internal Rectangle PriorityBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Priority);}
     internal Rectangle TitleBounds(TreeNode node){var row=rows.FirstOrDefault(item=>item.Node==node);return row==null?Rectangle.Empty:ClientBounds(row,row.Title);}
     internal Size ContentExtent {get{return AutoScrollMinSize;}}
@@ -250,6 +255,7 @@ internal sealed partial class FloatingWindow {
         taskSurface.CompletionClicked=delegate(TreeNode node){if(tasks.CompletionClicked!=null)tasks.CompletionClicked(node);};
         taskSurface.PriorityClicked=delegate(TreeNode node){if(tasks.PriorityClicked!=null)tasks.PriorityClicked(node);};
         taskSurface.ImageClicked=delegate(TreeNode node){if(tasks.SimpleImageClicked!=null)tasks.SimpleImageClicked(node);};
+        taskSurface.ReminderClicked=async delegate(TreeNode node){await ShowReminderForNode(node,this);};
         taskSurface.NodeDoubleClicked=delegate(TreeNode node){if(tasks.NodeDoubleClicked!=null)tasks.NodeDoubleClicked(node);};
         taskSurface.HoverChanged=delegate(TreeNode node,Point point){hoverTimer.Stop();progressTip.Hide(taskSurface);hoverNode=node;hoverSurface=taskSurface;if(!dragging&&node!=null&&node.Tag is long)hoverTimer.Start();};
         taskSurface.BlankDragEnabled=delegate{return simpleMode&&!closing&&!dragging;};taskSurface.BlankDragRequested=delegate(Point point){StartSimpleWindowDrag(taskSurface,point);};
@@ -268,7 +274,7 @@ internal sealed partial class FloatingWindow {
             var longNode=new TaskNode("2. [P4] 这是一条很长的任务文字，用于验证窗口变窄时只增加当前条目的行高，字体字号保持不变，其他短事项仍然保持正常行高，而且完整模式和简洁模式采用完全相同的排版逻辑。"){Tag=920002L};longNode.CurrentTextLength=longNode.Text.Length;
             string imageLeafText="1. [P3] 带图片的遗留事项文字很长，用于验证最长条目宽度计算时包含图片入口本身占用的空间，而且滚动到最右侧时正文不会被图片入口挤掉";
             string plainLeafText="2. [P3] 带图片的遗留事项文字很长，用于验证最长条目宽度计算时包含图片入口本身占用的空间，而且滚动到最右侧时正文不会被图片入口挤掉";
-            var imageLeaf=new TreeNode(imageLeafText){Tag=new OutstandingLeaf{TaskId=920001L,Id="surface-image",Html="带图片<img src='/api/v2/tasks/920001/attachments/1'>",Priority=3,CurrentTextLength=imageLeafText.Length}};
+            var imageLeaf=new TreeNode(imageLeafText){Tag=new OutstandingLeaf{TaskId=920001L,Id="surface-image",Html="带图片<img src='/api/v2/tasks/920001/attachments/1'>",ReminderAt=DateTimeOffset.UtcNow.AddHours(1).ToString("o"),Priority=3,CurrentTextLength=imageLeafText.Length}};
             var plainLeaf=new TreeNode(plainLeafText){Tag=new OutstandingLeaf{TaskId=920001L,Id="surface-plain",Html="无图片",Priority=3,CurrentTextLength=plainLeafText.Length}};
             shortNode.Nodes.Add(imageLeaf);shortNode.Nodes.Add(plainLeaf);tasks.Nodes.Add(shortNode);tasks.Nodes.Add(longNode);shortNode.Expand();tasks.SetSimpleImageLinks(true);
             tasks.SingleLinePaths=false;tasks.SetWrappedText(true);taskSurface.Rebuild(false);taskSurface.Update();
@@ -277,9 +283,9 @@ internal sealed partial class FloatingWindow {
             var wrappedImageBounds=taskSurface.NodeBounds(imageLeaf);var wrappedPlainBounds=taskSurface.NodeBounds(plainLeaf);
             if(wrappedImageBounds.Bottom!=wrappedPlainBounds.Top)throw new Exception("Wrapped rows contain an unexpected blank line");
             if(Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Wrapped text changed the task font size");
-            var prefix=taskSurface.PrefixBounds(imageLeaf);var image=taskSurface.ImageBounds(imageLeaf);var priority=taskSurface.PriorityBounds(imageLeaf);var title=taskSurface.TitleBounds(imageLeaf);
-            if(prefix.IsEmpty || image.IsEmpty || priority.IsEmpty || title.IsEmpty || prefix.Right>=image.Left || image.Right>=priority.Left || priority.Right>=title.Left)throw new Exception("Sequence, image, priority, and title spacing overlap");
-            if(priority.Top!=title.Top || image.Top!=priority.Top || prefix.Top!=image.Top)throw new Exception("Priority text is vertically misaligned");
+            var prefix=taskSurface.PrefixBounds(imageLeaf);var image=taskSurface.ImageBounds(imageLeaf);var reminder=taskSurface.ReminderBounds(imageLeaf);var priority=taskSurface.PriorityBounds(imageLeaf);var title=taskSurface.TitleBounds(imageLeaf);
+            if(prefix.IsEmpty || image.IsEmpty || reminder.IsEmpty || priority.IsEmpty || title.IsEmpty || prefix.Right>=image.Left || image.Right>=reminder.Left || reminder.Right>=priority.Left || priority.Right>=title.Left)throw new Exception("Sequence, image, reminder, priority, and title spacing overlap");
+            if(priority.Top!=title.Top || reminder.Top!=priority.Top || image.Top!=reminder.Top || prefix.Top!=image.Top)throw new Exception("Reminder or priority text is vertically misaligned");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-variable-rows-full-test.png"));}
             SetSimpleMode(true);Size=new Size(260,430);taskSurface.Rebuild(false);taskSurface.Update();
             if(taskSurface.NodeBounds(longNode).Height<=taskSurface.NodeBounds(shortNode).Height || Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Simple mode did not retain the shared variable-row renderer and font size");
