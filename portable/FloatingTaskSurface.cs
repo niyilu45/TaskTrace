@@ -24,6 +24,7 @@ internal sealed class TaskTreeSurface : Panel {
     Point pressedAt;
     int dropZone;
     bool dragging;
+    bool correctingScroll;
     int verticalWheelRemainder,horizontalWheelRemainder;
 
     internal Action<TreeNode> CompletionClicked,PriorityClicked,ImageClicked,NodeDoubleClicked;
@@ -55,12 +56,34 @@ internal sealed class TaskTreeSurface : Panel {
     }
     protected override void OnResize(EventArgs e) {base.OnResize(e);QueueRebuild();}
     protected override void OnFontChanged(EventArgs e) {base.OnFontChanged(e);QueueRebuild();}
-    protected override void OnScroll(ScrollEventArgs e) {base.OnScroll(e);Invalidate();}
+    int VisibleHorizontalMaximum(int verticalOffset) {
+        int viewportBottom=verticalOffset+Math.Max(1,ClientSize.Height),right=ClientSize.Width;
+        foreach(var row in rows)if(row.Bounds.Bottom>verticalOffset && row.Bounds.Top<viewportBottom)right=Math.Max(right,row.Bounds.Right);
+        return Math.Max(0,right-ClientSize.Width);
+    }
+    void ClampHorizontalScrollToVisibleRows() {
+        if(correctingScroll || rows.Count==0)return;
+        int x=-AutoScrollPosition.X,y=-AutoScrollPosition.Y,maxX=VisibleHorizontalMaximum(y);
+        if(x<=maxX)return;
+        correctingScroll=true;
+        try {AutoScrollPosition=new Point(maxX,y);} finally {correctingScroll=false;}
+    }
+    void RepaintViewport() {Invalidate(ClientRectangle);Update();}
+    protected override void OnScroll(ScrollEventArgs e) {
+        base.OnScroll(e);ClampHorizontalScrollToVisibleRows();Invalidate(ClientRectangle);
+    }
+    protected override void WndProc(ref Message message) {
+        const int HorizontalScroll=0x114,VerticalScroll=0x115,MouseWheel=0x20A,MouseHorizontalWheel=0x20E;
+        bool scrolled=message.Msg==HorizontalScroll||message.Msg==VerticalScroll||message.Msg==MouseWheel||message.Msg==MouseHorizontalWheel;
+        base.WndProc(ref message);
+        if(scrolled&&!IsDisposed){ClampHorizontalScrollToVisibleRows();RepaintViewport();}
+    }
     void SetScrollOffset(int x,int y) {
         int maxX=Math.Max(0,AutoScrollMinSize.Width-ClientSize.Width),maxY=Math.Max(0,AutoScrollMinSize.Height-ClientSize.Height);
-        x=Math.Max(0,Math.Min(maxX,x));y=Math.Max(0,Math.Min(maxY,y));
+        y=Math.Max(0,Math.Min(maxY,y));maxX=Math.Min(maxX,VisibleHorizontalMaximum(y));
+        x=Math.Max(0,Math.Min(maxX,x));
         if(x==-AutoScrollPosition.X && y==-AutoScrollPosition.Y)return;
-        AutoScrollPosition=new Point(x,y);Invalidate();
+        AutoScrollPosition=new Point(x,y);RepaintViewport();
     }
     void ScrollByWheel(int delta,bool horizontal) {
         int remainder=(horizontal?horizontalWheelRemainder:verticalWheelRemainder)+delta;
@@ -114,29 +137,32 @@ internal sealed class TaskTreeSurface : Panel {
         AutoScrollPosition=scroll;Invalidate();
     }
     static Color NodeColor(TreeNode node,Color fallback) {return node.ForeColor.IsEmpty?fallback:node.ForeColor;}
+    static Rectangle OffsetRectangle(Rectangle value,Point offset) {value.Offset(offset);return value;}
     protected override void OnPaint(PaintEventArgs e) {
-        base.OnPaint(e);if(model==null)return;var offset=AutoScrollPosition;e.Graphics.TranslateTransform(offset.X,offset.Y);
+        base.OnPaint(e);if(model==null)return;var offset=AutoScrollPosition;
         using(var linePen=new Pen(Color.FromArgb(185,192,201)))foreach(var row in rows) {
-            if(row.Bounds.Bottom<-offset.Y || row.Bounds.Top>ClientSize.Height-offset.Y)continue;
+            var bounds=OffsetRectangle(row.Bounds,offset);
+            if(bounds.Bottom<0 || bounds.Top>ClientSize.Height)continue;
+            var expand=OffsetRectangle(row.Expand,offset);var check=OffsetRectangle(row.Check,offset);var prefix=OffsetRectangle(row.Prefix,offset);
+            var image=OffsetRectangle(row.Image,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
             bool selected=model.SelectedNode==row.Node;Color background=selected?SystemColors.Highlight:BackColor;Color foreground=selected?SystemColors.HighlightText:NodeColor(row.Node,ForeColor);
-            using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,row.Bounds);
+            using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,bounds);
             if(!model.SingleLinePaths) {
-                for(int level=0;level<row.Node.Level;level++){int x=10+level*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,row.Bounds.Top,x,row.Bounds.Bottom);}
-                if(row.Node.Level>0){int x=10+(row.Node.Level-1)*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,row.AnchorY,row.Expand.Left,row.AnchorY);}
+                for(int level=0;level<row.Node.Level;level++){int x=offset.X+10+level*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,bounds.Top,x,bounds.Bottom);}
+                if(row.Node.Level>0){int x=offset.X+10+(row.Node.Level-1)*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,offset.Y+row.AnchorY,expand.Left,offset.Y+row.AnchorY);}
             }
-            if(row.HasChildren && !model.SingleLinePaths){e.Graphics.FillRectangle(Brushes.White,row.Expand);e.Graphics.DrawRectangle(Pens.Gray,row.Expand);e.Graphics.DrawLine(Pens.DimGray,row.Expand.Left+3,row.Expand.Top+6,row.Expand.Right-3,row.Expand.Top+6);if(!row.Node.IsExpanded)e.Graphics.DrawLine(Pens.DimGray,row.Expand.Left+6,row.Expand.Top+3,row.Expand.Left+6,row.Expand.Bottom-3);}
-            CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(row.Check.Left,row.Check.Top),row.Done?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal);
+            if(row.HasChildren && !model.SingleLinePaths){e.Graphics.FillRectangle(Brushes.White,expand);e.Graphics.DrawRectangle(Pens.Gray,expand);e.Graphics.DrawLine(Pens.DimGray,expand.Left+3,expand.Top+6,expand.Right-3,expand.Top+6);if(!row.Node.IsExpanded)e.Graphics.DrawLine(Pens.DimGray,expand.Left+6,expand.Top+3,expand.Left+6,expand.Bottom-3);}
+            CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(check.Left,check.Top),row.Done?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal);
             var single=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
-            if(row.PrefixText.Length>0)TextRenderer.DrawText(e.Graphics,row.PrefixText,row.Font,row.Prefix,foreground,single);
-            if(!row.Image.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,row.Image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
-            if(!row.Priority.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,row.PriorityText,underline,row.Priority,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
+            if(row.PrefixText.Length>0)TextRenderer.DrawText(e.Graphics,row.PrefixText,row.Font,prefix,foreground,single);
+            if(!row.Image.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
+            if(!row.Priority.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,row.PriorityText,underline,priority,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
             var titleFlags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.EndEllipsis|(row.Wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
-            TextRenderer.DrawText(e.Graphics,row.TitleText,row.Font,row.Title,foreground,titleFlags);
-            if(!row.Ancestors.IsEmpty)TextRenderer.DrawText(e.Graphics,row.AncestorText,row.Font,row.Ancestors,selected?Color.FromArgb(215,225,236):Color.FromArgb(156,163,175),single);
-            if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,row.Bounds,foreground,background);
-            if(row.Node==dropNode){int y=dropZone<0?row.Bounds.Top:dropZone>0?row.Bounds.Bottom-2:row.Bounds.Top+row.Bounds.Height/2;using(var pen=new Pen(Color.FromArgb(36,94,210),2))e.Graphics.DrawLine(pen,2,y,Math.Max(2,row.Bounds.Right-4),y);}
+            TextRenderer.DrawText(e.Graphics,row.TitleText,row.Font,title,foreground,titleFlags);
+            if(!row.Ancestors.IsEmpty)TextRenderer.DrawText(e.Graphics,row.AncestorText,row.Font,ancestors,selected?Color.FromArgb(215,225,236):Color.FromArgb(156,163,175),single);
+            if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,bounds,foreground,background);
+            if(row.Node==dropNode){int y=dropZone<0?bounds.Top:dropZone>0?bounds.Bottom-2:bounds.Top+bounds.Height/2;using(var pen=new Pen(Color.FromArgb(36,94,210),2))e.Graphics.DrawLine(pen,Math.Max(2,bounds.Left+2),y,Math.Max(2,bounds.Right-4),y);}
         }
-        e.Graphics.ResetTransform();
     }
     Point ContentPoint(Point client) {return new Point(client.X-AutoScrollPosition.X,client.Y-AutoScrollPosition.Y);}
     Row RowAt(Point client) {Point point=ContentPoint(client);return rows.FirstOrDefault(row=>row.Bounds.Contains(point));}
@@ -194,6 +220,7 @@ internal sealed class TaskTreeSurface : Panel {
     internal Size ContentExtent {get{return AutoScrollMinSize;}}
     internal Point ScrollOffset {get{return new Point(-AutoScrollPosition.X,-AutoScrollPosition.Y);}}
     internal void TestWheel(int delta,bool horizontal){ScrollByWheel(delta,horizontal);}
+    internal void TestScrollTo(int x,int y){SetScrollOffset(x,y);}
     internal TreeNode NodeAt(Point point){var row=RowAt(point);return row==null?null:row.Node;}
     internal void TestClick(Rectangle bounds,int clicks){var point=new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2);OnMouseDown(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));if(clicks>1)OnMouseDoubleClick(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));OnMouseUp(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));}
     internal void TestKey(Keys key){OnKeyDown(new KeyEventArgs(key));}
@@ -250,6 +277,11 @@ internal sealed partial class FloatingWindow {
                 string text=(index+3)+". [P"+(index%10)+"] "+(index%2==0?"滚动测试短事项":"用于验证简洁模式单行显示横向与纵向滚动可以同时稳定工作的长事项 "+index+" / 上级任务 / 项目总表");
                 var node=new TaskNode(text){Tag=921000L+index};node.CurrentTextLength=text.Length;tasks.Nodes.Add(node);
             }
+            var shortTailNodes=new List<TreeNode>();
+            for(int index=0;index<16;index++) {
+                string text=(index+27)+". [P7] 底部短事项 "+index;
+                var node=new TaskNode(text){Tag=922000L+index};node.CurrentTextLength=text.Length;tasks.Nodes.Add(node);shortTailNodes.Add(node);
+            }
             SetSimpleMode(true);Size=new Size(360,360);tasks.SingleLinePaths=true;tasks.SetWrappedText(false);
             longNode.Text="2. [P4] 很长的最底层任务文字 / 1. [P7] 同样很长的父任务文字 / 0. [P9] 更长的祖先任务文字";longNode.CurrentTextLength="2. [P4] 很长的最底层任务文字".Length;
             taskSurface.Rebuild(false);taskSurface.Update();
@@ -274,7 +306,18 @@ internal sealed partial class FloatingWindow {
             var preserved=taskSurface.ScrollOffset;taskSurface.Rebuild(true);taskSurface.Update();
             if(taskSurface.ScrollOffset!=preserved)throw new Exception("Refreshing the compact list did not preserve both scroll positions");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-single-line-scroll-test.png"));}
-            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; compact single-line mode handles simultaneous horizontal and vertical scrolling; every scroll invalidates the custom surface; mixed-axis positions and refresh preservation are stable.");
+            int globalHorizontal=Math.Max(0,taskSurface.ContentExtent.Width-taskSurface.ClientSize.Width),bottom=Math.Max(0,taskSurface.ContentExtent.Height-taskSurface.ClientSize.Height);
+            taskSurface.TestScrollTo(globalHorizontal,bottom);taskSurface.Update();
+            if(taskSurface.ScrollOffset.X!=0)throw new Exception("Vertical scrolling into shorter rows retained an empty horizontal viewport");
+            Rectangle tailTitle=Rectangle.Intersect(taskSurface.ClientRectangle,taskSurface.TitleBounds(shortTailNodes.Last()));
+            if(tailTitle.IsEmpty)throw new Exception("The final visible short row has no title bounds after mixed-axis scrolling");
+            using(var bitmap=new Bitmap(taskSurface.Width,taskSurface.Height)) {
+                taskSurface.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));int ink=0;
+                for(int y=tailTitle.Top;y<tailTitle.Bottom;y++)for(int x=tailTitle.Left;x<tailTitle.Right;x++){Color pixel=bitmap.GetPixel(x,y);if(pixel.R<190&&pixel.G<190&&pixel.B<190)ink++;}
+                if(ink<3)throw new Exception("Scrolled short-row text was not painted until selection");
+                bitmap.Save(Path.Combine(data,"floating-scroll-visible-rows-test.png"));
+            }
+            File.WriteAllText(Path.Combine(data,"floating-task-surface-test.txt"),"PASS: full/simple modes share one renderer; compact single-line mode handles simultaneous horizontal and vertical scrolling; every native and wheel scroll immediately repaints the custom surface; mixed-axis positions and refresh preservation are stable; shorter visible rows clamp stale horizontal offsets and retain painted text.");
         } finally {
             if(simpleMode)SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);tasks.SingleLinePaths=originalFlat;tasks.SetWrappedText(originalWrap);Size=originalSize;taskSurface.Rebuild(false);
             if(originalMode)SetSimpleMode(true);if(originalSelection!=null&&originalSelection.TreeView==tasks)tasks.SelectedNode=originalSelection;rendering=originalRendering;
