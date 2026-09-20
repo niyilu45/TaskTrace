@@ -70,7 +70,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	function bindingForTask(taskId: number): TaskTraceTeamBindingStatus | undefined {
-		return status.value.bindings?.find(binding => binding.task_ids?.includes(taskId))
+		return status.value.bindings?.find(binding => binding.root_task_id === taskId || binding.task_ids?.includes(taskId))
 	}
 
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)

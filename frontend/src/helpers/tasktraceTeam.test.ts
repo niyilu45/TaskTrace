@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {overrideTeamLinkRepository, readTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
+import {collaborationMembers, overrideTeamLinkRepository, readTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
 
 function marker(value: object) {
 	const bytes = new TextEncoder().encode(JSON.stringify(value))
@@ -13,6 +13,16 @@ function decodeTeamLink(link: string) {
 	const padded = encoded.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - encoded.length % 4) % 4)
 	return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded), char => char.charCodeAt(0))))
 }
+
+describe('TaskTrace collaboration members', () => {
+	it('includes the owner and current user for legacy member lists', () => {
+		expect(collaborationMembers({owner: 'owner', members: ['teammate']}, 'current')).toEqual(['owner', 'current', 'teammate'])
+	})
+
+	it('deduplicates usernames without regard to case', () => {
+		expect(collaborationMembers({owner: 'Alice', members: ['alice', 'Bob', ' bob ']}, 'ALICE')).toEqual(['Alice', 'Bob'])
+	})
+})
 
 describe('TaskTrace team comment metadata', () => {
 	it('shows the original LAN author on imported comments', () => {

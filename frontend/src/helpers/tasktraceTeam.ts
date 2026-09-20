@@ -41,3 +41,20 @@ export function overrideTeamLinkRepository(link: string, repository: string) {
 		return link
 	}
 }
+
+export function collaborationMembers(
+	binding?: {owner?: string, members?: Array<string> | null},
+	currentUsername = '',
+) {
+	const seen = new Set<string>()
+	const result: string[] = []
+	for (const candidate of [binding?.owner, currentUsername, ...(binding?.members ?? [])]) {
+		const member = candidate?.trim()
+		if (!member) continue
+		const key = member.toLowerCase()
+		if (seen.has(key)) continue
+		seen.add(key)
+		result.push(member)
+	}
+	return result
+}

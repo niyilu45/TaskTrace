@@ -46,13 +46,14 @@ import {computed, onMounted, ref} from 'vue'
 
 import Icon from '@/components/misc/Icon'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {collaborationMembers} from '@/helpers/tasktraceTeam'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
 const props = defineProps<{taskId: number}>()
 const teamStore = useTasktraceTeamStore()
 const expanded = ref(false)
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
-const members = computed(() => [...new Set((binding.value?.members ?? []).filter(Boolean))])
+const members = computed(() => collaborationMembers(binding.value, teamStore.status.username))
 
 function avatarFor(username: string) {
 	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
@@ -63,7 +64,7 @@ function initials(username: string) {
 }
 
 onMounted(() => {
-	if (isLocalBuild && !teamStore.loaded) void teamStore.refresh().catch(() => undefined)
+	if (isLocalBuild) void teamStore.refresh().catch(() => undefined)
 })
 </script>
 
