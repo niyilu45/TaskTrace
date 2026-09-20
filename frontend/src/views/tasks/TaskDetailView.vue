@@ -373,8 +373,8 @@
 					</div>
 
 					<TeamCollaboration
-						v-if="canWrite"
 						:task-id="taskId"
+						:can-write="canWrite"
 					/>
 					
 					<!-- Reactions -->
@@ -738,6 +738,7 @@ import {REMINDER_PERIOD_RELATIVE_TO_TYPES} from '@/types/IReminderPeriodRelative
 import {playPopSound} from '@/helpers/playPop'
 
 import {useTaskStore} from '@/stores/tasks'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {useKanbanStore} from '@/stores/kanban'
 import {useProjectStore} from '@/stores/projects'
 import {useAuthStore} from '@/stores/auth'
@@ -765,6 +766,7 @@ const {t} = useI18n({useScope: 'global'})
 
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
+const teamStore = useTasktraceTeamStore()
 const configStore = useConfigStore()
 const timeTrackingEnabled = computed(() => configStore.isProFeatureEnabled(PRO_FEATURE.TIME_TRACKING))
 const kanbanStore = useKanbanStore()
@@ -855,7 +857,8 @@ const projectRoute = computed(() => ({
 
 const canWrite = computed(() => (
 	task.value.maxPermission !== null &&
-	task.value.maxPermission > PERMISSIONS.READ
+	task.value.maxPermission > PERMISSIONS.READ &&
+	teamStore.canWriteTask(task.value.id)
 ))
 
 const color = computed(() => {

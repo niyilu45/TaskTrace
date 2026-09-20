@@ -10,12 +10,14 @@ import {
 	tasktraceTeamMembersImport,
 	tasktraceTeamMembersSearch,
 	tasktraceTeamNotificationsRead,
+	tasktraceTeamPermissionsConfigure,
 	tasktraceTeamResolve,
 	tasktraceTeamStatus,
 	tasktraceTeamSync,
 	type TaskTraceTeamBindingStatus,
 	type TaskTraceTeamMemberCandidate,
 	type TaskTraceTeamMemberImportResult,
+	type TaskTraceTeamPermissionUpdate,
 	type TaskTraceTeamResolution,
 	type TaskTraceTeamStatus,
 } from '@/client/generated'
@@ -67,6 +69,15 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return run(() => tasktraceTeamConfigure({body: {share_id: shareId, notify}}))
 	}
 
+	async function configurePermissions(shareId: string, taskId: number, outstandingId: string, permissions: TaskTraceTeamPermissionUpdate[]) {
+		return run(() => tasktraceTeamPermissionsConfigure({body: {
+			share_id: shareId,
+			task_id: taskId,
+			outstanding_id: outstandingId,
+			permissions,
+		}}))
+	}
+
 	async function resolve(shareId: string, resolutions: TaskTraceTeamResolution[]) {
 		return run(() => tasktraceTeamResolve({body: {share_id: shareId, resolutions}}))
 	}
@@ -105,9 +116,24 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return status.value.bindings?.find(binding => binding.root_task_id === taskId || binding.task_ids?.includes(taskId))
 	}
 
+	function permissionForTask(taskId: number) {
+		const binding = bindingForTask(taskId)
+		const target = binding?.permission_targets?.find(item => item.kind === 'task' && item.task_id === taskId)
+		const username = status.value.username?.toLowerCase()
+		return target?.permissions?.find(permission => permission.username?.toLowerCase() === username)
+	}
+
+	function canWriteTask(taskId: number) {
+		const binding = bindingForTask(taskId)
+		if (!binding) return true
+		const permission = permissionForTask(taskId)
+		if (permission) return permission.write === true
+		return binding.owner?.toLowerCase() === status.value.username?.toLowerCase()
+	}
+
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)
 	const notificationCount = computed(() => status.value.notifications?.length ?? 0)
 	const activityCount = computed(() => conflictCount.value + notificationCount.value)
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, configurePermissions, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask}
 })

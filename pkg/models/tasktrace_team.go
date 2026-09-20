@@ -42,14 +42,15 @@ type TaskTraceTeamRepositoryInfo struct {
 }
 
 type TaskTraceTeamManifest struct {
-	Schema    int       `json:"schema"`
-	ShareID   string    `json:"share_id"`
-	RootNode  string    `json:"root_node"`
-	Owner     string    `json:"owner"`
-	Members   []string  `json:"members"`
-	TokenHash string    `json:"token_hash"`
-	Created   time.Time `json:"created"`
-	Updated   time.Time `json:"updated"`
+	Schema      int                                        `json:"schema"`
+	ShareID     string                                     `json:"share_id"`
+	RootNode    string                                     `json:"root_node"`
+	Owner       string                                     `json:"owner"`
+	Members     []string                                   `json:"members"`
+	Permissions map[string][]TaskTraceTeamMemberPermission `json:"permissions,omitempty"`
+	TokenHash   string                                     `json:"token_hash"`
+	Created     time.Time                                  `json:"created"`
+	Updated     time.Time                                  `json:"updated"`
 }
 
 type TaskTraceTeamComment struct {
@@ -74,6 +75,8 @@ type TaskTraceTeamTask struct {
 	ParentNode  string                    `json:"parent_node,omitempty"`
 	Title       string                    `json:"title"`
 	Description string                    `json:"description"`
+	Owner       string                    `json:"owner,omitempty"`
+	Assignees   []string                  `json:"assignees,omitempty"`
 	Done        bool                      `json:"done"`
 	Status      TaskStatus                `json:"status"`
 	Outstanding string                    `json:"outstanding,omitempty"`
@@ -180,18 +183,20 @@ type TaskTraceTeamResolveRequest struct {
 }
 
 type TaskTraceTeamBindingStatus struct {
-	ShareID       string                  `json:"share_id"`
-	Owner         string                  `json:"owner"`
-	Members       []string                `json:"members"`
-	RootTaskID    int64                   `json:"root_task_id"`
-	RootTaskTitle string                  `json:"root_task_title,omitempty" readOnly:"true" doc:"The local title of the shared task root."`
-	TaskIDs       []int64                 `json:"task_ids"`
-	Link          string                  `json:"link"`
-	MemberLink    string                  `json:"member_link" readOnly:"true" doc:"A portable link containing the members of this collaboration team."`
-	Notify        bool                    `json:"notify"`
-	LastSync      time.Time               `json:"last_sync,omitempty"`
-	LastError     string                  `json:"last_error,omitempty"`
-	Conflicts     []TaskTraceTeamConflict `json:"conflicts"`
+	ShareID              string                          `json:"share_id"`
+	Owner                string                          `json:"owner"`
+	Members              []string                        `json:"members"`
+	RootTaskID           int64                           `json:"root_task_id"`
+	RootTaskTitle        string                          `json:"root_task_title,omitempty" readOnly:"true" doc:"The local title of the shared task root."`
+	TaskIDs              []int64                         `json:"task_ids"`
+	Link                 string                          `json:"link"`
+	MemberLink           string                          `json:"member_link" readOnly:"true" doc:"A portable link containing the members of this collaboration team."`
+	Notify               bool                            `json:"notify"`
+	CanManagePermissions bool                            `json:"can_manage_permissions" readOnly:"true" doc:"Whether the current user may change collaboration permissions."`
+	PermissionTargets    []TaskTraceTeamPermissionTarget `json:"permission_targets" readOnly:"true" doc:"Task and outstanding-item permissions visible to the current user."`
+	LastSync             time.Time                       `json:"last_sync,omitempty"`
+	LastError            string                          `json:"last_error,omitempty"`
+	Conflicts            []TaskTraceTeamConflict         `json:"conflicts"`
 }
 
 type TaskTraceTeamNotification struct {
@@ -678,7 +683,22 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		if err != nil {
 			return snapshot, err
 		}
-		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Done: task.Done, Status: task.Status, Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
+		owner := actor
+		if task.CreatedByID != 0 {
+			if createdBy, ownerErr := user.GetUserByID(s, task.CreatedByID); ownerErr == nil && createdBy.Username != "" {
+				owner = createdBy.Username
+			}
+		}
+		assignees := []string{}
+		if rows, assigneeErr := getRawTaskAssigneesForTasks(s, []int64{taskID}); assigneeErr == nil {
+			for _, row := range rows {
+				if row.Username != "" {
+					assignees = append(assignees, row.Username)
+				}
+			}
+			sort.Slice(assignees, func(i, j int) bool { return strings.ToLower(assignees[i]) < strings.ToLower(assignees[j]) })
+		}
+		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Owner: owner, Assignees: assignees, Done: task.Done, Status: task.Status, Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
 		for _, comment := range comments {
 			author := actor
 			if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok && marker.Author != "" {
@@ -1297,11 +1317,24 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
+	var manifest TaskTraceTeamManifest
+	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
+	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+		return err
+	}
+	if changed, permissionErr := taskTraceTeamReconcileManifestPermissions(s, binding, &manifest, local, actor); permissionErr != nil {
+		return permissionErr
+	} else if changed {
+		if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+			return err
+		}
+	}
 	var previousLocal *TaskTraceTeamSnapshot
 	var storedLocal TaskTraceTeamSnapshot
 	if readErr := taskTraceTeamReadJSON(taskTraceTeamSnapshotPath(binding, actor, state.DeviceID), &storedLocal); readErr == nil {
 		previousLocal = &storedLocal
 	}
+	taskTraceTeamProtectSnapshotPermissions(&local, previousLocal, &manifest, actor)
 	progressChange := taskTraceTeamLatestProgressChange(previousLocal, local, actor)
 	localHash := taskTraceTeamSnapshotHash(local)
 	localChanged := binding.LastSnapshotHash != "" && binding.LastSnapshotHash != localHash
@@ -1313,6 +1346,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		return err
 	}
 	snapshots = taskTraceTeamLatestActorSnapshots(snapshots)
+	snapshots = taskTraceTeamFilterSnapshotsPermissions(snapshots, binding, &manifest)
 	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots); err != nil {
 		return err
 	}
@@ -1333,6 +1367,9 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	}
 	conflicts := []TaskTraceTeamConflict{}
 	for node, taskID := range binding.NodeTasks {
+		if !taskTraceTeamCan(&manifest, node, "", actor, false) {
+			continue
+		}
 		rows := allByNode[node]
 		if len(rows) == 0 {
 			continue
@@ -1366,6 +1403,13 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		}
 		sort.Strings(fields[3:])
 		for _, field := range fields {
+			if strings.HasPrefix(field, "outstanding:") {
+				outstandingID := strings.TrimPrefix(field, "outstanding:")
+				if !taskTraceTeamCan(&manifest, node, outstandingID, actor, false) {
+					delete(outstandingItems, outstandingID)
+					continue
+				}
+			}
 			key := node + ":" + field
 			required := ""
 			if resolution, ok := resolutions[key]; ok {
@@ -1537,7 +1581,10 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if len(snapshot.Tasks) == 0 {
 		return nil, errors.New("task subtree is empty")
 	}
-	manifest := TaskTraceTeamManifest{Schema: taskTraceTeamSchema, ShareID: shareID, RootNode: snapshot.Tasks[0].NodeID, Owner: u.Username, Members: members, TokenHash: taskTraceTeamTokenHash(secret), Created: time.Now().UTC(), Updated: time.Now().UTC()}
+	manifest := TaskTraceTeamManifest{Schema: taskTraceTeamSchema, ShareID: shareID, RootNode: snapshot.Tasks[0].NodeID, Owner: u.Username, Members: members, Permissions: map[string][]TaskTraceTeamMemberPermission{}, TokenHash: taskTraceTeamTokenHash(secret), Created: time.Now().UTC(), Updated: time.Now().UTC()}
+	if _, err := taskTraceTeamReconcileManifestPermissions(s, &binding, &manifest, snapshot, u.Username); err != nil {
+		return nil, err
+	}
 	if err := taskTraceTeamWriteJSON(filepath.Join(taskTraceTeamShareDir(root, shareID), "manifest.json"), &manifest); err != nil {
 		return nil, err
 	}
@@ -1881,6 +1928,10 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		strings.ToLower(u.Username): {Username: u.Username, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
 	}
 	for _, binding := range state.Bindings {
+		manifest := TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
+		if manifestErr := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest); manifestErr != nil {
+			manifest = TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
+		}
 		ids := make([]int64, 0, len(binding.NodeTasks))
 		for _, id := range binding.NodeTasks {
 			ids = append(ids, id)
@@ -1897,7 +1948,23 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		if task, taskErr := GetTaskByIDSimple(s, binding.RootTaskID); taskErr == nil {
 			rootTitle = task.Title
 		}
-		row := TaskTraceTeamBindingStatus{ShareID: binding.ShareID, Owner: binding.Owner, Members: binding.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle, TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(binding.Members), Notify: binding.Notify, LastSync: binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts}
+		permissionTargets := taskTraceTeamPermissionTargets(s, &binding, &manifest, u.Username)
+		canManagePermissions := strings.EqualFold(binding.Owner, u.Username)
+		if !canManagePermissions {
+			for _, target := range permissionTargets {
+				if target.CanManage {
+					canManagePermissions = true
+					break
+				}
+			}
+		}
+		row := TaskTraceTeamBindingStatus{
+			ShareID: binding.ShareID, Owner: binding.Owner, Members: manifest.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle,
+			TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(manifest.Members),
+			Notify: binding.Notify, CanManagePermissions: canManagePermissions,
+			PermissionTargets: permissionTargets,
+			LastSync:          binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts,
+		}
 		status.Bindings = append(status.Bindings, row)
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(s, &binding, u.Username)...)

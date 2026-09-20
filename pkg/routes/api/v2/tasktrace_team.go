@@ -43,6 +43,11 @@ func RegisterTaskTraceTeamRoutes(api huma.API) {
 		Method:      http.MethodPut, Path: "/tasktrace/team/configure", Tags: tags,
 	}, taskTraceTeamConfigure)
 	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-permissions-configure", Summary: "Configure collaboration permissions",
+		Description: "Replaces member read and write choices for one shared task or outstanding item. Owner and assignee permissions remain read-write and cannot be reduced.",
+		Method:      http.MethodPut, Path: "/tasktrace/team/permissions", Tags: tags,
+	}, taskTraceTeamPermissionsConfigure)
+	Register(api, huma.Operation{
 		OperationID: "tasktrace-team-resolve", Summary: "Resolve team task conflicts",
 		Description: "Applies one selected value for each supplied task-name, completion, status, or outstanding-item conflict.",
 		Method:      http.MethodPost, Path: "/tasktrace/team/conflicts/resolve", Tags: tags,
@@ -176,6 +181,23 @@ func taskTraceTeamConfigure(ctx context.Context, in *struct {
 	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
 }
 
+func taskTraceTeamPermissionsConfigure(ctx context.Context, in *struct {
+	Body models.TaskTraceTeamPermissionsRequest
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
+	s, a, err := taskTraceTeamWriteSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	status, err := models.TaskTraceTeamConfigurePermissions(s, a, in.Body)
+	if err != nil {
+		return nil, translateDomainError(err)
+	}
+	if err := s.Commit(); err != nil {
+		return nil, huma.Error500InternalServerError("save team task permissions", err)
+	}
+	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
+}
 func taskTraceTeamResolve(ctx context.Context, in *struct {
 	Body models.TaskTraceTeamResolveRequest
 }) (*singleBody[models.TaskTraceTeamStatus], error) {

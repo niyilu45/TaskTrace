@@ -2737,6 +2737,10 @@ export type TaskTraceOutstandingMove = {
 };
 
 export type TaskTraceTeamBindingStatus = {
+    /**
+     * Whether the current user may change collaboration permissions.
+     */
+    readonly can_manage_permissions?: boolean;
     conflicts?: Array<TaskTraceTeamConflict> | null;
     last_error?: string;
     last_sync?: string;
@@ -2748,6 +2752,10 @@ export type TaskTraceTeamBindingStatus = {
     members?: Array<string> | null;
     notify?: boolean;
     owner?: string;
+    /**
+     * Task and outstanding-item permissions visible to the current user.
+     */
+    readonly permission_targets?: Array<TaskTraceTeamPermissionTarget> | null;
     root_task_id?: number;
     /**
      * The local title of the shared task root.
@@ -2862,6 +2870,29 @@ export type TaskTraceTeamMemberImportResult = {
     readonly status?: TaskTraceTeamStatus;
 };
 
+export type TaskTraceTeamMemberPermission = {
+    /**
+     * Whether this member is assigned to complete this task. Assignees always have read and write access.
+     */
+    readonly assignee?: boolean;
+    /**
+     * Whether this member owns this shared item. Owners always have read and write access.
+     */
+    readonly owner?: boolean;
+    /**
+     * Whether this member may read the shared task or outstanding item.
+     */
+    read?: boolean;
+    /**
+     * The Windows username of this collaboration member.
+     */
+    username?: string;
+    /**
+     * Whether this member may modify the shared task or outstanding item. Write access always includes read access.
+     */
+    write?: boolean;
+};
+
 export type TaskTraceTeamMemberProfile = {
     avatar?: string;
     username?: string;
@@ -2897,6 +2928,75 @@ export type TaskTraceTeamNotificationsReadRequest = {
      */
     readonly $schema?: string;
     ids?: Array<string> | null;
+};
+
+export type TaskTraceTeamPermissionTarget = {
+    /**
+     * Whether the current user may configure this target's member permissions.
+     */
+    readonly can_manage?: boolean;
+    /**
+     * Whether this permission target is a task or an outstanding item.
+     */
+    readonly kind?: 'task' | 'outstanding';
+    /**
+     * The stable shared node id for this task.
+     */
+    readonly node_id?: string;
+    /**
+     * The stable outstanding-item id when this target represents an outstanding item.
+     */
+    readonly outstanding_id?: string;
+    /**
+     * The effective member permissions and protected owner or assignee roles.
+     */
+    readonly permissions?: Array<TaskTraceTeamMemberPermission> | null;
+    /**
+     * The local task id represented by this permission target.
+     */
+    readonly task_id?: number;
+    /**
+     * The local display title for this permission target.
+     */
+    readonly title?: string;
+};
+
+export type TaskTraceTeamPermissionUpdate = {
+    /**
+     * Whether this member may read the target.
+     */
+    read?: boolean;
+    /**
+     * The Windows username to configure.
+     */
+    username?: string;
+    /**
+     * Whether this member may modify the target. Write access also enables read access.
+     */
+    write?: boolean;
+};
+
+export type TaskTraceTeamPermissionsRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * The outstanding-item id to update. Leave empty to update the task itself.
+     */
+    outstanding_id?: string;
+    /**
+     * The complete set of editable member read and write choices.
+     */
+    permissions?: Array<TaskTraceTeamPermissionUpdate> | null;
+    /**
+     * The collaboration share to update.
+     */
+    share_id?: string;
+    /**
+     * The local task whose permissions are being updated.
+     */
+    task_id?: number;
 };
 
 export type TaskTraceTeamRepositoryInfo = {
@@ -5113,8 +5213,46 @@ export type TaskTraceTeamMemberImportResultWritable = {
     [key: string]: never;
 };
 
+export type TaskTraceTeamMemberPermissionWritable = {
+    /**
+     * Whether this member may read the shared task or outstanding item.
+     */
+    read?: boolean;
+    /**
+     * The Windows username of this collaboration member.
+     */
+    username?: string;
+    /**
+     * Whether this member may modify the shared task or outstanding item. Write access always includes read access.
+     */
+    write?: boolean;
+};
+
 export type TaskTraceTeamNotificationsReadRequestWritable = {
     ids?: Array<string> | null;
+};
+
+export type TaskTraceTeamPermissionTargetWritable = {
+    [key: string]: never;
+};
+
+export type TaskTraceTeamPermissionsRequestWritable = {
+    /**
+     * The outstanding-item id to update. Leave empty to update the task itself.
+     */
+    outstanding_id?: string;
+    /**
+     * The complete set of editable member read and write choices.
+     */
+    permissions?: Array<TaskTraceTeamPermissionUpdate> | null;
+    /**
+     * The collaboration share to update.
+     */
+    share_id?: string;
+    /**
+     * The local task whose permissions are being updated.
+     */
+    task_id?: number;
 };
 
 export type TaskTraceTeamResolveRequestWritable = {
@@ -10850,6 +10988,31 @@ export type TasktraceTeamNotificationsReadResponses = {
 };
 
 export type TasktraceTeamNotificationsReadResponse = TasktraceTeamNotificationsReadResponses[keyof TasktraceTeamNotificationsReadResponses];
+
+export type TasktraceTeamPermissionsConfigureData = {
+    body: TaskTraceTeamPermissionsRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/permissions';
+};
+
+export type TasktraceTeamPermissionsConfigureErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamPermissionsConfigureError = TasktraceTeamPermissionsConfigureErrors[keyof TasktraceTeamPermissionsConfigureErrors];
+
+export type TasktraceTeamPermissionsConfigureResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamPermissionsConfigureResponse = TasktraceTeamPermissionsConfigureResponses[keyof TasktraceTeamPermissionsConfigureResponses];
 
 export type TasktraceTeamSyncData = {
     body?: never;

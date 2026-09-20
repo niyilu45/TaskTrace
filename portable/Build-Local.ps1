@@ -50,9 +50,14 @@ try {
         Download-TaskTraceGoDependencies $dependencies.GoModules
         $env:CGO_ENABLED = '1'
         $env:CC = 'gcc'
-        $ldflags = '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=' + $Version
+        # Go's internal PE linker produces a Windows x64 binary that works on
+        # both Windows 10 and 11. Some MinGW versions emit a statically linked
+        # PE which Windows reports as error 193 even though its header is x64.
+        $ldflags = '-s -w -linkmode internal -X code.vikunja.io/api/pkg/version.Version=' + $Version
         & go build -tags 'osusergo,timetzdata' -ldflags $ldflags -o (Join-Path $packageRoot 'TaskTrace-server.exe') .
         Assert-Exit 'Windows server build'
+        & (Join-Path $packageRoot 'TaskTrace-server.exe') version | Out-Null
+        Assert-Exit 'Windows server executable check'
     } finally { $env:CGO_ENABLED = $oldCGO; $env:CC = $oldCC }
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     & $compiler /nologo /target:winexe /platform:x64 /optimize+ ('/win32icon:' + (Join-Path $repoRoot 'frontend/public/favicon.ico')) ('/win32manifest:' + (Join-Path $repoRoot 'portable/FloatingWindow.manifest')) /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll ('/out:' + (Join-Path $packageRoot 'TaskTrace-floating.exe')) (Join-Path $repoRoot 'portable/FloatingWindow.cs') (Join-Path $repoRoot 'portable/FloatingInteractions.cs') (Join-Path $repoRoot 'portable/FloatingImageThumbnails.cs') (Join-Path $repoRoot 'portable/FloatingDraftCache.cs') (Join-Path $repoRoot 'portable/FloatingUndo.cs') (Join-Path $repoRoot 'portable/FloatingProgressReferences.cs') (Join-Path $repoRoot 'portable/FloatingProgressEditor.cs') (Join-Path $repoRoot 'portable/FloatingProgressDatePicker.cs') (Join-Path $repoRoot 'portable/FloatingSimpleMode.cs') (Join-Path $repoRoot 'portable/FloatingTaskSurface.cs') (Join-Path $repoRoot 'portable/FloatingReminders.cs') (Join-Path $repoRoot 'portable/FloatingEdgeHide.cs') (Join-Path $repoRoot 'portable/FloatingPriorityFilter.cs') (Join-Path $repoRoot 'portable/FloatingPriorityLinks.cs') (Join-Path $repoRoot 'portable/FloatingSimpleDetails.cs') (Join-Path $repoRoot 'portable/FloatingTaskRefresh.cs') (Join-Path $repoRoot 'portable/FloatingAutoRefresh.cs') (Join-Path $repoRoot 'portable/FloatingUpdates.cs')

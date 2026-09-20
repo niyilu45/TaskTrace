@@ -1,6 +1,6 @@
 <template>
 	<section
-		v-if="isLocalBuild && teamStore.status.enabled"
+		v-if="isLocalBuild && teamStore.status.enabled && (binding || canWrite)"
 		class="content details team-collaboration d-print-none"
 	>
 		<h2 class="task-section-title">
@@ -48,6 +48,13 @@
 					@click="copyMemberLink"
 				>
 					分享成员
+				</XButton>
+				<XButton
+					variant="secondary"
+					:loading="openingPermissions"
+					@click="openPermissions"
+				>
+					编辑权限
 				</XButton>
 			</div>
 			<div class="field">
@@ -182,6 +189,12 @@
 				共享当前任务
 			</XButton>
 		</form>
+		<TeamPermissionEditor
+			v-if="binding && showPermissions"
+			:task-id="taskId"
+			:binding="binding"
+			@close="showPermissions = false"
+		/>
 	</section>
 </template>
 
@@ -190,16 +203,19 @@ import {computed, onMounted, ref} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
 import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
+import TeamPermissionEditor from '@/components/tasks/partials/TeamPermissionEditor.vue'
 import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {error, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
-const props = defineProps<{taskId: number}>()
+const props = defineProps<{taskId: number, canWrite: boolean}>()
 const teamStore = useTasktraceTeamStore()
 const selectedMembers = ref<string[]>([])
 const memberLink = ref('')
+const showPermissions = ref(false)
+const openingPermissions = ref(false)
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const candidateMembers = computed(() => (teamStore.status.repository?.candidates ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
@@ -271,6 +287,19 @@ async function copyMemberLink() {
 	if (!binding.value?.member_link) return
 	await navigator.clipboard.writeText(binding.value.member_link)
 	success({message: '团队成员链接已复制。'})
+}
+
+async function openPermissions() {
+	if (openingPermissions.value) return
+	openingPermissions.value = true
+	try {
+		await teamStore.sync()
+		showPermissions.value = true
+	} catch (cause) {
+		error(cause)
+	} finally {
+		openingPermissions.value = false
+	}
 }
 
 async function setNotify(notify: boolean) {
