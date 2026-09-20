@@ -86,6 +86,39 @@ function Import-FreshBuildEnvironment {
     $env:Path = $paths -join ';'
 }
 
+function Find-SystemProxy([string]$TargetUrl) {
+    try {
+        $target = [Uri]$TargetUrl
+        $proxy = [Net.WebRequest]::GetSystemWebProxy()
+        $proxy.Credentials = [Net.CredentialCache]::DefaultCredentials
+        $resolved = $proxy.GetProxy($target)
+        if ($null -ne $resolved -and !$resolved.Equals($target)) { return $resolved.AbsoluteUri }
+    } catch {
+        Write-InstallLine ('读取系统代理失败：' + $_.Exception.Message) Yellow
+    }
+    return ''
+}
+
+function Select-DependencyProxy([string]$TargetUrl) {
+    $systemProxy = Find-SystemProxy $TargetUrl
+    if (![string]::IsNullOrWhiteSpace($systemProxy)) { return $systemProxy }
+    foreach ($name in @('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (![string]::IsNullOrWhiteSpace($value)) { return $value }
+    }
+    return '__TASKTRACE_DIRECT__'
+}
+
+function Format-ProxyForLog([string]$Proxy) {
+    if ($Proxy -eq '__TASKTRACE_DIRECT__') { return '直接连接（系统未为目标地址配置代理）' }
+    try {
+        $uri = [UriBuilder]$Proxy
+        $uri.UserName = ''
+        $uri.Password = ''
+        return $uri.Uri.AbsoluteUri
+    } catch { return '系统代理（地址已隐藏）' }
+}
+
 function Get-CommandSources([string]$Name) {
     $sources = New-Object 'System.Collections.Generic.List[string]'
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -151,6 +184,10 @@ try {
     Write-InstallLine ('源码目录：' + $root)
     Import-FreshBuildEnvironment
     Write-InstallLine '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
+    $env:TASKTRACE_NPM_PROXY = Select-DependencyProxy 'https://registry.npmjs.org/'
+    $env:TASKTRACE_GO_PROXY = Select-DependencyProxy 'https://proxy.golang.org/'
+    Write-InstallLine ('前端依赖网络：' + (Format-ProxyForLog $env:TASKTRACE_NPM_PROXY))
+    Write-InstallLine ('Go 模块网络：' + (Format-ProxyForLog $env:TASKTRACE_GO_PROXY))
 
     if ($PSVersionTable.PSVersion -lt [Version]'5.1') {
         Add-DependencyIssue ('PowerShell 版本过低：' + $PSVersionTable.PSVersion) '请升级到 Windows PowerShell 5.1 或 PowerShell 7。'
@@ -158,7 +195,7 @@ try {
     if (![Environment]::Is64BitOperatingSystem) {
         Add-DependencyIssue '当前不是 64 位 Windows，TaskTrace 目前只生成 Windows x64 程序。' '请在 64 位 Windows 10/11 上运行此工具。'
     }
-    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1')) {
+    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1', 'portable\DependencyBootstrap.ps1')) {
         if (!(Test-Path -LiteralPath (Join-Path $root $requiredFile))) {
             Add-DependencyIssue ('源码不完整，缺少：' + $requiredFile) '请重新下载或解压完整的 TaskTrace 源码。'
         }
@@ -301,11 +338,15 @@ try {
         # Build tools write warnings to stderr even when they succeed. Capture the
         # complete output without treating those warnings as installer failures.
         $ErrorActionPreference = 'Continue'
-        $buildOutput = & powershell.exe @buildArguments 2>&1
+        $buildOutput = @(& powershell.exe @buildArguments 2>&1 | ForEach-Object {
+            $line = [string]$_
+            if ($line -match '^(完整构建依赖清单|共 \d+ 项前端锁定依赖|前端锁定依赖|前端正在下载|前端下载完成|前端依赖|pnpm：|Go 模块|Go 正在下载|Go 下载完成|Go 下载连接中断|Package ready:)') { Write-Host $line }
+            try { [IO.File]::AppendAllText($logFile, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
+            $line
+        })
         $buildExitCode = $LASTEXITCODE
     } finally { $ErrorActionPreference = $savedErrorPreference }
     $buildLines = @($buildOutput | ForEach-Object { [string]$_ })
-    [IO.File]::AppendAllText($logFile, (($buildLines -join [Environment]::NewLine) + [Environment]::NewLine), [Text.UTF8Encoding]::new($true))
     if ($buildExitCode -ne 0) {
         Write-InstallLine '构建工具最后输出：' Yellow
         foreach ($line in @($buildLines | Select-Object -Last 30)) { Write-Host $line }

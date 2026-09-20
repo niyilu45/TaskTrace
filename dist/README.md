@@ -20,6 +20,13 @@ dist\TaskTrace-local\TaskTrace.exe
 
 源码可以来自 Git 克隆或 GitHub 的 Source code ZIP；生成过程不依赖 `.git` 信息，也不要求安装 Git。安装器每次启动都会重新读取当前用户和系统保存的 PATH，再从 PATH、`where`、Windows 常见安装目录、Node.js/Go 注册表、WinGet、Volta、Scoop、NVM、PNPM_HOME 和 Corepack 查找已安装工具，并在日志中列出实际使用的程序路径。即使双击安装器的资源管理器仍保留安装工具之前的旧环境，也能识别新安装的 Node.js、pnpm 和 Go。
 
+安装器会针对 npm 注册表和 Go 模块代理读取 Windows 当前系统代理，并把实际采用的代理或直接连接状态显示在窗口及 `install.log` 中。依赖下载信息实时输出：
+
+- 开始下载时显示依赖名称和序号。
+- 完成时显示大小、该依赖的下载速度、累计下载量和平均速度。
+- 已缓存的依赖不会重复下载；发生瞬时网络中断时，Go 模块会自动重试三次。
+- 完整的前端锁定依赖和 Go 模块列表写入 `dist\install-dependencies.txt`。
+
 只检查环境而不构建：
 
 ```powershell

@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
+. (Join-Path $PSScriptRoot 'DependencyBootstrap.ps1')
 if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Version must be a semantic version such as v0.1.0-beta.11.' }
 function Assert-Exit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
@@ -18,6 +19,10 @@ function Source-Identifier {
 }
 Push-Location $repoRoot
 try {
+    $dependencyManifest = Join-Path $repoRoot 'dist\install-dependencies.txt'
+    $dependencies = Write-TaskTraceDependencyManifest $repoRoot $dependencyManifest
+    Write-Host ('完整构建依赖清单：' + $dependencyManifest)
+    Write-Host ('共 ' + $dependencies.Frontend.Count + ' 项前端锁定依赖、' + $dependencies.GoModules.Count + ' 项 Go 模块。')
     if (!$SkipFrontend) {
         $nodeVersion = & node -p 'process.versions.node'
         Assert-Exit 'Node version check'
@@ -25,8 +30,8 @@ try {
         $oldLocalMode = $env:VITE_TASKTRACE_LOCAL
         Push-Location (Join-Path $repoRoot 'frontend')
         try {
-            & pnpm install --frozen-lockfile
-            Assert-Exit 'Frontend dependency installation'
+            Set-TaskTraceDependencyProxy $env:TASKTRACE_NPM_PROXY
+            Install-TaskTraceFrontendDependencies $dependencies.Frontend.Count
             $env:VITE_TASKTRACE_LOCAL = 'true'
             & pnpm run build
             Assert-Exit 'Frontend build'
@@ -41,6 +46,8 @@ try {
     $oldCGO = $env:CGO_ENABLED
     $oldCC = $env:CC
     try {
+        Set-TaskTraceDependencyProxy $env:TASKTRACE_GO_PROXY
+        Download-TaskTraceGoDependencies $dependencies.GoModules
         $env:CGO_ENABLED = '1'
         $env:CC = 'gcc'
         $ldflags = '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=' + $Version
