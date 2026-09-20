@@ -359,6 +359,7 @@ internal sealed partial class FloatingWindow {
         }
         return String.Join("",tags);
     }
+    sealed class OutstandingDraftCache {public string Text,DraftId;public int Priority;public bool RemoveExistingImages;public List<PastedImage> Pictures;}
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
     async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
     async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
@@ -380,34 +381,37 @@ internal sealed partial class FloatingWindow {
                 buttons.Controls.AddRange(new Control[]{save,fresh,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString();int originalPriority=defaultPriority;bool writing=false,loading=false,removeExistingImages=false;
+                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority;bool writing=false,loading=false,removeExistingImages=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();
                     if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog);}
                     foreach(var picture in pictures.ToList()){
                         var image=new GalleryImage{Bytes=picture.Bytes,Caption="待保存的遗留事项图片"};
-                        AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();}});
+                        AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}});
                     }
                     int existing=removeExistingImages?0:Regex.Matches(originalHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
                     previews.AccessibleName="遗留事项图片缩略图，点击查看大图";clearImages.Enabled=!writing && existing>0;
                 };
                 Action render=delegate{loading=true;list.Items.Clear();for(int i=0;i<shared.Items.Count;i++){shared.Items[i].Number=i+1;list.Items.Add(shared.Items[i]);}loading=false;};render();
                 Func<bool> dirty=delegate{return input.Text!=originalText || priority.SelectedIndex!=originalPriority || pictures.Count>0 || removeExistingImages;};
-                Func<bool> mayDiscard=delegate{return !dirty() || MessageBox.Show(dialog,"当前输入尚未保存，是否放弃？","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;};
-                Action<PendingItem> edit=delegate(PendingItem item){editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";renderPreviews();};
+                Func<string> draftKey=delegate{return editingId??"new";};
+                Func<string> draftSnapshot=delegate{return json.Serialize(new{text=input.Text,priority=priority.SelectedIndex,pictures=pictures.Count,remove=removeExistingImages,draft=draftId});};
+                Action cacheOutstanding=delegate{if(!dirty())return;string current=draftSnapshot();if(current==lastCached)return;WriteDraftCache("outstanding",id,draftKey(),new OutstandingDraftCache{Text=input.Text,DraftId=draftId,Priority=priority.SelectedIndex,RemoveExistingImages=removeExistingImages,Pictures=new List<PastedImage>(pictures)});lastCached=current;feedback.Text="草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。";};
+                Func<bool> mayDiscard=delegate{if(!dirty())return true;if(autoSaveEnabled){try{cacheOutstanding();return true;}catch{}}return MessageBox.Show(dialog,"当前输入尚未保存，是否放弃？","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;};
+                Action<PendingItem> edit=delegate(PendingItem item){loading=true;editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){input.Text=cached.Text??"";draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=Math.Max(0,Math.Min(9,cached.Priority));pictures=cached.Pictures??new List<PastedImage>();removeExistingImages=cached.RemoveExistingImages;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}else lastCached="";renderPreviews();loading=false;};
                 list.SelectedIndexChanged+=delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}edit(selected);};
                 if(!String.IsNullOrEmpty(selectedItemId)){var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(selected!=null)list.SelectedItem=selected;}
                 fresh.Click+=delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;edit(null);input.Focus();};
                 recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalText="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
-                clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();};
+                clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
                 gallery.Click+=async delegate{await ShowImageGallery(id,editingId==null?null:originalHtml,dialog);};
                 Func<bool,Task> write=async delegate(bool deleting){
                     if(writing)return;if(deleting && editingId==null)return;
                     if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return;}
                     writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;priority.Enabled=false;
-                    try{
+                    string savedDraftKey=draftKey();try{
                         string uploaded=deleting?"":await UploadOutstandingPictures(id,pictures);
                         var current=ReadShared(await ReadHistory(id));var existing=current.Items.FirstOrDefault(item=>item.Id==(editingId??draftId));
                         if(editingId!=null && existing==null)throw new Exception("这条事项已被移动或移除；输入已保留，请重新读取后添加。");
@@ -418,15 +422,18 @@ internal sealed partial class FloatingWindow {
                             if(removeExistingImages)body=Regex.Replace(body,@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
                             if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded,Priority=priority.SelectedIndex});else{existing.Html=body+uploaded;existing.Priority=priority.SelectedIndex;}
                         }
-                        await WriteShared(id,current);shared=current;render();edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已保存。图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();
+                        await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();
                     }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;}
                     finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;priority.Enabled=true;}
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
+                input.TextChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
+                priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}renderPreviews();feedback.Text="已粘贴图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
+                var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
                     try{
@@ -446,7 +453,7 @@ internal sealed partial class FloatingWindow {
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing || (!verify && !mayDiscard()))e.Cancel=true;};
-                try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{disposePreviews();}
+                try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
         }catch(Exception e){if(verify)throw;Error(e);}finally{editingOutstanding=false;if(!nested){SetBusy(false);timer.Start();}}

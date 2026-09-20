@@ -158,10 +158,15 @@
 					v-for="(picture, index) in draft.images"
 					:key="picture.preview"
 				>
-					<img
+					<a
+						:href="picture.preview"
+						target="_blank"
+						rel="noopener noreferrer"
+						:aria-label="`查看遗留事项图片 ${index + 1} 大图`"
+					><img
 						:src="picture.preview"
-						:alt="`待保存的遗留事项图片 ${index + 1}`"
-					>
+						:alt="`遗留事项图片 ${index + 1}`"
+					></a>
 					<button
 						type="button"
 						class="button is-small"
@@ -230,10 +235,15 @@ import {computed, nextTick, onBeforeUnmount, reactive, ref, watch} from 'vue'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
+import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
+import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
+import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
+import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
 type Draft = {text: string, images: ImageDraft[], itemId: string, original: string}
+type CachedDraft = {text: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
 const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
 const items = ref<OutstandingItem[]>([])
@@ -249,6 +259,7 @@ const message = ref('')
 const showCompleted = ref(false)
 const pendingCompletionIds = ref(new Set<string>())
 const completionTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const cachedSignatures = new Map<string, string>()
 const blocked = computed(() => props.disabled || busy.value || loading.value || undoInProgress.value)
 const activeIndex = computed(() => items.value.findIndex(item => item.id === activeId.value))
 const numberedItems = computed(() => items.value.map((item, index) => ({item, number: index + 1})))
@@ -275,7 +286,10 @@ async function load() {
 	error.value = ''
 	try {
 		const history = await readTaskHistory(taskId)
-		if (version === loadVersion && mounted) items.value = sharedOutstanding(history).items
+		if (version === loadVersion && mounted) {
+			items.value = sharedOutstanding(history).items
+			if (!drafts.has(`${taskId}:${activeId.value}`)) await restoreDraft(activeId.value)
+		}
 	} catch {
 		if (version === loadVersion && mounted) error.value = '读取失败，请重试。输入和待保存图片已保留。'
 	} finally {
@@ -284,11 +298,7 @@ async function load() {
 }
 
 async function selectItem(id: string) {
-	if (id) {
-		const item = items.value.find(candidate => candidate.id === id)
-		const key = `${props.taskId}:${id}`
-		if (item && !drafts.has(key)) drafts.set(key, draftFromItem(item))
-	}
+	if (!drafts.has(`${props.taskId}:${id}`)) await restoreDraft(id)
 	activeId.value = id
 	error.value = ''
 	message.value = ''
@@ -296,13 +306,17 @@ async function selectItem(id: string) {
 	textInput.value?.focus()
 }
 
-function draftFromItem(item: OutstandingItem): Draft {
-	const doc = new DOMParser().parseFromString(item.html || '', 'text/html')
-	const images = Array.from(doc.querySelectorAll('img')).map(image => {
-		const preview = image.getAttribute('src') || ''
-		const match = preview.match(/\/attachments\/(\d+)(?:$|[?#])/)
-		return {preview, attachmentId: match ? Number(match[1]) : undefined}
-	}).filter(image => !!image.preview)
+async function draftFromItem(item: OutstandingItem): Promise<Draft> {
+	const doc = new DOMParser().parseFromString(deduplicateHtmlImages(item.html || ''), 'text/html')
+	const images: ImageDraft[] = []
+	for (const image of doc.querySelectorAll('img')) {
+		const source = image.getAttribute('src') || ''
+		const match = source.match(/\/tasks\/(\d+)\/attachments\/(\d+)(?:$|[?#])/)
+		if (!match) continue
+		const attachmentId = Number(match[2])
+		const taskId = Number(match[1]) || props.taskId
+		images.push({attachmentId, preview: await fetchAttachmentBlobUrl({taskId, id: attachmentId})})
+	}
 	doc.querySelectorAll('img').forEach(image => image.remove())
 	doc.querySelectorAll('br').forEach(line => line.replaceWith('\n'))
 	const blocks = Array.from(doc.body.querySelectorAll('p, div, li')).map(block => block.textContent?.trim() || '').filter(Boolean)
@@ -311,8 +325,49 @@ function draftFromItem(item: OutstandingItem): Draft {
 	return result
 }
 
+function cacheKey(id: string) { return id || 'new' }
+
+async function restoreDraft(id: string) {
+	const item = id ? items.value.find(candidate => candidate.id === id) : undefined
+	const base = item ? await draftFromItem(item) : {text: '', images: [], itemId: crypto.randomUUID(), original: ''}
+	base.original = draftSignature(base)
+	try {
+		const cached = await readTaskTraceDraft<CachedDraft>('outstanding', props.taskId, cacheKey(id))
+		if (cached) {
+			const pictures: ImageDraft[] = []
+			for (const picture of cached.images || []) {
+				if (picture.attachmentId) pictures.push({attachmentId: picture.attachmentId, preview: await fetchAttachmentBlobUrl({taskId: props.taskId, id: picture.attachmentId})})
+				else if (picture.data) {
+					const file = await dataUrlAsFile(picture.data, picture.name, picture.type)
+					pictures.push({file, preview: URL.createObjectURL(file)})
+				}
+			}
+			base.text = typeof cached.text === 'string' ? cached.text : base.text
+			base.images = pictures
+			base.itemId = cached.itemId || base.itemId
+			message.value = '已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。'
+		}
+	} catch { error.value = '草稿缓存读取失败，已载入正式保存的内容。' }
+	drafts.set(`${props.taskId}:${id}`, base)
+}
+
 function draftSignature(value: Pick<Draft, 'text' | 'images'>) {
 	return JSON.stringify([value.text, value.images.map(image => [image.preview, image.attachmentId])])
+}
+
+async function cacheDraft(key: string, value: Draft) {
+	const signature = draftSignature(value)
+	if (signature === value.original || cachedSignatures.get(key) === signature) return
+	const images = await Promise.all(value.images.map(async picture => picture.attachmentId
+		? {attachmentId: picture.attachmentId}
+		: {data: picture.file ? await fileAsDataUrl(picture.file) : picture.preview, name: picture.file?.name, type: picture.file?.type}))
+	await writeTaskTraceDraft('outstanding', props.taskId, cacheKey(key.split(':').slice(1).join(':')), {text: value.text, images, itemId: value.itemId})
+	cachedSignatures.set(key, signature)
+	if (key === `${props.taskId}:${activeId.value}`) message.value = '草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。'
+}
+
+async function cacheChangedDrafts() {
+	for (const [key, value] of drafts) await cacheDraft(key, value)
 }
 
 function recoverDraft() {
@@ -340,7 +395,7 @@ function addImages(files: File[]) {
 	if (blocked.value) return
 	const images = files.filter(file => file.type.startsWith('image/'))
 	for (const file of images) draft.value.images.push({file, preview: URL.createObjectURL(file)})
-	message.value = images.length ? `已添加 ${images.length} 张图片，点击“${activeId.value ? '保存修改' : '添加遗留事项'}”保存。` : '请选择图片文件。'
+	message.value = images.length ? `已添加 ${images.length} 张图片，内容尚未保存；点击“${activeId.value ? '保存修改' : '添加遗留事项'}”正式保存。` : '请选择图片文件。'
 }
 
 function pasteImages(event: ClipboardEvent) {
@@ -368,6 +423,7 @@ function clearDraft(key: string) {
 	const saved = drafts.get(key)
 	saved?.images.filter(picture => picture.file).forEach(picture => URL.revokeObjectURL(picture.preview))
 	drafts.delete(key)
+	cachedSignatures.delete(key)
 }
 
 function clearCompletionTimer(id: string) {
@@ -465,6 +521,7 @@ async function save() {
 			return existing.some(item => item.id === added.id) ? existing.map(item => item.id === added.id ? added : item) : [...existing, added]
 		})
 		clearDraft(key)
+		void deleteTaskTraceDraft('outstanding', taskId, cacheKey(targetId)).catch(() => {})
 		if (taskId !== props.taskId || !mounted) return
 		items.value = result
 		activeId.value = ''
@@ -489,6 +546,7 @@ async function remove(id: string) {
 		const result = await changeOutstanding(taskId, existing => existing.filter(item => item.id !== id))
 		clearCompletionTimer(id)
 		clearDraft(`${taskId}:${id}`)
+		void deleteTaskTraceDraft('outstanding', taskId, cacheKey(id)).catch(() => {})
 		if (taskId !== props.taskId || !mounted) return
 		items.value = result
 		if (activeId.value === id) activeId.value = ''
@@ -508,7 +566,12 @@ watch(() => props.taskId, () => {
 	message.value = ''
 	void load()
 }, {immediate: true})
+watch(draft, value => {
+	if (draftSignature(value) !== value.original) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击保存后才会正式提交。'
+}, {deep: true})
+useAutoSave(cacheChangedDrafts)
 onBeforeUnmount(() => {
+	if (autoSaveSettings.enabled) void cacheChangedDrafts().catch(() => {})
 	mounted = false
 	emit('busy', false)
 	++loadVersion

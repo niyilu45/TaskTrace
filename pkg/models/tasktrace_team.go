@@ -591,6 +591,7 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		binding.LocalAttachments = map[string]int64{}
 	}
 	result := make([]TaskTraceTeamAttachment, 0, len(attachments))
+	seen := map[string]bool{}
 	for _, attachment := range attachments {
 		if attachment.File == nil {
 			continue
@@ -605,6 +606,11 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		}
 		sum := sha256.Sum256(content)
 		id := hex.EncodeToString(sum[:])
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		binding.LocalAttachments[taskTraceTeamLocalAttachmentKey(nodeID, id)] = attachment.ID
 		path := taskTraceTeamAttachmentBlobPath(binding, id)
 		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -623,7 +629,6 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		} else if statErr != nil {
 			return nil, statErr
 		}
-		binding.LocalAttachments[taskTraceTeamLocalAttachmentKey(nodeID, id)] = attachment.ID
 		result = append(result, TaskTraceTeamAttachment{ID: id, Name: attachment.File.Name, Mime: attachment.File.Mime, Size: uint64(len(content)), SourceTaskID: taskID, SourceAttachmentID: attachment.ID})
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
@@ -802,8 +807,7 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 			sort.Slice(task.Comments, func(i, j int) bool { return task.Comments[i].Created.Before(task.Comments[j].Created) })
 			attachments := map[string]TaskTraceTeamAttachment{}
 			for _, attachment := range task.Attachments {
-				key := fmt.Sprintf("%d:%d", attachment.SourceTaskID, attachment.SourceAttachmentID)
-				attachments[key] = attachment
+				attachments[attachment.ID] = attachment
 			}
 			task.Attachments = task.Attachments[:0]
 			for _, attachment := range attachments {
@@ -1177,15 +1181,14 @@ func taskTraceTeamAllAttachments(rows []struct {
 	actor string
 	task  TaskTraceTeamTask
 }) []TaskTraceTeamAttachment {
-	bySource := map[string]TaskTraceTeamAttachment{}
+	byContent := map[string]TaskTraceTeamAttachment{}
 	for _, row := range rows {
 		for _, attachment := range row.task.Attachments {
-			key := fmt.Sprintf("%d:%d", attachment.SourceTaskID, attachment.SourceAttachmentID)
-			bySource[key] = attachment
+			byContent[attachment.ID] = attachment
 		}
 	}
-	result := make([]TaskTraceTeamAttachment, 0, len(bySource))
-	for _, attachment := range bySource {
+	result := make([]TaskTraceTeamAttachment, 0, len(byContent))
+	for _, attachment := range byContent {
 		result = append(result, attachment)
 	}
 	return result

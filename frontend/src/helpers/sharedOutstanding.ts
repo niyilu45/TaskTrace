@@ -1,6 +1,7 @@
 import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, type TaskComment} from '@/client/generated'
 import {sortProgressNotes} from './progressNotes'
+import {deduplicateHtmlImages} from './tasktraceImages'
 
 export const sharedHeading = 'TaskTrace 遗留事项清单'
 export type OutstandingItem = {
@@ -28,7 +29,7 @@ export function sharedOutstanding(history: TaskComment[]) {
 			id: record.id,
 			items: Array.from(doc.querySelectorAll('ul > li')).map((li, index) => ({
 				id: li.getAttribute('data-id') || `item-${index}`,
-				html: li.innerHTML,
+				html: deduplicateHtmlImages(li.innerHTML),
 				done: li.getAttribute('data-done') === 'true',
 				priority: priority(li.getAttribute('data-priority')),
 				completedAt: li.getAttribute('data-completed-at') || undefined,

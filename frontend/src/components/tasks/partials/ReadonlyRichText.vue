@@ -9,12 +9,13 @@
 import {ref, watch, onBeforeUnmount} from 'vue'
 import DOMPurify from 'dompurify'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
+import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 const props = defineProps<{html?: string}>()
 const rendered = ref('')
 let version = 0
 watch(() => props.html, async value => {
 	const current = ++version
-	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(value || '', {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
+	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(deduplicateHtmlImages(value || ''), {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
 	for (const anchor of doc.querySelectorAll('a')) {
 		anchor.removeAttribute('target')
 		anchor.setAttribute('rel', 'noopener noreferrer')

@@ -16,7 +16,7 @@
 				@change="apply"
 			>
 		</label>
-		<p>每 {{ autoSaveSettings.seconds }} 秒检查事项描述和当前进展，有变化才保存。进展会更新当天内容，切换日期可编辑其他日期。设置自动保存在当前浏览器。</p>
+		<p>每 {{ autoSaveSettings.seconds }} 秒检查每日进展和遗留事项；有变化时只缓存到程序目录的 .cache，不会提交到任务。点击对应的保存按钮后才会正式保存。设置保存在当前浏览器。</p>
 		<p
 			v-if="error"
 			role="alert"

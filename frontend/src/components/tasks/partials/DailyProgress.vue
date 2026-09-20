@@ -1,9 +1,9 @@
 <template>
 	<form
 		class="daily-progress"
-		@submit.prevent="save(false)"
+		@submit.prevent="save"
 		@paste="pasteImages"
-		@keydown.ctrl.enter.prevent="save(false)"
+		@keydown.ctrl.enter.prevent="save"
 	>
 		<h3 class="task-section-title">
 			记录每日进展
@@ -177,7 +177,7 @@
 			v-if="existingImages"
 			:html="existingImages"
 		/>
-		<p>截图或复制图片后，在这里按 Ctrl+V，可连续粘贴多张图片。图片会随进展自动保存，也可点击“保存进展”。</p>
+		<p>截图或复制图片后，在这里按 Ctrl+V，可连续粘贴多张图片。自动保存只缓存到 .cache；点击“保存进展”后才会正式提交。</p>
 		<div
 			v-if="images.length"
 			class="progress-images"
@@ -219,8 +219,9 @@ import {readTaskHistory, sharedOutstanding, changeOutstanding} from '@/helpers/s
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {mergedDay, sortProgressNotes} from '@/helpers/progressNotes'
 import {createProgressReference, normalizeProgressReferences, serializeProgressReferences, type ProgressReference} from '@/helpers/progressReferences'
-import {useAutoSave} from '@/helpers/autoSave'
+import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {useAuthStore} from '@/stores/auth'
+import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 const props = defineProps<{taskId: number}>()
 const emit = defineEmits<{saved: []}>()
 const authStore = useAuthStore()
@@ -256,20 +257,43 @@ const lastSaved = ref('')
 let version = 0
 const snapshot = () => JSON.stringify([date.value, progress.value, images.value.map(image => image.attachmentId || image.preview), references.value])
 const drafts = reactive(new Map<string, {text: string, images: typeof images.value, references: ProgressReference[]}>())
+type CachedProgressDraft = {progress: string, references: ProgressReference[], images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>}
+const cachedSnapshots = new Map<string, string>()
 useTasktraceUndoGuard(() => saving.value || referenceLoading.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
 function stash() {
 	if (undoInProgress.value || restoring.value || !date.value) return
 	if (snapshot() === lastSaved.value) {
 		drafts.delete(`${props.taskId}:${date.value}`)
-		try {
-			localStorage.removeItem(`tasktrace-day-draft-${props.taskId}-${date.value}`)
-			const legacy = JSON.parse(localStorage.getItem(`tasktrace-progress-draft-${props.taskId}`) || 'null')
-			if (legacy?.date === date.value) localStorage.removeItem(`tasktrace-progress-draft-${props.taskId}`)
-		} catch { /* Optional draft cleanup. */ }
 		return
 	}
 	drafts.set(`${props.taskId}:${date.value}`, {text: progress.value, images: [...images.value], references: normalizeProgressReferences(references.value)})
-	try { localStorage.setItem(`tasktrace-day-draft-${props.taskId}-${date.value}`, JSON.stringify({progress: progress.value, references: references.value, attachments: images.value.map(image => image.attachmentId).filter(Boolean)})) } catch { /* Server save remains available. */ }
+}
+
+function draftSnapshot(value: {text: string, images: typeof images.value, references: ProgressReference[]}) {
+	return JSON.stringify([value.text, value.images.map(image => image.attachmentId || image.preview), value.references])
+}
+
+async function cacheChangedDrafts() {
+	let changed = false
+	const prefix = `${props.taskId}:`
+	for (const key of [...cachedSnapshots.keys()]) {
+		if (!key.startsWith(prefix) || drafts.has(key)) continue
+		await deleteTaskTraceDraft('progress', props.taskId, key.slice(prefix.length))
+		cachedSnapshots.delete(key)
+		changed = true
+	}
+	for (const [key, current] of drafts) {
+		if (!key.startsWith(prefix)) continue
+		const signature = draftSnapshot(current)
+		if (cachedSnapshots.get(key) === signature) continue
+		const cachedImages = await Promise.all(current.images.map(async picture => picture.attachmentId
+			? {attachmentId: picture.attachmentId}
+			: {data: picture.file ? await fileAsDataUrl(picture.file) : picture.preview, name: picture.file?.name, type: picture.file?.type}))
+		await writeTaskTraceDraft('progress', props.taskId, key.slice(prefix.length), {progress: current.text, references: current.references, images: cachedImages})
+		cachedSnapshots.set(key, signature)
+		changed = true
+	}
+	if (changed) message.value = '草稿已自动缓存到 .cache，内容尚未保存；点击“保存进展”后才会正式提交。'
 }
 async function switchDate(value: string, initial = false) {
 	if (saving.value || referenceLoading.value) { message.value = '正在保存或读取引用，请完成后再切换日期。'; return false }
@@ -290,13 +314,17 @@ async function switchDate(value: string, initial = false) {
 		let draft = drafts.get(`${taskId}:${value}`)
 		if (!draft) {
 			try {
-				let saved = JSON.parse(localStorage.getItem(`tasktrace-day-draft-${taskId}-${value}`) || 'null')
+				let saved = await readTaskTraceDraft<CachedProgressDraft>('progress', taskId, value)
 				const legacy = JSON.parse(localStorage.getItem(`tasktrace-progress-draft-${taskId}`) || 'null')
 				if (!saved && legacy?.date === value) saved = legacy
 				if (saved && typeof saved.progress === 'string') {
 					const pictures: typeof images.value = []
-					for (const id of saved.attachments || []) if (Number.isInteger(id) && id > 0) pictures.push({attachmentId: id, preview: await fetchAttachmentBlobUrl({taskId, id})})
+					for (const picture of saved.images || (saved as unknown as {attachments?: number[]}).attachments?.map(attachmentId => ({attachmentId})) || []) {
+						if (picture.attachmentId) pictures.push({attachmentId: picture.attachmentId, preview: await fetchAttachmentBlobUrl({taskId, id: picture.attachmentId})})
+						else if (picture.data) { const file = await dataUrlAsFile(picture.data, picture.name, picture.type); pictures.push({file, preview: URL.createObjectURL(file)}) }
+					}
 					draft = {text: saved.progress, images: pictures, references: normalizeProgressReferences(saved.references)}
+					cachedSnapshots.set(`${taskId}:${value}`, draftSnapshot(draft))
 				}
 			} catch { message.value = '草稿恢复失败，已保留服务器内容。' }
 		}
@@ -304,7 +332,7 @@ async function switchDate(value: string, initial = false) {
 		lastSaved.value = snapshot()
 		if (draft) { progress.value = draft.text; images.value = draft.images; references.value = normalizeProgressReferences(draft.references) }
 		loaded = true
-		message.value = selected.id ? '已载入当天进展；同日记录合并编辑，保存会更新当天内容。' : '此日期尚无进展。'
+		message.value = draft ? '已恢复 .cache 中的草稿，内容尚未保存；点击“保存进展”后才会正式提交。' : selected.id ? '已载入当天进展；同日记录合并编辑，保存会更新当天内容。' : '此日期尚无进展。'
 	} catch { message.value = '历史读取失败，已暂停保存，请重新选择日期重试。'; return false }
 	finally { if (request === version) restoring.value = !loaded }
 	return loaded
@@ -314,7 +342,10 @@ watch(() => props.taskId, async () => {
 	const today = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
 	await switchDate(today, true)
 }, {immediate: true})
-watch([progress, images, references], stash, {deep: true})
+watch([progress, images, references], () => {
+	stash()
+	if (!restoring.value && snapshot() !== lastSaved.value) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击“保存进展”后才会正式提交。'
+}, {deep: true})
 async function openReferencePicker() {
 	if (saving.value || restoring.value || referenceLoading.value) return
 	const taskId = props.taskId
@@ -371,7 +402,7 @@ function pasteImages(event: ClipboardEvent) {
 }
 function removeImage(index: number) { const [picture] = images.value.splice(index, 1); if (picture?.file) URL.revokeObjectURL(picture.preview) }
 function html(value: string) { return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,'<br>') }
-async function save(automatic = false) {
+async function save() {
 	if (undoInProgress.value || restoring.value || saving.value || referenceLoading.value || sharedBusy.value || (!progress.value.trim() && images.value.length === 0 && !references.value.length && !autoCommentId.value)) return
 	saving.value = true
 	const taskId = props.taskId
@@ -397,13 +428,15 @@ async function save(automatic = false) {
 		originalHtml.value = body; originalText.value = progress.value
 		existingImages.value = Array.from(new DOMParser().parseFromString(body,'text/html').querySelectorAll('img')).map(img => img.outerHTML).join('')
 		images.value.filter(picture => picture.file).forEach(picture => URL.revokeObjectURL(picture.preview)); images.value = []; lastSaved.value = snapshot(); drafts.delete(`${taskId}:${date.value}`)
-		try { localStorage.removeItem(`tasktrace-progress-draft-${taskId}`); localStorage.removeItem(`tasktrace-day-draft-${taskId}-${date.value}`) } catch { /* Optional draft. */ }
-		message.value = automatic ? '已自动保存当天进展。' : '当天进展已保存，可继续修改。'; emit('saved')
+		cachedSnapshots.delete(`${taskId}:${date.value}`)
+		await deleteTaskTraceDraft('progress', taskId, date.value).catch(() => {})
+		try { localStorage.removeItem(`tasktrace-progress-draft-${taskId}`); localStorage.removeItem(`tasktrace-day-draft-${taskId}-${date.value}`) } catch { /* Remove legacy browser drafts. */ }
+		message.value = '当天进展已正式保存，可继续修改。'; emit('saved')
 	} catch { message.value = '保存失败，内容已保留，请重试。' }
 	finally { saving.value = false }
 }
-useAutoSave(async () => { if (!restoring.value && !sharedBusy.value && snapshot() !== lastSaved.value) await save(true) })
-onBeforeUnmount(() => { ++version; stash(); const urls = new Set([...images.value, ...[...drafts.values()].flatMap(draft => draft.images)].filter(image => image.file).map(image => image.preview)); urls.forEach(url => URL.revokeObjectURL(url)) })
+useAutoSave(async () => { if (!restoring.value && !sharedBusy.value) await cacheChangedDrafts() })
+onBeforeUnmount(() => { ++version; stash(); if (autoSaveSettings.enabled) void cacheChangedDrafts().catch(() => {}); const urls = new Set([...images.value, ...[...drafts.values()].flatMap(draft => draft.images)].filter(image => image.file).map(image => image.preview)); urls.forEach(url => URL.revokeObjectURL(url)) })
 </script>
 
 <style scoped lang="scss">

@@ -96,6 +96,15 @@ describe('progress date range', () => {
 		expect(limitProgressNotes(unknown, 7)).toBe(unknown)
 	})
 })
+
+it('shows one image when collaboration produced duplicate image tags', () => {
+	const image = '<p><img src="/api/v1/tasks/4/attachments/7" alt="协作图片"></p>'
+	const merged = mergedDay([
+		{id: 1, comment: daily('2026-09-20', 'first') + image},
+		{id: 2, comment: daily('2026-09-20', 'second') + image.replace('/v1/', '/v2/')},
+	], '2026-09-20')
+	expect((merged.images.match(/<img/g) || []).length).toBe(1)
+})
 describe('progress reference isolation', () => {
 	const ref: ProgressReference = {id: 'r0123456789abcdef0123456789abcdef', taskId: 123, date: '2026-09-17', commentIds: [55], html: '<p>引用旧内容</p><p><img src="/api/v1/tasks/123/attachments/4"></p>'}
 	it('keeps full display HTML but excludes quotes from editable text and own images', () => {

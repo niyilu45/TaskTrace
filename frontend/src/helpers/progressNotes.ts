@@ -1,6 +1,7 @@
 import type {TaskComment} from '@/client/generated'
 import {splitProgressReferences, normalizeProgressReferences} from './progressReferences'
 import {teamCommentAuthor} from './tasktraceTeam'
+import {deduplicateHtmlImages} from './tasktraceImages'
 
 export function parseProgressNote(note: TaskComment) {
 	// Parse in an inert document; all returned HTML is sanitized by ReadonlyRichText before rendering.
@@ -81,7 +82,7 @@ export function mergedDay(history: TaskComment[], date: string, author?: string)
 		const heading = new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')
 		for (const id of (heading?.getAttribute('data-tasktrace-merged') || '').split(',')) if (Number(id) > 0 && Number(id) !== primary) ids.add(Number(id))
 	}
-	const html = notes.map(note => note.ownProgress).join('')
+	const html = deduplicateHtmlImages(notes.map(note => note.ownProgress).join(''))
 	const references = normalizeProgressReferences(notes.flatMap(note => note.references))
 	const doc = new DOMParser().parseFromString(html, 'text/html')
 	const images = Array.from(doc.querySelectorAll('img')).map(img => img.outerHTML).join('')

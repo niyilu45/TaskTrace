@@ -9,6 +9,15 @@ vi.mock('@/client/generated', () => ({
 	taskCommentsList: vi.fn(),
 	taskCommentsUpdate: vi.fn(),
 }))
+vi.mock('@/helpers/autoSave', () => ({autoSaveSettings: {enabled: false}, useAutoSave: () => {}}))
+vi.mock('@/helpers/attachments', () => ({fetchAttachmentBlobUrl: vi.fn(async ({id}: {id: number}) => `blob:attachment-${id}`)}))
+vi.mock('@/helpers/tasktraceDraftCache', () => ({
+	readTaskTraceDraft: vi.fn(async () => null),
+	writeTaskTraceDraft: vi.fn(async () => {}),
+	deleteTaskTraceDraft: vi.fn(async () => {}),
+	fileAsDataUrl: vi.fn(),
+	dataUrlAsFile: vi.fn(),
+}))
 vi.mock('./ReadonlyRichText.vue', () => ({default: {props: ['html'], template: '<div class="rendered-outstanding" v-html="html" />'}}))
 
 let wrapper: VueWrapper
@@ -42,7 +51,7 @@ async function paste(...names: string[]) {
 }
 
 beforeEach(() => {
-	vi.resetAllMocks()
+	vi.clearAllMocks()
 	history = []
 	attachmentId = 0
 	root = document.createElement('div')
@@ -111,7 +120,7 @@ describe('outstanding item images', () => {
 		await click('添加遗留事项')
 		expect(upload).toHaveBeenCalledTimes(1)
 		expect(history[0].comment).toContain('src="/api/v1/tasks/42/attachments/1"')
-		expect(wrapper.findAll('ol.outstanding-list > li')).toHaveLength(1)
+		await vi.waitFor(() => expect(wrapper.findAll('ol.outstanding-list > li')).toHaveLength(1))
 		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(0)
 		expect(wrapper.emitted('saved')).toHaveLength(1)
 	})
@@ -139,7 +148,7 @@ describe('outstanding item images', () => {
 		await open()
 		await click('编辑')
 		expect(wrapper.get('textarea').element.value).toBe('Original')
-		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('/api/v1/tasks/42/attachments/8')
+		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('blob:attachment-8')
 		await wrapper.get('textarea').setValue('Image caption')
 		await paste('detail.png')
 		history[0].comment = shared('<li data-id="first"><p>Original</p><p><img src="/api/v1/tasks/42/attachments/8" alt="旧图"></p></li><li data-id="second">Concurrent item</li>')

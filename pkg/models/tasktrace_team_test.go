@@ -65,6 +65,16 @@ func TestTaskTraceTeamCombinesComputersWithSameUsername(t *testing.T) {
 	require.Len(t, combined[0].Tasks[0].Comments, 2)
 }
 
+func TestTaskTraceTeamCombinesSameAttachmentContentAcrossComputers(t *testing.T) {
+	now := time.Now().UTC()
+	one := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "one", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Updated: now, Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 1, SourceAttachmentID: 10}}}}}
+	two := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "two", Updated: now.Add(time.Second), Tasks: []TaskTraceTeamTask{{NodeID: "node", Updated: now.Add(time.Second), Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 9, SourceAttachmentID: 99}}}}}
+	combined := taskTraceTeamLatestActorSnapshots([]TaskTraceTeamSnapshot{one, two})
+	require.Len(t, combined, 1)
+	require.Len(t, combined[0].Tasks, 1)
+	require.Len(t, combined[0].Tasks[0].Attachments, 1)
+}
+
 func TestTaskTraceTeamSnapshotHashIgnoresSyncTimeAndAvatar(t *testing.T) {
 	base := TaskTraceTeamSnapshot{
 		Schema:   taskTraceTeamSchema,

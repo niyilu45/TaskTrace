@@ -63,6 +63,7 @@ plans/
 
 # Local TaskTrace build toolchains and caches
 /.local-build/
+/.cache/
 /vikunja.exe
 
 # Formal release archives and local release staging

@@ -1,19 +1,29 @@
-import {afterEach, describe, expect, it, vi} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
+import {createPinia, setActivePinia} from 'pinia'
 import {mount, flushPromises, type VueWrapper} from '@vue/test-utils'
 import DailyProgress from './DailyProgress.vue'
 import {taskCommentsCreate} from '@/client/generated'
 import {sharedOutstanding} from '@/helpers/sharedOutstanding'
 import {undoBlockReason, undoInProgress} from '@/helpers/tasktraceUndo'
+const draftMocks = vi.hoisted(() => ({write: vi.fn(async () => {}), read: vi.fn(async () => null), remove: vi.fn(async () => {}), check: undefined as undefined | (() => Promise<void>)}))
 vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: true}))
-vi.mock('@/helpers/autoSave', () => ({useAutoSave: () => {}}))
+vi.mock('@/helpers/autoSave', () => ({autoSaveSettings: {enabled: false}, useAutoSave: (check: () => Promise<void>) => { draftMocks.check = check }}))
 vi.mock('@/client/generated', () => ({taskCommentsCreate: vi.fn(), taskCommentsUpdate: vi.fn(), taskAttachmentsUpload: vi.fn()}))
 vi.mock('@/helpers/attachments', () => ({fetchAttachmentBlobUrl: vi.fn()}))
+vi.mock('@/helpers/tasktraceDraftCache', () => ({
+	readTaskTraceDraft: draftMocks.read,
+	writeTaskTraceDraft: draftMocks.write,
+	deleteTaskTraceDraft: draftMocks.remove,
+	fileAsDataUrl: vi.fn(),
+	dataUrlAsFile: vi.fn(),
+}))
 vi.mock('@/helpers/sharedOutstanding', () => ({readTaskHistory: vi.fn(async () => []), sharedOutstanding: vi.fn(), changeOutstanding: vi.fn()}))
 vi.mock('./AutoSaveSettings.vue', () => ({default: {template: '<span />'}}))
 vi.mock('./SharedOutstanding.vue', () => ({default: {template: '<span />'}}))
 vi.mock('./ReadonlyRichText.vue', () => ({default: {template: '<span />'}}))
 let wrapper: VueWrapper
-afterEach(() => { wrapper?.unmount(); localStorage.clear(); undoInProgress.value = false; vi.clearAllMocks() })
+beforeEach(() => setActivePinia(createPinia()))
+afterEach(() => { wrapper?.unmount(); localStorage.clear(); undoInProgress.value = false; draftMocks.check = undefined; vi.clearAllMocks() })
 describe('daily progress Undo drafts', () => {
 	it('refuses a date switch while saving and allows it only after the save finishes', async () => {
 		let finishSave!: () => void
@@ -45,23 +55,24 @@ describe('daily progress Undo drafts', () => {
 		expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('')
 		expect(taskCommentsCreate).toHaveBeenCalledTimes(1)
 	})
-	it('removes a cleared persistent draft so an Undo remount cannot revive and autosave it', async () => {
+	it('caches changed progress without submitting it and clears the cache after explicit save', async () => {
+		vi.mocked(sharedOutstanding).mockReturnValue({id: 1, items: []})
+		vi.mocked(taskCommentsCreate).mockResolvedValue({data: {id: 99}} as never)
 		wrapper = mount(DailyProgress, {props: {taskId: 81}})
 		await flushPromises()
 		const date = wrapper.get<HTMLInputElement>('input[type=date]').element.value
-		const key = `tasktrace-day-draft-81-${date}`
 		await wrapper.get<HTMLTextAreaElement>('textarea').setValue('discard this draft')
-		expect(localStorage.getItem(key)).toContain('discard this draft')
 		expect(undoBlockReason.value).toContain('每日进展')
-		await wrapper.get<HTMLTextAreaElement>('textarea').setValue('')
-		expect(localStorage.getItem(key)).toBeNull()
-		expect(undoBlockReason.value).toBe('')
-		undoInProgress.value = true
-		wrapper.unmount()
-		wrapper = mount(DailyProgress, {props: {taskId: 81}})
+		await draftMocks.check?.()
 		await flushPromises()
-		undoInProgress.value = false
-		expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('')
-		expect(undoBlockReason.value).toBe('')
+		expect(draftMocks.write).toHaveBeenCalledWith('progress', 81, date, expect.objectContaining({progress: 'discard this draft'}))
+		await draftMocks.check?.()
+		expect(draftMocks.write).toHaveBeenCalledTimes(1)
+		expect(taskCommentsCreate).not.toHaveBeenCalled()
+		expect(wrapper.get('[role=status]').text()).toContain('尚未保存')
+		await wrapper.get('form').trigger('submit')
+		await flushPromises()
+		expect(taskCommentsCreate).toHaveBeenCalledTimes(1)
+		expect(draftMocks.remove).toHaveBeenCalledWith('progress', 81, date)
 	})
 })
