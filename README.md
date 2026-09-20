@@ -51,7 +51,7 @@ Git 只跟踪 `dist` 下的安装脚本和说明，不跟踪生成的 EXE、运�
 
 源码可从本仓库下载或克隆。每个版本的 Releases 页面还提供该标签对应的 Source code 下载。
 
-下载 Source code ZIP 或使用 Git 克隆源码后，双击 `dist/Install-TaskTrace.cmd`。安装工具不依赖 `.git` 信息，也不要求安装 Git；它会从 PATH 和 Windows 常见安装位置检查 Node.js 24、pnpm 11.26、Go 1.27、Windows x64 GCC 与 .NET Framework C# 编译器，并在日志中写明实际采用的路径。如果缺少依赖，会弹出具体问题、检查范围、安装方法和日志位置；生成成功或失败时也会弹出结果，双击运行不会再因黑框关闭而看不到结果。
+下载 Source code ZIP 或使用 Git 克隆源码后，双击 `dist/Install-TaskTrace.cmd`。安装工具不依赖 `.git` 信息，也不要求安装 Git；它会重新读取 Windows 保存的用户与系统 PATH，并从 PATH、`where`、注册表和常见安装位置检查 Node.js 24、pnpm 11.26、Go 1.27、Windows x64 GCC 与 .NET Framework C# 编译器，在日志中写明实际采用的路径。如果缺少依赖，会弹出具体问题、检查范围、安装方法和日志位置；生成成功或失败时也会弹出结果，双击运行不会再因黑框关闭而看不到结果。
 
 ```powershell
 cd 解压后的TaskTrace目录

@@ -18,7 +18,7 @@ dist\TaskTrace-local\TaskTrace.exe
 - .NET Framework 4.8 C# 编译器
 - 首次构建时可访问 npm 和 Go 依赖源
 
-源码可以来自 Git 克隆或 GitHub 的 Source code ZIP；生成过程不依赖 `.git` 信息，也不要求安装 Git。安装器会从 PATH、Windows 常见安装目录、Node.js 注册表、Volta、Scoop、NVM、PNPM_HOME 和 Corepack 查找已安装工具，并在日志中列出实际使用的程序路径。
+源码可以来自 Git 克隆或 GitHub 的 Source code ZIP；生成过程不依赖 `.git` 信息，也不要求安装 Git。安装器每次启动都会重新读取当前用户和系统保存的 PATH，再从 PATH、`where`、Windows 常见安装目录、Node.js/Go 注册表、WinGet、Volta、Scoop、NVM、PNPM_HOME 和 Corepack 查找已安装工具，并在日志中列出实际使用的程序路径。即使双击安装器的资源管理器仍保留安装工具之前的旧环境，也能识别新安装的 Node.js、pnpm 和 Go。
 
 只检查环境而不构建：
 

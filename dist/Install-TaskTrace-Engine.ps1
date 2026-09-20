@@ -63,18 +63,70 @@ function Join-OptionalPath([string]$Base, [string]$Child) {
     return Join-Path $Base $Child
 }
 
+function Import-FreshBuildEnvironment {
+    # Explorer and a terminal opened after installing a tool can have different
+    # environment snapshots. Read the persisted values again so a double-clicked
+    # installer sees the same tools as a newly opened command prompt.
+    foreach ($name in @('PNPM_HOME', 'NVM_HOME', 'NVM_SYMLINK', 'GOROOT')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'User')
+        if ([string]::IsNullOrWhiteSpace($value)) { $value = [Environment]::GetEnvironmentVariable($name, 'Machine') }
+        if (![string]::IsNullOrWhiteSpace($value)) { [Environment]::SetEnvironmentVariable($name, $value, 'Process') }
+    }
+
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($target in @('Process', 'User', 'Machine')) {
+        $pathValue = [Environment]::GetEnvironmentVariable('Path', $target)
+        foreach ($entry in @($pathValue -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($entry)) { continue }
+            $expanded = [Environment]::ExpandEnvironmentVariables($entry.Trim().Trim('"'))
+            if (![string]::IsNullOrWhiteSpace($expanded) -and $seen.Add($expanded.TrimEnd('\'))) { $paths.Add($expanded) }
+        }
+    }
+    $env:Path = $paths -join ';'
+}
+
+function Get-CommandSources([string]$Name) {
+    $sources = New-Object 'System.Collections.Generic.List[string]'
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($lookup in @(($Name + '.cmd'), ($Name + '.exe'), $Name)) {
+        foreach ($command in @(Get-Command $lookup -CommandType Application,ExternalScript -All -ErrorAction SilentlyContinue)) {
+            $source = if (![string]::IsNullOrWhiteSpace($command.Source)) { $command.Source } else { $command.Path }
+            if (![string]::IsNullOrWhiteSpace($source) -and (Test-Path -LiteralPath $source -PathType Leaf)) {
+                $fullPath = [IO.Path]::GetFullPath($source)
+                if ($seen.Add($fullPath)) { $sources.Add($fullPath) }
+            }
+        }
+    }
+    try {
+        foreach ($source in @(& where.exe $Name 2>$null)) {
+            if (![string]::IsNullOrWhiteSpace($source) -and (Test-Path -LiteralPath $source.Trim() -PathType Leaf)) {
+                $fullPath = [IO.Path]::GetFullPath($source.Trim())
+                if ($seen.Add($fullPath)) { $sources.Add($fullPath) }
+            }
+        }
+    } catch { }
+    return @($sources)
+}
+
 function Find-CompatibleCommand([string]$Name, [string[]]$Candidates, [string[]]$Arguments, [Version]$MinimumVersion) {
     $commands = New-Object 'System.Collections.Generic.List[object]'
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-    $pathCommand = Find-Command $Name
-    if ($null -ne $pathCommand -and $seen.Add([IO.Path]::GetFullPath($pathCommand.Source))) { $commands.Add($pathCommand) }
+    foreach ($source in @(Get-CommandSources $Name)) {
+        if ($seen.Add($source)) { $commands.Add([pscustomobject]@{ Source = $source }) }
+    }
     foreach ($candidate in $Candidates) {
         if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
         $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
         if ((Test-Path -LiteralPath $expanded -PathType Leaf) -and $seen.Add([IO.Path]::GetFullPath($expanded))) { $commands.Add([pscustomobject]@{ Source = [IO.Path]::GetFullPath($expanded) }) }
     }
     foreach ($command in $commands) {
-        try { if ((Read-Version (Read-CommandText $command.Source $Arguments)) -ge $MinimumVersion) { return $command } } catch { }
+        try {
+            $text = Read-CommandText $command.Source $Arguments
+            if ((Read-Version $text) -ge $MinimumVersion) { return $command }
+        } catch {
+            Write-InstallLine ('无法使用候选 ' + $Name + '：' + $command.Source + ' · ' + $_.Exception.Message) Yellow
+        }
     }
     return $commands | Select-Object -First 1
 }
@@ -97,6 +149,8 @@ try {
     [IO.File]::WriteAllText($logFile, ('TaskTrace build started: ' + [DateTime]::Now.ToString('o') + [Environment]::NewLine), [Text.UTF8Encoding]::new($true))
     Write-InstallLine 'TaskTrace 免安装程序生成工具' Cyan
     Write-InstallLine ('源码目录：' + $root)
+    Import-FreshBuildEnvironment
+    Write-InstallLine '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
 
     if ($PSVersionTable.PSVersion -lt [Version]'5.1') {
         Add-DependencyIssue ('PowerShell 版本过低：' + $PSVersionTable.PSVersion) '请升级到 Windows PowerShell 5.1 或 PowerShell 7。'
@@ -118,6 +172,7 @@ try {
             (Join-OptionalPath ${env:ProgramFiles(x86)} 'nodejs\node.exe'),
             (Join-Path $env:LOCALAPPDATA 'Programs\nodejs\node.exe'),
             (Join-Path $env:LOCALAPPDATA 'Volta\bin\node.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\node.exe'),
             (Join-Path $env:USERPROFILE 'scoop\apps\nodejs\current\node.exe'),
             (Join-Path $env:USERPROFILE 'scoop\apps\nodejs-lts\current\node.exe'),
             (Join-OptionalPath $env:NVM_SYMLINK 'node.exe')
@@ -141,6 +196,7 @@ try {
             (Join-OptionalPath $env:PNPM_HOME 'pnpm.cmd'),
             (Join-Path $env:LOCALAPPDATA 'pnpm\pnpm.cmd'),
             (Join-Path $env:APPDATA 'npm\pnpm.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\pnpm.cmd'),
             (Join-Path $env:ProgramFiles 'nodejs\pnpm.cmd')
         )
         if ($null -ne $node) { $pnpmCandidates += (Join-Path (Split-Path $node.Source -Parent) 'pnpm.cmd') }
@@ -173,7 +229,10 @@ try {
         Write-InstallLine '已选择跳过前端构建；仅适用于 frontend/dist 已由本仓库成功构建的开发环境。' Yellow
     }
 
-    $goCandidates = @((Join-Path $env:ProgramFiles 'Go\bin\go.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\Go\bin\go.exe'),(Join-OptionalPath $env:GOROOT 'bin\go.exe'),(Join-Path $env:USERPROFILE 'scoop\apps\go\current\bin\go.exe'))
+    $goCandidates = @((Join-Path $env:ProgramFiles 'Go\bin\go.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\Go\bin\go.exe'),(Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\go.exe'),(Join-OptionalPath $env:GOROOT 'bin\go.exe'),(Join-Path $env:USERPROFILE 'scoop\apps\go\current\bin\go.exe'))
+    foreach ($registryKey in @('HKLM:\SOFTWARE\GoProgrammingLanguage', 'HKCU:\SOFTWARE\GoProgrammingLanguage', 'HKLM:\SOFTWARE\WOW6432Node\GoProgrammingLanguage')) {
+        try { $installRoot = (Get-ItemProperty -LiteralPath $registryKey -ErrorAction Stop).InstallRoot; if ($installRoot) { $goCandidates += (Join-Path $installRoot 'bin\go.exe') } } catch { }
+    }
     $go = Find-CompatibleCommand 'go' $goCandidates @('version') ([Version]'1.27.0')
     if ($null -eq $go) {
         Add-DependencyIssue '未找到 Go。' '安装 Go 1.27.0 或更新版本：https://go.dev/dl/'
