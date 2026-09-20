@@ -5,6 +5,7 @@
 - 双击安装器时会合并当前进程、当前用户和系统保存的 PATH，并重新读取 PNPM_HOME、NVM_HOME、NVM_SYMLINK 与 GOROOT，避免资源管理器保留旧环境而把已安装工具误报为缺失。
 - Node.js、pnpm 和 Go 同时通过 PowerShell 命令发现、Windows `where`、常见目录、WinGet 链接及相应注册表位置查找；候选工具无法运行时会把具体路径和错误写入 `dist/install.log`。
 - 将启动安装器的 PATH 人为缩减为 Windows 系统目录后，`-CheckOnly` 仍正确识别 Node.js 24.19.0、pnpm 11.26.0、Go 1.27.0、GCC 与 C# 编译器，依赖检查退出码为 0。
+- 构建提示明确区分已安装的构建工具与项目依赖包：只有本机缓存缺少前端包或 Go 模块时才会联网下载。
 
 ## 2026-09-19 完整界面最近进展筛选
 

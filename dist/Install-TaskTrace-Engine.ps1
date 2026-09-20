@@ -292,7 +292,7 @@ try {
 
     $stage = '生成免安装程序'
     Write-InstallLine ''
-    Write-InstallLine '依赖检查通过，开始生成免安装程序。首次构建需要下载依赖，可能需要较长时间。' Green
+    Write-InstallLine '依赖检查通过，开始生成免安装程序。若本机尚未缓存项目所需的前端包或 Go 模块，构建工具会自动下载，耗时会相应增加。' Green
     $buildScript = Join-Path $root 'portable\Build-Local.ps1'
     $buildArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-PackageDirectory', 'dist/TaskTrace-local', '-Version', $Version, '-SkipArchive')
     if ($SkipFrontend) { $buildArguments += '-SkipFrontend' }
