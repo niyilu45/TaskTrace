@@ -34,14 +34,14 @@ internal sealed partial class TaskTreeView {
         Font font=DisplayFont(node);
         int width=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width;
         var numbered=TaskPriorityMatch(node);
-        int left=bounds.Left+2+(numbered.Success?PriorityTextAdvance(numbered.Groups["prefix"].Value,font):0);
+        int left=bounds.Left+2+(numbered.Success?PriorityTextAdvance(numbered.Groups["prefix"].Value,font)+6:0);
         int height=simpleImageLinks && WrapNodeText?Math.Min(bounds.Height,TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+4):bounds.Height;
         return new Rectangle(left,bounds.Top,width+4,height);
     }
     internal void ReserveSimpleImageSpace(TreeNode node) {
         if(!simpleImageLinks || SimpleImageAvailable==null || !SimpleImageAvailable(node))return;
         Font font=DisplayFont(node);
-        int linkWidth=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width+12;
+        int linkWidth=TextRenderer.MeasureText("图片",font,Size.Empty,TextFormatFlags.NoPadding).Width+18;
         int spaceWidth=Math.Max(1,TextRenderer.MeasureText("x x",font,Size.Empty,TextFormatFlags.NoPadding).Width-TextRenderer.MeasureText("xx",font,Size.Empty,TextFormatFlags.NoPadding).Width);
         // Native hit testing measures Node.Text, whereas owner drawing places a link before it.
         // Trailing spaces reserve that width without changing the outstanding item's HTML/title.
@@ -74,8 +74,9 @@ internal sealed partial class TaskTreeView {
             TextRenderer.DrawText(e.Graphics,"图片",underline,link,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
         }
         var title=new Rectangle(textLeft,e.Bounds.Top,Math.Max(0,ClientSize.Width-textLeft-2),e.Bounds.Height);
-        var flags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
-        TextRenderer.DrawText(e.Graphics,titleText,font,title,foreground,flags);
+        bool wraps=WrapNodeText && TextRenderer.MeasureText(titleText,font,Size.Empty,TextFormatFlags.NoPadding).Width>title.Width;
+        if(wraps)DrawCompactWrappedText(e.Graphics,titleText,font,title,foreground);
+        else TextRenderer.DrawText(e.Graphics,titleText,font,title,foreground,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
         if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,bounds,foreground,background);
         e.DrawDefault=false;
     }

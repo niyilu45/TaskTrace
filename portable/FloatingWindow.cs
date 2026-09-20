@@ -940,6 +940,11 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task TestFlow() {
         try {
+            if(Environment.GetEnvironmentVariable("TASKTRACE_FLOATING_LAYOUT_TEST")=="1") {
+                TestPriorityLinks();await TestSimpleOutstandingDetails();
+                File.WriteAllText(Path.Combine(data,"floating-test.txt"),"PASS: focused floating layout tests");
+                return;
+            }
             string settingsPath=Path.Combine(data,"autosave.json");string savedSettings=File.Exists(settingsPath)?File.ReadAllText(settingsPath):null;
             bool savedAutoEnabled=autoSaveEnabled,savedGrayCompleted=grayCompleted,savedStrikeCompleted=strikeCompleted;int savedAutoSeconds=autoSaveSeconds,savedDefaultPriority=defaultPriority,savedHideDelay=completedHideDelayMinutes;
             try {
