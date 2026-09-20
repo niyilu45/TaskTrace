@@ -24,17 +24,22 @@ a, button, input[type='checkbox'], input[type='radio'], select, [tabindex], [con
 :root {
   // Bulma sets this to "scroll" which gives us a scrollbar even if there's no content to scroll
   --body-overflow-y: auto;
-  font-size: 16px;
+  // Keep the browser or operating-system accessibility size when it is larger,
+  // then raise the minimum in small steps for desktop width and display scale.
+  // rem-based controls and spacing grow with the text, so the interface stays
+  // proportional instead of enlarging labels inside fixed-height controls.
+  font-size: max(100%, 16px);
 
-  // Add a modest type boost on high-density Windows displays. Browsers already
-  // map CSS pixels to the system scale; this keeps dense task tables readable
-  // when the display or accessibility text scale is above the baseline.
-  @media (min-resolution: 144dpi) {
-    font-size: 17px;
+  @media (min-width: 1280px), (min-width: 768px) and (min-resolution: 120dpi) {
+    font-size: max(100%, 17px);
   }
 
-  @media (min-resolution: 192dpi) {
-    font-size: 18px;
+  @media (min-width: 1920px), (min-width: 768px) and (min-resolution: 144dpi) {
+    font-size: max(100%, 18px);
+  }
+
+  @media (min-width: 2560px), (min-width: 768px) and (min-resolution: 192dpi) {
+    font-size: max(100%, 19px);
   }
 }
 
