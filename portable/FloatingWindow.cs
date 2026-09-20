@@ -130,8 +130,9 @@ internal sealed partial class FloatingWindow : Form {
                 string progress = latest == null ? "暂无每日进展" : DayOf(latest) + "：" + String.Join("\r\n",history.Where(note=>DayOf(note)==DayOf(latest)).OrderBy(note=>Convert.ToInt64(note["id"])).Select(note=>Plain(ProgressDisplayBody((string)note["comment"]))));
                 string text = tasks.CurrentTaskText(node) + "\r\n\r\n" + progress;
                 if(text.Length > 1500) text = text.Substring(0, 1500) + "…";
-                if(!closing && node == hoverNode && node.TreeView == tasks) progressTip.Show(text, tasks, tasks.PointToClient(Cursor.Position).X + 12, tasks.PointToClient(Cursor.Position).Y + 18, 20000);
-            } catch { if(!closing && node == hoverNode) progressTip.Show("进展读取失败，请重新悬停重试。", tasks, 20, 20, 5000); }
+                var surface=hoverSurface??(Control)taskSurface;
+                if(!closing && node == hoverNode && node.TreeView == tasks) progressTip.Show(text, surface, surface.PointToClient(Cursor.Position).X + 12, surface.PointToClient(Cursor.Position).Y + 18, 20000);
+            } catch { if(!closing && node == hoverNode) {var surface=hoverSurface??(Control)taskSurface;progressTip.Show("进展读取失败，请重新悬停重试。", surface, 20, 20, 5000);} }
         };
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -155,8 +156,8 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(addRow, 0, 1);
         searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
         content.Controls.Add(searchRow, 0, 2);
-        tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding(); ApplyTaskTreeLayout();
-        content.Controls.Add(tasks, 0, 3);
+        tasks.Font=Font;taskSurface.Font=Font;tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding(); InitializeTaskSurface(); ApplyTaskTreeLayout();
+        content.Controls.Add(taskSurface, 0, 3);
         var progressButton = new Button { Text = "记录进展", AutoSize = false, Width = 72 };
         progressButton.Click += delegate { ShowProgress(); };
         var childrenButton = new Button { Text = "新任务", AutoSize = false, Width = 66 };
@@ -235,6 +236,7 @@ internal sealed partial class FloatingWindow : Form {
         int dpi=96;using(var graphics=CreateGraphics())dpi=Math.Max(96,(int)Math.Round(graphics.DpiX));
         tasks.ItemHeight=Math.Max(28,(int)Math.Round(28d*dpi/96d));
         tasks.Indent=Math.Max(20,(int)Math.Round(20d*dpi/96d));
+        taskSurface.Rebuild(true);
         QueueFullLayoutRefresh();
     }
     static string Plain(string html) {
@@ -350,14 +352,14 @@ internal sealed partial class FloatingWindow : Form {
     void ApplyTaskTreeLayout() {
         bool flat=singleLine.Checked;
         tasks.SingleLinePaths=flat;
-        tasks.SetWrappedText(simpleMode && !flat);
+        tasks.SetWrappedText(!flat);
         tasks.ShowLines=!flat;
         tasks.ShowRootLines=true;
         tasks.ShowPlusMinus=!flat;
         tasks.Indent=flat?0:20;
         if(flat)tasks.ExpandAll();
         tasks.SyncCompletionStates();
-        tasks.Invalidate();
+        tasks.Invalidate();taskSurface.Rebuild(true);
     }
     void QueueFullLayoutRefresh() {
         if(simpleMode || closing || IsDisposed || fullLayoutRefreshQueued || !IsHandleCreated || WindowState!=FormWindowState.Normal)return;
@@ -429,7 +431,7 @@ internal sealed partial class FloatingWindow : Form {
             }
         }
     }
-    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
+    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; taskSurface.Enabled=!value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
         try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); await RefreshUndo(); }
@@ -448,7 +450,7 @@ internal sealed partial class FloatingWindow : Form {
         var project = projects.SelectedItem as Project; if(project == null) return;
         bool created=false;SetBusy(true);
         try { await Api("POST", "/projects/" + project.Id + "/tasks", new { title = entry.Text.Trim(), priority = ApiPriority(entryPriority.SelectedIndex) }); search.Clear(); page = 1; await LoadTasks(); HideNewTaskEditor(); created=true; }
-        catch(Exception e) { Error(e); } finally { SetBusy(false); if(addRow.Visible)entry.Focus();else if(created)tasks.Focus(); }
+        catch(Exception e) { Error(e); } finally { SetBusy(false); if(addRow.Visible)entry.Focus();else if(created)taskSurface.Focus(); }
     }
     sealed class PastedImage { public byte[] Bytes; public long Id; }
     async Task<long> SaveProgress(long id, DateTime day, string progress, string nextStep, List<PastedImage> pictures = null, long commentId = 0, string bodyOverride = null, List<long> mergedIds = null, List<ProgressReference> references = null) {
@@ -941,7 +943,7 @@ internal sealed partial class FloatingWindow : Form {
     async Task TestFlow() {
         try {
             if(Environment.GetEnvironmentVariable("TASKTRACE_FLOATING_LAYOUT_TEST")=="1") {
-                TestPriorityLinks();await TestSimpleOutstandingDetails();
+                TestTaskSurfaceLayout();await TestSimpleOutstandingDetails();
                 File.WriteAllText(Path.Combine(data,"floating-test.txt"),"PASS: focused floating layout tests");
                 return;
             }
@@ -978,10 +980,9 @@ internal sealed partial class FloatingWindow : Form {
             await Api("PATCH","/tasks/"+id,new{status="doing"});await LoadTasks();var doingTask=await Api("GET","/tasks/"+id,null);
             if(TaskStatusValue(doingTask)!="doing" || Convert.ToBoolean(doingTask["done"]))throw new Exception("Doing status was not persisted");
             tasks.SelectedNode=tasks.Nodes.Find(id.ToString(),true).First();await ShowSubtasks(true);
-            tasks.Nodes[0].EnsureVisible();tasks.Refresh();var completionBounds=tasks.CompletionBounds(tasks.Nodes[0]);
+            tasks.Nodes[0].EnsureVisible();tasks.Refresh();taskSurface.Rebuild(true);var completionBounds=taskSurface.CheckBounds(tasks.Nodes[0]);
             if(completionBounds.IsEmpty)throw new Exception("Task completion box is not visible");
-            int completionPoint=((completionBounds.Top+completionBounds.Height/2)<<16)|((completionBounds.Left+completionBounds.Width/2)&0xffff);
-            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(completionPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(completionPoint));
+            taskSurface.TestClick(completionBounds,1);
             bool clickCompleted=false;
             for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+id,null))["done"])){clickCompleted=true;break;}}
             if(!clickCompleted)throw new Exception("Task completion box click did not persist");
@@ -1027,8 +1028,8 @@ internal sealed partial class FloatingWindow : Form {
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");
             TestSimpleModeRecovery();
             var beforeSimple=Bounds;SetSimpleMode(true);Size=new Size(230,220);
-            if(!simpleMode || content.Visible || toolbar.Visible || tasks.Parent!=this || FormBorderStyle!=FormBorderStyle.None)throw new Exception("Simple mode layout failed");
-            SetSimpleMode(false);if(Bounds!=beforeSimple || tasks.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
+            if(!simpleMode || content.Visible || toolbar.Visible || taskSurface.Parent!=this || FormBorderStyle!=FormBorderStyle.None)throw new Exception("Simple mode layout failed");
+            SetSimpleMode(false);if(Bounds!=beforeSimple || taskSurface.Parent!=content || !toolbar.Visible)throw new Exception("Restore full floating window failed");
             long grandchildId = await CreateSubtask(childId, Convert.ToInt64(parentWithChild["project_id"]), "下级子任务验收");
             await LoadTasks();
             if(tasks.Nodes.Count != 1 || tasks.Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1 || tasks.Nodes[0].Nodes[0].Nodes.Cast<TreeNode>().Count(node=>node.Tag is long) != 1) throw new Exception("Task hierarchy missing");
@@ -1040,38 +1041,36 @@ internal sealed partial class FloatingWindow : Form {
             if(sharedLeaf.Text!="1. [P2] 跨日期待办二" || !leafState.Done || String.IsNullOrWhiteSpace(leafState.CompletedAt) || leafState.Priority!=2 || sharedLeaf.StateImageIndex!=2 || !tasks.DisplayFont(sharedLeaf).Bold || !tasks.DisplayFont(sharedLeaf).Strikeout || sharedLeaf.ForeColor!=Color.FromArgb(100,110,125))throw new Exception("Full mode direct outstanding completion style, time, priority or bold font failed");
             if(singleLine.Parent!=projectRow || !singleLine.Visible || singleLine.AccessibleName!="任务单行显示")throw new Exception("Single-line checkbox is missing from full floating mode");
             rendering=true;singleLine.Checked=true;rendering=false;ApplyTaskTreeLayout();await LoadTasks();
-            var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
+            var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();taskSurface.Rebuild(true);
             string expectedAncestors=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
-            if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || !flatGrandchild.IsVisible || tasks.Nodes.Count!=2)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+flatGrandchild.IsVisible);
+            if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || taskSurface.NodeBounds(flatGrandchild).IsEmpty || tasks.Nodes.Count!=2)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+!taskSurface.NodeBounds(flatGrandchild).IsEmpty);
             if(tasks.Nodes.Find(id.ToString(),true).Length!=0 || tasks.Nodes.Find(childId.ToString(),true).Length!=0)throw new Exception("Single-line mode retained a task that has child tasks or unfinished outstanding items");
             sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
             string expectedOutstandingPath=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
             if(sharedLeaf.Parent!=null || tasks.AncestorTaskText(sharedLeaf)!=expectedOutstandingPath)throw new Exception("Single-line outstanding path layout failed");
-            var grandchildCheck=tasks.CompletionBounds(flatGrandchild);
+            taskSurface.Rebuild(true);var grandchildCheck=taskSurface.CheckBounds(flatGrandchild);
             if(grandchildCheck.IsEmpty || flatGrandchild.StateImageIndex!=0)throw new Exception("Single-line task completion box is not visible");
             SaveBounds();var singleLineSettings=ReadObject(File.ReadAllText(Path.Combine(data,"floating-window.json")));if(!Convert.ToBoolean(singleLineSettings["singleLine"]))throw new Exception("Single-line preference was not persisted");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-full-test.png")); }
-            int flatCompletionPoint=((grandchildCheck.Top+grandchildCheck.Height/2)<<16)|((grandchildCheck.Left+grandchildCheck.Width/2)&0xffff);
-            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(flatCompletionPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(flatCompletionPoint));
+            taskSurface.TestClick(grandchildCheck,1);
             bool flatCompleted=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);if(Convert.ToBoolean((await Api("GET","/tasks/"+grandchildId,null))["done"])){flatCompleted=true;break;}}
             if(!flatCompleted)throw new Exception("Single-line custom completion box did not persist");while(busy)await Task.Delay(20);await Complete(grandchildId,false);
             sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
-            sharedLeaf.EnsureVisible();tasks.Refresh();var outstandingCheck=tasks.CompletionBounds(sharedLeaf);if(outstandingCheck.IsEmpty)throw new Exception("Outstanding completion box is not visible");
-            int outstandingPoint=((outstandingCheck.Top+outstandingCheck.Height/2)<<16)|((outstandingCheck.Left+outstandingCheck.Width/2)&0xffff);
-            SendSimpleMessage(tasks.Handle,0x201,new IntPtr(1),new IntPtr(outstandingPoint));SendSimpleMessage(tasks.Handle,0x202,IntPtr.Zero,new IntPtr(outstandingPoint));
+            sharedLeaf.EnsureVisible();tasks.Refresh();taskSurface.Rebuild(true);var outstandingCheck=taskSurface.CheckBounds(sharedLeaf);if(outstandingCheck.IsEmpty)throw new Exception("Outstanding completion box is not visible");
+            taskSurface.TestClick(outstandingCheck,1);
             bool outstandingReopened=false;for(int attempt=0;attempt<40;attempt++){await Task.Delay(50);var state=ReadShared(await ReadHistory(childId));if(state.Items.Count==1 && !state.Items[0].Done){outstandingReopened=true;break;}}
             if(!outstandingReopened)throw new Exception("Outstanding completion box click did not persist");while(busy)await Task.Delay(20);
             var reopenedOutstanding=ReadShared(await ReadHistory(childId)).Items.Single();if(!String.IsNullOrWhiteSpace(reopenedOutstanding.CompletedAt))throw new Exception("Reopened outstanding item retained its completion time");
             grayCompleted=styleGrayBeforeTest;strikeCompleted=styleStrikeBeforeTest;completedHideDelayMinutes=hideDelayBeforeTest;tasks.StrikeCompleted=strikeCompleted;
             await UpdateOutstandingState(childId,"test-two",null,4);var updatedShared=ReadShared(await ReadHistory(childId));
             if(updatedShared.Items.Count!=1 || updatedShared.Items[0].Done || updatedShared.Items[0].Priority!=4)throw new Exception("Outstanding completion or priority update failed");
-            await LoadTasks();sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
-            if(tasks.CurrentTaskText(sharedLeaf)!="1. [P4] 跨日期待办二" || leafState.Done || sharedLeaf.StateImageIndex!=0 || tasks.CompletionBounds(sharedLeaf).IsEmpty)throw new Exception("Outstanding completion or priority refresh failed");
+            await LoadTasks();taskSurface.Rebuild(true);sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
+            if(tasks.CurrentTaskText(sharedLeaf)!="1. [P4] 跨日期待办二" || leafState.Done || sharedLeaf.StateImageIndex!=0 || taskSurface.CheckBounds(sharedLeaf).IsEmpty)throw new Exception("Outstanding completion or priority refresh failed");
             tasks.SelectedNode=sharedLeaf;int beforeModeLoad=taskLoadVersion;
             SetSimpleMode(true);Size=new Size(330,260);
             if(sharedLeaf.Parent!=null || tasks.SelectedNode!=sharedLeaf || taskLoadVersion!=beforeModeLoad)throw new Exception("Mode switch changed shared task data or selection");
             flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();
-            if(!singleLine.Checked || !tasks.SingleLinePaths || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || !flatGrandchild.IsVisible || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Simple mode did not retain single-line paths or bold outstanding items");
+            if(!singleLine.Checked || !tasks.SingleLinePaths || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || taskSurface.NodeBounds(flatGrandchild).IsEmpty || !tasks.DisplayFont(sharedLeaf).Bold)throw new Exception("Simple mode did not retain single-line paths or bold outstanding items");
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-single-line-simple-test.png")); }
             using(var bitmap = new Bitmap(Width, Height)) { DrawToBitmap(bitmap, new Rectangle(Point.Empty, Size)); bitmap.Save(Path.Combine(data, "floating-simple-test.png")); }
             ShowSimpleModeRestore();
@@ -1144,7 +1143,7 @@ internal sealed partial class FloatingWindow : Form {
             }
             await TestInteractions();
             await TestPriorityFilter();
-            TestPriorityLinks();
+            TestTaskSurfaceLayout();
             await TestSimpleOutstandingDetails();
             TestSimpleOutstandingActions();
             await TestUndo();

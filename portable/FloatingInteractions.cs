@@ -202,7 +202,7 @@ internal sealed partial class FloatingWindow {
         };
     }
     void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked}));}catch{}}
-    void ClearDropMark(){bool hadMark=tasks.Dropping || tasks.DropNode!=null;tasks.Dropping=false;tasks.DropNode=null;dropHover=null;if(hadMark)tasks.Invalidate();progressTip.Hide(tasks);}
+    void ClearDropMark(){bool hadMark=tasks.Dropping || tasks.DropNode!=null;tasks.Dropping=false;tasks.DropNode=null;dropHover=null;if(hadMark)tasks.Invalidate();taskSurface.ClearDropMark();progressTip.Hide(tasks);progressTip.Hide(taskSurface);}
     long SelectedTaskId(){var node=tasks.SelectedNode;if(node==null)return 0;if(node.Tag is long)return (long)node.Tag;var leaf=node.Tag as OutstandingLeaf;return leaf==null?0:leaf.TaskId;}
     static int DropZone(TreeNode source,TreeNode target,int y){
         if(target==null)return 0;

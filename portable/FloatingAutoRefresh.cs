@@ -313,14 +313,14 @@ internal sealed partial class FloatingWindow {
             var leaf=parent.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
             var childLeaf=child.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
             parent.Expand();child.Collapse();tasks.SelectedNode=leaf;tasks.TopNode=parent;tasks.Update();await Task.Delay(100);
-            var stableTop=tasks.TopNode;var stableBounds=tasks.Bounds;var stableWindowBounds=Bounds;
+            var stableTop=tasks.TopNode;var stableBounds=taskSurface.Bounds;var stableWindowBounds=Bounds;
             int invalidations=0,enabledChanges=0;
             InvalidateEventHandler invalidated=delegate{invalidations++;};EventHandler enabledChanged=delegate{enabledChanges++;};
             tasks.Invalidated+=invalidated;tasks.EnabledChanged+=enabledChanged;
             try {
                 if(!await LoadTasks(true))throw new Exception("Unchanged background load was unexpectedly cancelled");
                 if(invalidations!=0 || enabledChanges!=0 || AutoRefreshTestTask(parentId)!=parent || AutoRefreshTestTask(childId)!=child || leaf.Parent!=parent || childLeaf.Parent!=child ||
-                    !parent.IsExpanded || child.IsExpanded || tasks.SelectedNode!=leaf || tasks.TopNode!=stableTop || tasks.Bounds!=stableBounds || Bounds!=stableWindowBounds)
+                    !parent.IsExpanded || child.IsExpanded || tasks.SelectedNode!=leaf || tasks.TopNode!=stableTop || taskSurface.Bounds!=stableBounds || Bounds!=stableWindowBounds)
                     throw new Exception("Unchanged background load invalidated or disabled the tree, recreated nodes, or changed selection, expansion, scroll, or bounds");
                 long reads=AutoRefreshReadCount;
                 SignalAutoRefreshChange();SignalAutoRefreshChange();SignalAutoRefreshChange();
@@ -339,7 +339,7 @@ internal sealed partial class FloatingWindow {
             await WaitForAutoRefreshTest(delegate{var current=AutoRefreshTestTask(parentId);return current!=null && current.Text.Contains("已更新");},"Task edit did not propagate from commit detection");
             parent=AutoRefreshTestTask(parentId);child=AutoRefreshTestTask(childId);
             leaf=parent.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);
-            if(!parent.IsExpanded || child.IsExpanded || tasks.SelectedNode!=leaf || tasks.TopNode!=parent || tasks.Bounds!=stableBounds)throw new Exception("Task edit lost simple tree selection, scroll, expansion, or viewport");
+            if(!parent.IsExpanded || child.IsExpanded || tasks.SelectedNode!=leaf || tasks.TopNode!=parent || taskSurface.Bounds!=stableBounds)throw new Exception("Task edit lost simple tree selection, scroll, expansion, or viewport");
             previousRevision=AutoRefreshRevision;shared.Items[0].Html="父任务遗留事项已更新";
             using(BeginUndoGroup())await WriteShared(parentId,shared);
             await WaitForAutoRefreshSignalTest(previousRevision);

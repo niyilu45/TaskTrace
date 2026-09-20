@@ -163,7 +163,7 @@ internal sealed partial class FloatingWindow {
             MinimumSize=new Size(160,SimpleMinimumViewport+2*SimpleEdge+(simpleActionsShown?extra:0));
             ClientSize=new Size(width,plainHeight+(simpleActionsShown?extra:0));
             var viewport=new Rectangle(SimpleEdge,SimpleEdge,width-2*SimpleEdge,simpleViewportHeight);
-            tasks.Bounds=viewport;simpleEmpty.Bounds=viewport;
+            taskSurface.Bounds=viewport;simpleEmpty.Bounds=viewport;
             simpleActions.Bounds=new Rectangle(SimpleEdge,viewport.Bottom+SimpleActionGap,width-2*SimpleEdge,simpleActionsHeight);
             simpleActions.Visible=simpleActionsShown;
             restoreSimple.Visible=true;minimizeSimple.Visible=true;
@@ -191,7 +191,7 @@ internal sealed partial class FloatingWindow {
     void UpdateSimpleModeState() {
         if(closing || IsDisposed)return;
         simpleEmpty.Visible=simpleMode && tasks.Nodes.Count==0;
-        if(simpleMode)tasks.Visible=tasks.Nodes.Count>0;
+        if(simpleMode)taskSurface.Visible=tasks.Nodes.Count>0;
         if(simpleEmpty.Visible) {
             if(busy)simpleEmpty.Text="正在读取事项…";
             else if(status.Text.StartsWith("操作失败"))simpleEmpty.Text="读取失败，请返回后重试。";
@@ -207,7 +207,7 @@ internal sealed partial class FloatingWindow {
     void RestoreFullFloatingWindow() {
         if(closing || IsDisposed)return;
         WindowState=FormWindowState.Normal;RestoreFromEdge(true);SetSimpleMode(false);
-        if(collapsed)ToggleFold();RestoreWindow();tasks.Focus();
+        if(collapsed)ToggleFold();RestoreWindow();taskSurface.Focus();
     }
     void SetSimpleMode(bool enabled) {
         if(enabled==simpleMode){UpdateSimpleModeState();return;}
@@ -218,9 +218,9 @@ internal sealed partial class FloatingWindow {
             if(enabled) {
                 if(collapsed)ToggleFold();fullBounds=Bounds;simpleMode=true;
                 UpdateSimpleActionState();
-                content.Controls.Remove(tasks);content.Visible=false;toolbar.Visible=false;
+                content.Controls.Remove(taskSurface);content.Visible=false;toolbar.Visible=false;
                 FormBorderStyle=FormBorderStyle.None;Padding=Padding.Empty;
-                Controls.Add(tasks);tasks.Dock=DockStyle.None;tasks.Visible=true;tasks.BringToFront();
+                Controls.Add(taskSurface);taskSurface.Dock=DockStyle.None;taskSurface.Visible=true;taskSurface.BringToFront();
                 tasks.SetWrappedText(!singleLine.Checked);
                 simpleActionsHeight=MeasureSimpleActions(Math.Max(160,simpleSize.Width)-2*SimpleEdge);
                 simpleViewportHeight=Math.Max(SimpleMinimumViewport,simpleSize.Height-2*SimpleEdge-SimpleActionGap-simpleActionsHeight);
@@ -228,12 +228,12 @@ internal sealed partial class FloatingWindow {
                 MinimumSize=new Size(160,SimpleMinimumViewport+2*SimpleEdge);ClientSize=new Size(Math.Max(160,simpleSize.Width),Math.Max(120,simpleSize.Height));
             } else {
                 // simpleSize already contains the stable expanded dimensions, even while unfocused.
-                simpleMode=false;simpleWindowWasMinimized=false;tasks.SetWrappedText(false);Controls.Remove(tasks);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
+                simpleMode=false;simpleWindowWasMinimized=false;Controls.Remove(taskSurface);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
                 FormBorderStyle=FormBorderStyle.Sizable;MinimumSize=new Size(350,420);
-                content.Controls.Add(tasks,0,3);tasks.Dock=DockStyle.Fill;tasks.Visible=true;content.Visible=true;toolbar.Visible=true;Bounds=fullBounds;
+                content.Controls.Add(taskSurface,0,3);taskSurface.Dock=DockStyle.Fill;taskSurface.Visible=true;content.Visible=true;toolbar.Visible=true;Bounds=fullBounds;
             }
         } finally {simpleLayout=false;content.ResumeLayout(true);ResumeLayout(true);}
-        PerformLayout();PositionSimpleModeControls();tasks.RefreshWrappedLayout();UpdateSimpleModeState();
+        PerformLayout();PositionSimpleModeControls();tasks.RefreshWrappedLayout();taskSurface.Rebuild(true);UpdateSimpleModeState();
         if(selected!=null && selected.TreeView==tasks)tasks.SelectedNode=selected;
         if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
         tasks.Invalidate();SaveSimpleMode();
@@ -249,7 +249,7 @@ internal sealed partial class FloatingWindow {
         try {
             tasks.Nodes.Clear();search.Text="无匹配的查询";status.Text="没有匹配事项，可清空搜索或显示已完成。";
             SetSimpleMode(true);Size=new Size(230,260);ShowSimpleModeRestore();UpdateSimpleModeState();
-            if(tasks.Visible || tasks.Width<100 || tasks.Height<54 || !simpleEmpty.Visible || !restoreSimple.Visible || !minimizeSimple.Visible || !simpleEmpty.Text.Contains("搜索"))throw new Exception("Empty simple mode must show its reason and recovery controls");
+            if(taskSurface.Visible || taskSurface.Width<100 || taskSurface.Height<54 || !simpleEmpty.Visible || !restoreSimple.Visible || !minimizeSimple.Visible || !simpleEmpty.Text.Contains("搜索"))throw new Exception("Empty simple mode must show its reason and recovery controls");
             var buttonPoint=simpleActions.PointToClient(restoreSimple.PointToScreen(new Point(restoreSimple.Width/2,restoreSimple.Height/2)));
             if(simpleActions.GetChildAtPoint(buttonPoint)!=restoreSimple || simpleEmpty.Bounds.IntersectsWith(simpleActions.Bounds))throw new Exception("Recovery button is obscured in empty simple mode");
             var emptyArea=simpleEmpty.Bounds;var savedSize=simpleSize;OnDeactivate(EventArgs.Empty);
@@ -258,7 +258,7 @@ internal sealed partial class FloatingWindow {
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-simple-empty-test.png"));}
             restoreSimple.PerformClick();if(simpleMode || Bounds!=originalBounds)throw new Exception("Empty simple mode button failed to restore original bounds");
             SetSimpleMode(true);HideSimpleModeActions();
-            typeof(Control).GetMethod("OnMouseClick",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tasks,new object[]{new MouseEventArgs(MouseButtons.Left,1,20,80,0)});
+            typeof(Control).GetMethod("OnMouseClick",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,1,20,80,0)});
             if(!restoreSimple.Visible)throw new Exception("Blank surface click failed to expose recovery controls");
             Message key=Message.Create(Handle,0x100,IntPtr.Zero,IntPtr.Zero);if(!ProcessCmdKey(ref key,Keys.Escape) || simpleMode)throw new Exception("Escape failed to recover empty simple mode");
             SetSimpleMode(true);treeRestoreFull.PerformClick();if(simpleMode)throw new Exception("Simple context menu failed to restore full mode");
@@ -273,16 +273,16 @@ internal sealed partial class FloatingWindow {
             if(simpleMode)SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);rendering=false;UpdateSimpleModeState();
         }
         SetSimpleMode(true);Size=new Size(230,260);ShowSimpleModeRestore();
-        if(!tasks.Visible || tasks.Nodes.Count!=originalNodes.Length || tasks.Bounds.Width<100 || tasks.GetNodeAt(tasks.Nodes[0].Bounds.Location)==null)throw new Exception("Populated simple tree is not visible and hit-testable");
-        var taskArea=tasks.Bounds;var row=tasks.Nodes[0];var rowPoint=tasks.PointToScreen(row.Bounds.Location);var topNode=tasks.TopNode;var stableSize=simpleSize;
+        if(!taskSurface.Visible || tasks.Nodes.Count!=originalNodes.Length || taskSurface.Bounds.Width<100 || taskSurface.NodeBounds(tasks.Nodes[0]).IsEmpty)throw new Exception("Populated simple tree is not visible and hit-testable");
+        var taskArea=taskSurface.Bounds;var row=tasks.Nodes[0];var rowPoint=taskSurface.PointToScreen(taskSurface.NodeBounds(row).Location);var topNode=tasks.TopNode;var stableSize=simpleSize;
         for(int i=0;i<3;i++) {
             OnDeactivate(EventArgs.Empty);
-            if(simpleActions.Visible || ClientSize.Height-tasks.Bottom!=SimpleEdge || tasks.Bounds!=taskArea || tasks.TopNode!=topNode || tasks.PointToScreen(row.Bounds.Location)!=rowPoint)throw new Exception("Unselected mode moved a task or retained its footer");
+            if(simpleActions.Visible || ClientSize.Height-taskSurface.Bottom!=SimpleEdge || taskSurface.Bounds!=taskArea || tasks.TopNode!=topNode || taskSurface.PointToScreen(taskSurface.NodeBounds(row).Location)!=rowPoint)throw new Exception("Unselected mode moved a task or retained its footer");
             OnActivated(EventArgs.Empty);
-            if(!restoreSimple.Visible || tasks.Bounds!=taskArea || tasks.TopNode!=topNode || tasks.PointToScreen(row.Bounds.Location)!=rowPoint || simpleSize!=stableSize)throw new Exception("Activating simple mode moved a task or changed saved dimensions");
+            if(!restoreSimple.Visible || taskSurface.Bounds!=taskArea || tasks.TopNode!=topNode || taskSurface.PointToScreen(taskSurface.NodeBounds(row).Location)!=rowPoint || simpleSize!=stableSize)throw new Exception("Activating simple mode moved a task or changed saved dimensions");
         }
         WindowState=FormWindowState.Minimized;RestoreWindow();ShowSimpleModeRestore();
-        if(simpleSize!=stableSize || tasks.Bounds!=taskArea)throw new Exception("Minimize/tray restore changed the saved size or viewport");
+        if(simpleSize!=stableSize || taskSurface.Bounds!=taskArea)throw new Exception("Minimize/tray restore changed the saved size or viewport");
         minimizeSimple.PerformClick();
         if(Visible || !simpleMode || ShowInTaskbar)throw new Exception("Simple minimize button did not hide to the notification area");
         typeof(NotifyIcon).GetMethod("OnDoubleClick",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(tray,new object[]{EventArgs.Empty});
@@ -322,9 +322,9 @@ internal sealed partial class FloatingWindow {
             owner.Nodes.Add(child);owner.Expand();tasks.SelectedNode=owner;UpdateSimpleActionState();
             if(!owner.IsExpanded || simpleActions.Controls.Count!=2)throw new Exception("Actual subtasks must remain expandable without changing simple-mode buttons");
             tasks.SelectedNode=child;UpdateSimpleActionState();
-            var viewport=tasks.Bounds;var savedSize=simpleSize;
+            var viewport=taskSurface.Bounds;var savedSize=simpleSize;
             HideSimpleModeActions();ShowSimpleModeRestore();
-            if(tasks.Bounds!=viewport || simpleSize!=savedSize)throw new Exception("Conditional actions moved the viewport across focus changes");
+            if(taskSurface.Bounds!=viewport || simpleSize!=savedSize)throw new Exception("Conditional actions moved the viewport across focus changes");
             if(!simpleActions.Controls.Cast<Control>().Where(control=>control.Visible).SequenceEqual(new Control[]{restoreSimple,minimizeSimple}) || restoreSimple.Left<0 || minimizeSimple.Right+minimizeSimple.Margin.Right>simpleActions.ClientSize.Width || Math.Max(restoreSimple.Bottom+restoreSimple.Margin.Bottom,minimizeSimple.Bottom+minimizeSimple.Margin.Bottom)>simpleActions.ClientSize.Height)throw new Exception("Simple footer is clipped or contains another action");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-simple-outstanding-actions-test.png"));}
             SetBusy(true);if(!restoreSimple.Enabled || !minimizeSimple.Enabled || simpleActions.Controls.Count!=2)throw new Exception("Busy state disabled a simple-mode window action");
