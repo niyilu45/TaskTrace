@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {groupProgressTasks, latestProgressDate, recentProgressTaskIds, visibleProgressRows, type ProgressTask} from './projectProgress'
+import {groupProgressTasks, latestProgressDate, progressTaskPeople, recentProgressTaskIds, visibleProgressRows, type ProgressTask} from './projectProgress'
 const task = (id: number, parents: number[] = []): ProgressTask => ({id, title: String(id), related_tasks: {parenttask: parents.map(id => ({id}))}})
 describe('project progress grouping', () => {
  it('keeps descendants together, including completed children', () => {
@@ -36,6 +36,32 @@ describe('overview hierarchy visibility', () => {
 	it('combines recent progress matches with status and search filters', () => {
 		expect(visibleProgressRows(rows, 'pending', '5', new Set(), new Set([3, 5])).map(row => row.task.id)).toEqual([1, 4, 5])
 		expect(visibleProgressRows(rows, 'done', '', new Set(), new Set([3, 5]))).toEqual([])
+	})
+})
+
+describe('project progress people', () => {
+	it('uses creator and assignees for personal tasks without duplicates', () => {
+		const item = {...task(1), created_by: {username: 'Alice'}, assignees: [{username: 'alice'}, {username: 'Bob'}]}
+		expect(progressTaskPeople(item)).toEqual(['Alice', 'Bob'])
+	})
+	it('uses the original owner and remote assignees for collaborative tasks', () => {
+		const item = {...task(1), created_by: {username: 'local-importer'}, assignees: [{username: 'local-importer'}]}
+		const binding = {
+			owner: 'Owner',
+			permission_targets: [{
+				kind: 'task' as const,
+				task_id: 1,
+				permissions: [
+					{username: 'Owner', owner: true},
+					{username: 'Assignee', assignee: true},
+					{username: 'Reader', read: true},
+				],
+			}],
+		}
+		expect(progressTaskPeople(item, binding)).toEqual(['Owner', 'Assignee'])
+	})
+	it('attributes legacy tasks without people metadata to the current user', () => {
+		expect(progressTaskPeople(task(1), undefined, 'CurrentUser')).toEqual(['CurrentUser'])
 	})
 })
 

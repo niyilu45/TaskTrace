@@ -1,6 +1,35 @@
-import type {Task} from '@/client/generated'
+import type {Task, TaskTraceTeamBindingStatus} from '@/client/generated'
 export type ProgressTask = Task & {id: number}
 export type ProgressRow = {task: ProgressTask, depth: number}
+
+function addProgressPerson(result: Map<string, string>, username?: string) {
+	const value = username?.trim()
+	if (!value) return
+	const key = value.toLocaleLowerCase()
+	if (!result.has(key)) result.set(key, value)
+}
+
+// Team bindings keep the original owner and remote assignees. The local task's
+// created_by field may instead be the account that imported the shared task.
+export function progressTaskPeople(
+	task: ProgressTask,
+	binding?: Pick<TaskTraceTeamBindingStatus, 'owner' | 'permission_targets'>,
+	currentUsername = '',
+) {
+	const people = new Map<string, string>()
+	if (binding) {
+		addProgressPerson(people, binding.owner)
+		const target = binding.permission_targets?.find(item => item.kind === 'task' && item.task_id === task.id)
+		for (const permission of target?.permissions ?? []) {
+			if (permission.owner || permission.assignee) addProgressPerson(people, permission.username)
+		}
+	} else {
+		addProgressPerson(people, task.created_by?.username)
+		for (const assignee of task.assignees ?? []) addProgressPerson(people, assignee.username)
+	}
+	if (people.size === 0) addProgressPerson(people, currentUsername)
+	return [...people.values()]
+}
 export function groupProgressTasks(tasks: ProgressTask[]) {
 	const byId = new Map(tasks.map(task => [task.id, task]))
 	const children = new Map<number, ProgressTask[]>()

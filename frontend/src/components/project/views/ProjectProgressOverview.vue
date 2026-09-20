@@ -20,6 +20,77 @@
 				v-model="scope"
 				class="input"
 			><option value="all">全部事项</option><option value="pending">未完成</option><option value="done">已完成</option></select></label>
+			<div
+				ref="peopleFilter"
+				class="people-filter"
+			>
+				<span class="people-filter__label">人员</span>
+				<button
+					type="button"
+					class="input people-filter__trigger"
+					:aria-expanded="peopleMenuOpen"
+					aria-haspopup="true"
+					:aria-label="`按所属人或受理人筛选，${peopleFilterLabel}`"
+					@click="peopleMenuOpen = !peopleMenuOpen"
+				>
+					<span>{{ peopleFilterLabel }}</span>
+					<Icon
+						icon="chevron-down"
+						:class="{'is-expanded': peopleMenuOpen}"
+					/>
+				</button>
+				<div
+					v-if="peopleMenuOpen"
+					class="people-filter__menu"
+					role="group"
+					aria-label="选择人员，可多选"
+				>
+					<div class="people-filter__actions">
+						<button
+							type="button"
+							:disabled="!currentPersonKey"
+							@click="selectOnlyCurrentPerson"
+						>
+							只看自己
+						</button>
+						<button
+							type="button"
+							:disabled="!peopleOptions.length"
+							@click="selectAllPeople"
+						>
+							全部人员
+						</button>
+					</div>
+					<label
+						v-for="person in peopleOptions"
+						:key="person.key"
+						class="people-filter__option"
+					>
+						<input
+							type="checkbox"
+							:checked="selectedPersonKeys.includes(person.key)"
+							@change="togglePerson(person.key)"
+						>
+						<img
+							v-if="person.avatar"
+							:src="person.avatar"
+							alt=""
+						>
+						<span
+							v-else
+							class="people-filter__avatar"
+						>{{ person.initials }}</span>
+						<span class="people-filter__name">
+							<strong>{{ person.name }}</strong>
+							<small v-if="person.name !== person.username">{{ person.username }}</small>
+						</span>
+						<small v-if="person.key === currentPersonKey">自己</small>
+					</label>
+					<p v-if="!peopleOptions.length">
+						暂无可筛选人员
+					</p>
+				</div>
+			</div>
 			<label>最近进展 <select
 				v-model="activityRange"
 				class="input"
@@ -113,6 +184,12 @@
 			class="browse-hint"
 		>
 			仅显示最近 {{ recentProgressDays }} 个自然日内填写过每日进展的事项，并保留其父任务作为层级上下文；未命中的同级任务不会显示。
+		</p>
+		<p
+			v-if="personFilterActive"
+			class="browse-hint"
+		>
+			仅显示所属人或受理人包含所选人员的事项，并保留其父任务作为层级上下文；未命中的同级任务不会显示。
 		</p>
 		<p
 			:id="`progress-range-hint-${projectId}`"
@@ -255,8 +332,8 @@
 import {ref, computed, watch, onBeforeUnmount, nextTick} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {projectTasksList, taskCommentsList, type TaskComment} from '@/client/generated'
-import {useElementSize, useStorage} from '@vueuse/core'
-import {visibleProgressRows, groupProgressTasks, latestProgressDate, queueProgressRead, recentProgressTaskIds, type ProgressTask} from '@/helpers/projectProgress'
+import {onClickOutside, useElementSize, useStorage} from '@vueuse/core'
+import {visibleProgressRows, groupProgressTasks, latestProgressDate, progressTaskPeople, queueProgressRead, recentProgressTaskIds, type ProgressTask} from '@/helpers/projectProgress'
 import {sortProgressNotes} from '@/helpers/progressNotes'
 import ProjectProgressRow from './ProjectProgressRow.vue'
 import ProjectProgressTable from './ProjectProgressTable.vue'
@@ -265,10 +342,13 @@ import {taskStatusLabel} from '@/types/ITaskStatus'
 import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import {useAuthStore} from '@/stores/auth'
+import Icon from '@/components/misc/Icon'
 const props = defineProps<{projectId: number}>()
 const route = useRoute()
 const router = useRouter()
 const teamStore = useTasktraceTeamStore()
+const authStore = useAuthStore()
 const overview = ref<HTMLElement>()
 const {width: overviewWidth} = useElementSize(overview)
 const customWidths = ref<number[] | null>(null)
@@ -361,12 +441,84 @@ let requestId = 0
 let progressActivityRequestId = 0
 const recentProgressDays = computed(() => activityRange.value === 'all' ? 0 : activityRange.value === 'custom' ? customActivityDays.value : Number(activityRange.value))
 const recentProgressMatches = computed(() => recentProgressDays.value === 0 ? null : progressActivityReady.value ? recentProgressTaskIds(latestProgressDates.value, recentProgressDays.value) : new Set<number>())
+const peopleFilter = ref<HTMLElement>()
+const peopleMenuOpen = ref(false)
+const selectedPersonKeys = ref<string[]>([])
+const personSelectionDirty = ref(false)
+const currentUsername = computed(() => teamStore.status.username?.trim() || authStore.info?.username?.trim() || '')
+const currentPersonKey = computed(() => currentUsername.value.toLocaleLowerCase())
+const peopleOptions = computed(() => {
+	const people = new Map<string, {key: string, username: string, name: string, avatar: string, initials: string}>()
+	const names = new Map<string, string>()
+	for (const task of tasks.value) {
+		for (const user of [task.created_by, ...(task.assignees ?? [])]) {
+			const username = user?.username?.trim()
+			if (username) names.set(username.toLocaleLowerCase(), user?.name?.trim() || username)
+		}
+	}
+	const add = (username: string) => {
+		const value = username.trim()
+		if (!value) return
+		const key = value.toLocaleLowerCase()
+		if (people.has(key)) return
+		const avatar = teamStore.status.profiles?.find(profile => profile.username?.toLocaleLowerCase() === key)?.avatar || ''
+		people.set(key, {key, username: value, name: names.get(key) || value, avatar, initials: value.slice(0, 2).toLocaleUpperCase() || '?'})
+	}
+	add(currentUsername.value)
+	for (const task of tasks.value) {
+		for (const username of progressTaskPeople(task, teamStore.bindingForTask(task.id), currentUsername.value)) add(username)
+	}
+	return [...people.values()].sort((left, right) => {
+		if (left.key === currentPersonKey.value) return -1
+		if (right.key === currentPersonKey.value) return 1
+		return left.name.localeCompare(right.name, 'zh-CN')
+	})
+})
+const allPersonKeys = computed(() => peopleOptions.value.map(person => person.key))
+const personFilterActive = computed(() => {
+	if (!allPersonKeys.value.length) return false
+	const selected = new Set(selectedPersonKeys.value)
+	return selected.size !== allPersonKeys.value.length || allPersonKeys.value.some(key => !selected.has(key))
+})
+const peopleFilterLabel = computed(() => {
+	const selected = peopleOptions.value.filter(person => selectedPersonKeys.value.includes(person.key))
+	if (!selected.length) return '未选择人员'
+	if (selected.length === peopleOptions.value.length && selected.length > 1) return `全部 ${selected.length} 人`
+	if (selected.length === 1) return selected[0].key === currentPersonKey.value ? '我自己' : selected[0].name
+	return `已选 ${selected.length} 人`
+})
+const personMatches = computed<ReadonlySet<number> | null>(() => {
+	if (!personFilterActive.value) return null
+	const selected = new Set(selectedPersonKeys.value)
+	return new Set(tasks.value.filter(task => progressTaskPeople(task, teamStore.bindingForTask(task.id), currentUsername.value)
+		.some(username => selected.has(username.toLocaleLowerCase()))).map(task => task.id))
+})
+const eligibleTaskIds = computed<ReadonlySet<number> | null>(() => {
+	const filters = [recentProgressMatches.value, personMatches.value].filter((value): value is ReadonlySet<number> => value !== null)
+	if (!filters.length) return null
+	return new Set(tasks.value.map(task => task.id).filter(id => filters.every(filter => filter.has(id))))
+})
+function togglePerson(key: string) {
+	personSelectionDirty.value = true
+	selectedPersonKeys.value = selectedPersonKeys.value.includes(key)
+		? selectedPersonKeys.value.filter(value => value !== key)
+		: [...selectedPersonKeys.value, key]
+}
+function selectOnlyCurrentPerson() {
+	personSelectionDirty.value = true
+	selectedPersonKeys.value = currentPersonKey.value ? [currentPersonKey.value] : []
+}
+function selectAllPeople() {
+	personSelectionDirty.value = true
+	selectedPersonKeys.value = allPersonKeys.value
+}
+onClickOutside(peopleFilter, () => { peopleMenuOpen.value = false })
 const completed = computed(() => tasks.value.filter(task => task.done).length)
 const grouped = computed(() => groupProgressTasks(tasks.value))
 const collapsed = useStorage<number[]>('tasktrace:overview-collapsed', [])
 const collapsedIds = computed(() => new Set(collapsed.value))
 const searchExpanded = ref(new Set<number>())
-const hierarchyFilterActive = computed(() => !!search.value.trim() || scope.value !== 'all' || recentProgressDays.value > 0)
+const hierarchyFilterActive = computed(() => !!search.value.trim() || scope.value !== 'all' || recentProgressDays.value > 0 || personFilterActive.value)
 function isExpanded(id: number) {
 	return hierarchyFilterActive.value ? !searchExpanded.value.has(id) : !collapsedIds.value.has(id)
 }
@@ -380,14 +532,14 @@ function toggle(id: number) {
 	collapsed.value = collapsedIds.value.has(id) ? collapsed.value.filter(value => value !== id) : [...collapsed.value, id]
 }
 const groups = computed(() => grouped.value.map(group => {
-	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set(), recentProgressMatches.value)
+	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set(), eligibleTaskIds.value)
 	const visible = visibleProgressRows(matching, 'all', '', hierarchyFilterActive.value ? searchExpanded.value : collapsedIds.value)
 	return {...group, matching, visibleRows: visible.filter(row => row.depth > 0)}
 }).filter(group => group.matching.length))
 const parents = computed(() => new Set(groups.value.flatMap(group => group.matching.filter((row, i, rows) => rows[i + 1]?.depth > row.depth).map(row => row.task.id))))
-watch([search, scope, recentProgressDays], () => { searchExpanded.value = new Set() })
+watch([search, scope, recentProgressDays, selectedPersonKeys], () => { searchExpanded.value = new Set() })
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
-watch([search, scope, recentProgressDays], () => { page.value = 1 })
+watch([search, scope, recentProgressDays, selectedPersonKeys], () => { page.value = 1 })
 
 async function loadProgressActivity(sourceTasks = tasks.value) {
 	if (recentProgressDays.value <= 0) return
@@ -494,7 +646,15 @@ watch(() => route.name, async name => {
 	await nextTick()
 	requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
 })
-watch(() => props.projectId, () => load(), {immediate: true})
+watch(() => props.projectId, () => {
+	personSelectionDirty.value = false
+	selectedPersonKeys.value = currentPersonKey.value ? [currentPersonKey.value] : []
+	peopleMenuOpen.value = false
+	void load()
+}, {immediate: true})
+watch(currentPersonKey, (value, previous) => {
+	if (!personSelectionDirty.value && value !== previous) selectedPersonKeys.value = value ? [value] : []
+})
 onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
 </script>
 
@@ -550,6 +710,118 @@ onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
 	}
 .progress-toolbar .progress-days-input {
  inline-size: 6rem;
+}
+.people-filter {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: .5rem;
+	font-size: .875rem;
+}
+.people-filter__trigger {
+	display: inline-flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: .65rem;
+	min-inline-size: 8rem;
+	min-block-size: 2.25rem;
+	padding: .35rem .65rem;
+	border: 1px solid var(--grey-300);
+	border-radius: .25rem;
+	background: var(--white);
+	color: var(--text);
+	cursor: pointer;
+	.icon {
+		font-size: .7rem;
+		transition: transform $transition;
+		&.is-expanded { transform: rotate(180deg); }
+	}
+	&:focus-visible {
+		outline: 2px solid var(--primary);
+		outline-offset: 2px;
+	}
+}
+.people-filter__menu {
+	position: absolute;
+	z-index: 30;
+	inset-block-start: calc(100% + .35rem);
+	inset-inline-end: 0;
+	inline-size: min(20rem, calc(100vw - 2rem));
+	max-block-size: 22rem;
+	overflow-y: auto;
+	padding: .45rem;
+	border: 1px solid var(--grey-200);
+	border-radius: .5rem;
+	background: var(--white);
+	box-shadow: 0 12px 30px rgb(17 24 39 / 18%);
+	> p {
+		margin: .5rem;
+		color: var(--grey-600);
+	}
+}
+.people-filter__actions {
+	display: flex;
+	justify-content: space-between;
+	gap: .5rem;
+	padding: .15rem .25rem .45rem;
+	border-block-end: 1px solid var(--grey-200);
+	button {
+		padding: .25rem;
+		border: 0;
+		background: transparent;
+		color: var(--primary);
+		cursor: pointer;
+		font: inherit;
+		font-size: .8rem;
+		&:disabled {
+			color: var(--grey-400);
+			cursor: default;
+		}
+	}
+}
+.people-filter__option {
+	display: flex;
+	align-items: center;
+	gap: .55rem;
+	min-block-size: 2.6rem;
+	padding: .35rem .4rem;
+	border-radius: .35rem;
+	cursor: pointer;
+	&:hover { background: var(--grey-100); }
+	input { flex: 0 0 auto; }
+	img,
+	.people-filter__avatar {
+		inline-size: 1.65rem;
+		block-size: 1.65rem;
+		border-radius: 50%;
+		flex: 0 0 auto;
+	}
+	img { object-fit: cover; }
+	.people-filter__avatar {
+		display: inline-grid;
+		place-items: center;
+		background: var(--primary);
+		color: var(--white);
+		font-size: .65rem;
+		font-weight: 700;
+	}
+	> small {
+		margin-inline-start: auto;
+		color: var(--grey-500);
+	}
+}
+.people-filter__name {
+	display: flex;
+	min-inline-size: 0;
+	flex: 1;
+	flex-direction: column;
+	strong,
+	small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	small { color: var(--grey-500); }
 }
 .browse-hint {
 	color: var(--grey-600);
