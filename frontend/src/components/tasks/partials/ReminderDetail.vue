@@ -10,7 +10,7 @@
 			<template #trigger="{toggle}">
 				<SimpleButton
 					ref="trigger"
-					v-tooltip="reminder.reminder && reminder.relativeTo !== null ? formatDisplayDate(reminder.reminder) : null"
+					v-tooltip="reminder.reminder ? reminderText : null"
 					@click.prevent.stop="toggle()"
 				>
 					{{ reminderText }}
@@ -90,7 +90,7 @@ import {useIsMobile} from '@/composables/useIsMobile'
 
 import {type PeriodUnit, secondsToPeriod} from '@/helpers/time/period'
 import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
-import {formatDisplayDate} from '@/helpers/time/formatDate'
+import {formatDate} from '@/helpers/time/formatDate'
 
 import DatepickerInline from '@/components/input/DatepickerInline.vue'
 import ReminderPeriod from '@/components/tasks/partials/ReminderPeriod.vue'
@@ -152,12 +152,14 @@ const lockedRelativeTo = computed(() => {
 })
 
 const reminderText = computed(() => {
-	if (reminder.value.relativeTo !== null) {
-		return formatReminder(reminder.value)
+	if (reminder.value.reminder !== null) {
+		return t('task.reminder.scheduledAt', {
+			date: formatDate(reminder.value.reminder, 'YYYY-MM-DD HH:mm'),
+		})
 	}
 
-	if (reminder.value.reminder !== null) {
-		return formatDisplayDate(reminder.value.reminder)
+	if (reminder.value.relativeTo !== null) {
+		return formatReminder(reminder.value)
 	}
 
 	return t('task.addReminder')

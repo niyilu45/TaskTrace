@@ -1303,7 +1303,8 @@
       "onStartDate": "On the start date",
       "onEndDate": "On the end date",
       "custom": "Custom",
-      "dateAndTime": "Date and time"
+      "dateAndTime": "Date and time",
+      "scheduledAt": "Reminder at {date}"
     },
     "repeat": {
       "everyDay": "Every Day",

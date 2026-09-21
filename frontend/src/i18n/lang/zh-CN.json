@@ -913,7 +913,8 @@
 			"onStartDate": "开始日期",
 			"onEndDate": "结束日期",
 			"custom": "自定义",
-			"dateAndTime": "日期与时间"
+			"dateAndTime": "日期与时间",
+			"scheduledAt": "将在 {date} 提醒"
 		},
 		"repeat": {
 			"everyDay": "每天",

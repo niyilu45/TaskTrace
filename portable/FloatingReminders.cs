@@ -29,8 +29,10 @@ internal sealed partial class FloatingWindow {
 
     readonly Timer reminderTimer=new Timer{Interval=15000};
     readonly Dictionary<string,ReminderTarget> reminderTargets=new Dictionary<string,ReminderTarget>();
+    readonly System.Threading.SemaphoreSlim reminderMutationGate=new System.Threading.SemaphoreSlim(1,1);
     ReminderState reminderState;
     Form reminderPopup;
+    bool dismissedReminderCleanupRunning;
 
     string ReminderStatePath {get{return Path.Combine(data,"floating-reminder-state.json");}}
     static bool TryReminderTime(object value,out DateTimeOffset due) {
@@ -63,6 +65,10 @@ internal sealed partial class FloatingWindow {
     }
     static bool SameReminderTime(string value,DateTimeOffset target) {
         DateTimeOffset parsed;return TryReminderTime(value,out parsed)&&Math.Abs((parsed.ToUniversalTime()-target.ToUniversalTime()).TotalSeconds)<1;
+    }
+    static bool SameReminderValue(string left,string right) {
+        if(String.IsNullOrWhiteSpace(left)||String.IsNullOrWhiteSpace(right))return String.IsNullOrWhiteSpace(left)&&String.IsNullOrWhiteSpace(right);
+        DateTimeOffset target;return TryReminderTime(right,out target)&&SameReminderTime(left,target);
     }
     static Dictionary<string,object> AbsoluteReminder(DateTime local) {
         return new Dictionary<string,object>{{"reminder",ReminderStamp(new DateTimeOffset(local))},{"relative_period",0},{"relative_to",""}};
@@ -97,7 +103,23 @@ internal sealed partial class FloatingWindow {
             next[key]=new ReminderTarget{Key=key,TaskId=pair.Key,Kind="任务",Title=Convert.ToString(pair.Value["title"]),Due=due};
         }
         reminderTargets.Clear();foreach(var pair in next)reminderTargets[pair.Key]=pair.Value;
+        CleanupDismissedReminderTargets();
         CheckDueReminders();
+    }
+    async void CleanupDismissedReminderTargets() {
+        if(dismissedReminderCleanupRunning||closing||reminderState==null)return;
+        var pending=reminderTargets.Values.Where(target=>reminderState.Dismissed.ContainsKey(target.Key)).ToList();
+        if(pending.Count==0)return;
+        dismissedReminderCleanupRunning=true;bool changed=false;
+        try {
+            foreach(var target in pending) {
+                try {
+                    await DeleteReminderTarget(target);
+                    reminderState.Dismissed.Remove(target.Key);reminderState.SnoozedUntil.Remove(target.Key);changed=true;
+                } catch { }
+            }
+            if(changed){SaveReminderState();try{await LoadTasks();}catch { }}
+        } finally {dismissedReminderCleanupRunning=false;}
     }
     void CheckDueReminders() {
         if(closing||IsDisposed||reminderPopup!=null||reminderTargets.Count==0)return;
@@ -119,14 +141,114 @@ internal sealed partial class FloatingWindow {
         var message=new Label{Text=target.Kind+"提醒\r\n"+target.Title+"\r\n提醒时间："+target.Due.LocalDateTime.ToString("yyyy-MM-dd HH:mm"),Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft};
         var minutes=new NumericUpDown{Minimum=1,Maximum=10080,Value=15,Dock=DockStyle.Left,Width=110};
         var delayRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight};delayRow.Controls.Add(new Label{Text="延迟分钟数",AutoSize=true,Margin=new Padding(0,7,8,0)});delayRow.Controls.Add(minutes);
-        var hint=new Label{Text="关闭后不再显示本次提醒；延迟后会按上面的分钟数再次提醒。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
+        var hint=new Label{Text="关闭会从任务和网页界面删除本次提醒；延迟后会按上面的分钟数再次提醒。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
         var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var close=new Button{Text="关闭",Width=88,Height=30};var delay=new Button{Text="延迟",Width=88,Height=30};actions.Controls.Add(close);actions.Controls.Add(delay);
         layout.Controls.Add(message);layout.Controls.Add(delayRow);layout.Controls.Add(hint);layout.Controls.Add(actions);dialog.Controls.Add(layout);
-        bool handled=false;
-        close.Click+=delegate {handled=true;reminderState.Dismissed[target.Key]=DateTimeOffset.UtcNow.ToString("o");reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();dialog.Close();};
+        bool handled=false,removing=false;
+        close.Click+=async delegate {
+            if(removing)return;
+            removing=true;close.Enabled=false;delay.Enabled=false;minutes.Enabled=false;hint.ForeColor=Color.DimGray;hint.Text="正在删除本次提醒…";
+            try {
+                await DeleteReminderTarget(target);
+                handled=true;reminderState.Dismissed.Remove(target.Key);reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();
+                try {await LoadTasks();}catch { }
+                dialog.Close();
+            } catch(Exception error) {
+                hint.ForeColor=Color.Firebrick;hint.Text="提醒删除失败："+error.Message+" 请保持窗口打开后重试。";
+                removing=false;close.Enabled=true;delay.Enabled=true;minutes.Enabled=true;
+            }
+        };
         delay.Click+=delegate {handled=true;reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes((double)minutes.Value).ToString("o");SaveReminderState();dialog.Close();};
-        dialog.FormClosing+=delegate {if(!handled){reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes(15).ToString("o");SaveReminderState();}};
+        dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e) {if(removing){e.Cancel=true;return;}if(!handled){reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes(15).ToString("o");SaveReminderState();}};
         dialog.FormClosed+=delegate {reminderPopup=null;dialog.Dispose();BeginInvoke(new Action(CheckDueReminders));};dialog.Show();dialog.Activate();
+    }
+
+    async Task PatchTaskReminders(long taskId,List<Dictionary<string,object>> values) {
+        Exception failure=null;
+        for(int attempt=0;attempt<3;attempt++) {
+            try {await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",values}});return;}
+            catch(Exception error) {failure=error;}
+            if(attempt<2)await Task.Delay(150*(attempt+1));
+        }
+        throw failure??new Exception("提醒保存失败，请重试。");
+    }
+
+    async Task SaveOutstandingReminderCore(long taskId,string itemId,string reminderAt) {
+        var task=await Api("GET","/tasks/"+taskId,null);
+        var shared=ReadShared(await ReadHistory(taskId));
+        var outstanding=shared.Items.FirstOrDefault(item=>item.Id==itemId);
+        if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");
+        string oldValue=outstanding.ReminderAt;
+        DateTimeOffset oldDue=DateTimeOffset.MinValue,newDue=DateTimeOffset.MinValue;
+        bool hadOld=TryReminderTime(oldValue,out oldDue),hasNew=TryReminderTime(reminderAt,out newDue);
+        string desiredValue=hasNew?ReminderStamp(newDue):null;
+        outstanding.ReminderAt=desiredValue;
+        Exception writeFailure=null;
+        for(int attempt=0;attempt<3;attempt++) {
+            writeFailure=null;
+            try {await WriteShared(taskId,shared);}
+            catch(Exception error) {writeFailure=error;}
+            if(writeFailure==null)break;
+            // A request can reach the server even when its response is interrupted. Re-read before
+            // retrying so a successful POST is not duplicated and unrelated list edits are retained.
+            shared=ReadShared(await ReadHistory(taskId));
+            outstanding=shared.Items.FirstOrDefault(item=>item.Id==itemId);
+            if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");
+            if(SameReminderValue(outstanding.ReminderAt,desiredValue)){writeFailure=null;break;}
+            outstanding.ReminderAt=desiredValue;
+            if(attempt<2)await Task.Delay(150*(attempt+1));
+        }
+        if(writeFailure!=null)throw writeFailure;
+        Exception syncFailure=null;
+        try {
+            var taskValues=TaskReminderValues(task);
+            if(hadOld&&!shared.Items.Any(item=>item.Id!=itemId&&SameReminderTime(item.ReminderAt,oldDue))) {
+                int match=taskValues.FindIndex(value=>SameReminderTime(value,oldDue));
+                if(match>=0)taskValues.RemoveAt(match);
+            }
+            if(hasNew&&!taskValues.Any(value=>SameReminderTime(value,newDue)))taskValues.Add(AbsoluteReminder(newDue.LocalDateTime));
+            await PatchTaskReminders(taskId,taskValues);
+        } catch(Exception error) {syncFailure=error;}
+        if(syncFailure!=null) {
+            // Restore only the field changed by this operation, using the newest shared list so
+            // unrelated outstanding edits made while the request was in flight are preserved.
+            SharedList rollback=null;
+            try {
+                rollback=ReadShared(await ReadHistory(taskId));
+                var current=rollback.Items.FirstOrDefault(item=>item.Id==itemId);
+                if(current!=null) {
+                    current.ReminderAt=oldValue;
+                    await WriteShared(taskId,rollback);
+                }
+            } catch { }
+            throw syncFailure;
+        }
+    }
+
+    async Task SaveOutstandingReminder(long taskId,string itemId,string reminderAt) {
+        await reminderMutationGate.WaitAsync();
+        try {await SaveOutstandingReminderCore(taskId,itemId,reminderAt);}
+        finally {reminderMutationGate.Release();}
+    }
+
+    async Task DeleteReminderTarget(ReminderTarget target) {
+        await reminderMutationGate.WaitAsync();
+        try {
+            if(!String.IsNullOrWhiteSpace(target.ItemId)) {
+                var shared=ReadShared(await ReadHistory(target.TaskId));
+                var item=shared.Items.FirstOrDefault(value=>value.Id==target.ItemId);
+                // A newer reminder replaced the one shown in this popup. Do not delete it.
+                if(item==null||!SameReminderTime(item.ReminderAt,target.Due))return;
+                await SaveOutstandingReminderCore(target.TaskId,target.ItemId,null);
+                return;
+            }
+            var task=await Api("GET","/tasks/"+target.TaskId,null);
+            var values=TaskReminderValues(task);
+            int index=values.FindIndex(value=>SameReminderTime(value,target.Due));
+            if(index<0)return;
+            values.RemoveAt(index);
+            await PatchTaskReminders(target.TaskId,values);
+        } finally {reminderMutationGate.Release();}
     }
 
     async void ShowReminderForSelected() {
@@ -169,18 +291,12 @@ internal sealed partial class FloatingWindow {
             commit.Click+=async delegate {
                 if(writing)return;writing=true;commit.Enabled=false;editActions.Enabled=false;feedback.Text="正在同步提醒…";
                 try {
-                    if(itemId==null)await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",values}});
-                    else {
-                        string oldValue=outstanding.ReminderAt;DateTimeOffset oldDue=DateTimeOffset.MinValue,newDue=DateTimeOffset.MinValue;bool hadOld=TryReminderTime(oldValue,out oldDue);bool hasNew=values.Count>0&&TryReminderTime(values[0]["reminder"],out newDue);
-                        outstanding.ReminderAt=hasNew?ReminderStamp(newDue):null;await WriteShared(taskId,shared);
-                        Exception syncFailure=null;
-                        try {
-                            var taskValues=TaskReminderValues(task);
-                            if(hadOld&&!shared.Items.Any(item=>item.Id!=itemId&&SameReminderTime(item.ReminderAt,oldDue))) {var match=taskValues.FindIndex(value=>SameReminderTime(value,oldDue));if(match>=0)taskValues.RemoveAt(match);}
-                            if(hasNew&&!taskValues.Any(value=>SameReminderTime(value,newDue)))taskValues.Add(AbsoluteReminder(newDue.LocalDateTime));
-                            await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",taskValues}});
-                        } catch(Exception error){syncFailure=error;}
-                        if(syncFailure!=null){outstanding.ReminderAt=oldValue;await WriteShared(taskId,shared);throw syncFailure;}
+                    if(itemId==null) {
+                        await reminderMutationGate.WaitAsync();
+                        try {await PatchTaskReminders(taskId,values);}finally{reminderMutationGate.Release();}
+                    } else {
+                        DateTimeOffset newDue;string reminderAt=values.Count>0&&TryReminderTime(values[0]["reminder"],out newDue)?ReminderStamp(newDue):null;
+                        await SaveOutstandingReminder(taskId,itemId,reminderAt);
                     }
                     saved=true;dialog.Close();
                 } catch(Exception error){feedback.Text="提醒未保存："+error.Message;}
