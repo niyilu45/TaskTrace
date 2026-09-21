@@ -286,6 +286,7 @@ import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
 import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
+import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
 type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, priority: number, original: string}
@@ -314,7 +315,7 @@ const completedItems = computed(() => numberedItems.value.filter(entry => entry.
 const draft = computed(() => {
 	const key = `${props.taskId}:${activeId.value}`
 	if (!drafts.has(key)) {
-		const fresh = {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
+		const fresh = {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: ''}
 		fresh.original = draftSignature(fresh)
 		drafts.set(key, fresh)
 	}
@@ -376,7 +377,7 @@ function cacheKey(id: string) { return id || 'new' }
 
 async function restoreDraft(id: string) {
 	const item = id ? items.value.find(candidate => candidate.id === id) : undefined
-	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
+	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: ''}
 	base.original = draftSignature(base)
 	try {
 		const cached = await readTaskTraceDraft<CachedDraft>('outstanding', props.taskId, cacheKey(id))
@@ -430,7 +431,7 @@ function recoverDraft() {
 		pending.note = [pending.note, recovered.note].filter(Boolean).join('<hr>')
 		pending.images.push(...recovered.images)
 	} else {
-		recovered.original = draftSignature({text: '', note: '', images: [], priority: 9})
+		recovered.original = draftSignature({text: '', note: '', images: [], priority: TASKTRACE_DEFAULT_PRIORITY})
 		drafts.set(newKey, recovered)
 	}
 	drafts.delete(key)

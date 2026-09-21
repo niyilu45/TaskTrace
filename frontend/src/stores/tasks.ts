@@ -39,6 +39,7 @@ import {TASK_REPEAT_MODES} from '@/types/IRepeatMode'
 import {taskLabelsCreate, taskLabelsDelete, tasksCreate} from '@/client/generated'
 import type {Label, Task as ApiTask} from '@/client/generated'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {tasktraceNewTaskStoredPriority} from '@/helpers/tasktracePriority'
 import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {
 	createLabelMutationOptions,
@@ -537,6 +538,7 @@ export const useTaskStore = defineStore('task', () => {
 					projectId,
 					bucketId,
 					position,
+					priority: tasktraceNewTaskStoredPriority(null, isLocalBuild),
 				}),
 				parsedLabels: [],
 			}
@@ -569,7 +571,7 @@ export const useTaskStore = defineStore('task', () => {
 			title: cleanedTitle,
 			projectId: foundProjectId,
 			dueDate,
-			priority: parsedTask.priority,
+			priority: tasktraceNewTaskStoredPriority(parsedTask.priority, isLocalBuild),
 			assignees,
 			bucketId: bucketId || 0,
 			position,

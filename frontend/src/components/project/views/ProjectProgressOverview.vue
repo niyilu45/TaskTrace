@@ -131,7 +131,7 @@
 			<XButton
 				variant="secondary"
 				:disabled="loading"
-				@click="load()"
+				@click="load({preserveView: true})"
 			>
 				刷新进展
 			</XButton>
@@ -212,7 +212,7 @@
 		>
 			{{ error }} <XButton
 				variant="secondary"
-				@click="load()"
+				@click="load({preserveView: true})"
 			>
 				重试
 			</XButton>
@@ -225,7 +225,7 @@
 			:key="`${revision}-${group.root.id}`"
 			class="progress-group"
 		>
-			<header>
+			<header :data-progress-anchor="`group-${group.root.id}`">
 				<button
 					type="button"
 					class="hierarchy-toggle"
@@ -268,6 +268,7 @@
 					>
 						<ProjectProgressRow
 							:task="group.root"
+							:anchor="false"
 							:descendants="group.matching.slice(1).map(row => row.task)"
 							:depth="0"
 							:progress-days="progressDays"
@@ -344,6 +345,7 @@ import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {useAuthStore} from '@/stores/auth'
 import Icon from '@/components/misc/Icon'
+import {captureTasktraceScrollAnchor, tasktraceScrollAnchorDelta, type TasktraceScrollAnchor} from '@/helpers/tasktraceScrollAnchor'
 const props = defineProps<{projectId: number}>()
 const route = useRoute()
 const router = useRouter()
@@ -595,7 +597,19 @@ function applyActivityDays() {
 	activityFilterError.value = ''
 	if (!progressActivityReady.value) void loadProgressActivity()
 }
-async function load(options: {preserveView?: boolean} = {}) {
+function captureViewAnchor() {
+	return captureTasktraceScrollAnchor(overview.value, window.scrollY, window.innerHeight)
+}
+async function restoreViewAnchor(anchor: TasktraceScrollAnchor | null) {
+	if (!anchor) return
+	await nextTick()
+	await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+	const delta = tasktraceScrollAnchorDelta(overview.value, anchor)
+	if (delta === null) window.scrollTo(0, anchor.scrollY)
+	else if (delta) window.scrollBy(0, delta)
+}
+async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null} = {}) {
+	const viewAnchor = options.preserveView ? options.anchor ?? captureViewAnchor() : null
 	const version = ++requestId
 	if (isLocalBuild) {
 		try { await teamStore.refresh() } catch { /* The task list remains usable while a LAN repository is offline. */ }
@@ -623,12 +637,17 @@ async function load(options: {preserveView?: boolean} = {}) {
 		latestProgressDates.value = {}
 		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value)
 	} catch { if (version === requestId) error.value = '项目读取失败，请重试。' }
-	finally { if (version === requestId) loading.value = false }
+	finally {
+		if (version === requestId) {
+			loading.value = false
+			await restoreViewAnchor(viewAnchor)
+		}
+	}
 }
 let modalOpenedHere = false
-let savedScrollY = 0
+let savedViewAnchor: TasktraceScrollAnchor | null = null
 function openTaskEditor(taskId: number) {
-	savedScrollY = window.scrollY
+	savedViewAnchor = captureViewAnchor()
 	modalOpenedHere = true
 	void router.push({
 		name: 'task.detail',
@@ -639,14 +658,12 @@ function openTaskEditor(taskId: number) {
 watch(() => route.name, async name => {
 	if (!modalOpenedHere) return
 	if (name === 'task.detail') {
-		await nextTick()
-		requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
+		await restoreViewAnchor(savedViewAnchor)
 		return
 	}
 	modalOpenedHere = false
-	await load({preserveView: true})
-	await nextTick()
-	requestAnimationFrame(() => window.scrollTo(0, savedScrollY))
+	await load({preserveView: true, anchor: savedViewAnchor})
+	savedViewAnchor = null
 })
 watch(() => props.projectId, () => {
 	personSelectionDirty.value = false

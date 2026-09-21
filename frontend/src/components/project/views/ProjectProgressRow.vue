@@ -3,6 +3,7 @@
 		ref="element"
 		class="progress-row"
 		:data-task-id="task.id"
+		:data-progress-anchor="anchor ? `task-${task.id}` : undefined"
 	>
 		<th
 			scope="row"
@@ -182,7 +183,14 @@ import {useAuthStore} from '@/stores/auth'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
-const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean}>()
+const props = withDefaults(defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean, anchor?: boolean}>(), {
+	hasChildren: false,
+	expanded: false,
+	descendants: () => [],
+	progressDays: 0,
+	showCollaboration: true,
+	anchor: true,
+})
 defineEmits<{toggle: [], edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const authStore = useAuthStore()

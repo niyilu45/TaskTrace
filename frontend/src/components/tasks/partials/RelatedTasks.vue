@@ -291,6 +291,7 @@ import {useI18n} from 'vue-i18n'
 import {useRoute} from 'vue-router'
 
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {TASKTRACE_DEFAULT_STORED_PRIORITY} from '@/helpers/tasktracePriority'
 import {useTasktraceUndoGuard, undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {patchTasksRead, tasksCreate, tasksRelationsCreate} from '@/client/generated'
 import TaskService from '@/services/task'
@@ -380,7 +381,10 @@ async function addSubtask() {
 		let child = pendingSubtask.value
 		if (!child) {
 			subtaskUndoGroup = isLocalBuild ? crypto.randomUUID() : ''
-			const result = await tasksCreate({path: {project: projectId}, body: {title: subtaskTitle.value.trim()}, headers: undoGroupHeaders(subtaskUndoGroup)})
+			const result = await tasksCreate({path: {project: projectId}, body: {
+				title: subtaskTitle.value.trim(),
+				priority: isLocalBuild ? TASKTRACE_DEFAULT_STORED_PRIORITY : undefined,
+			}, headers: undoGroupHeaders(subtaskUndoGroup)})
 			if (!result.data.id) throw new Error('Missing task ID')
 			child = new TaskModel({id: result.data.id, title: result.data.title, projectId})
 			if (props.taskId === parentId) pendingSubtask.value = child

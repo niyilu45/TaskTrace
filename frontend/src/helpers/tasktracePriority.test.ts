@@ -1,10 +1,19 @@
 import {describe, expect, it} from 'vitest'
-import {tasktracePriorityNumber, tasktraceStoredPriority} from './tasktracePriority'
+import {TASKTRACE_DEFAULT_PRIORITY, TASKTRACE_DEFAULT_STORED_PRIORITY, tasktraceNewTaskStoredPriority, tasktracePriorityNumber, tasktraceStoredPriority} from './tasktracePriority'
 
 describe('TaskTrace priority mapping', () => {
-	it('shows legacy unset and new default priority as 9', () => {
+	it('shows legacy unset and stored priority 1 as 9', () => {
 		expect(tasktracePriorityNumber(0)).toBe(9)
 		expect(tasktracePriorityNumber(1)).toBe(9)
+	})
+
+	it('uses priority 7 for newly created TaskTrace items', () => {
+		expect(TASKTRACE_DEFAULT_PRIORITY).toBe(7)
+		expect(TASKTRACE_DEFAULT_STORED_PRIORITY).toBe(3)
+		expect(tasktracePriorityNumber(TASKTRACE_DEFAULT_STORED_PRIORITY)).toBe(7)
+		expect(tasktraceNewTaskStoredPriority(null, true)).toBe(3)
+		expect(tasktraceNewTaskStoredPriority(null, false)).toBeUndefined()
+		expect(tasktraceNewTaskStoredPriority(5, true)).toBe(5)
 	})
 
 	it('preserves smaller-is-higher display order using the existing descending database order', () => {

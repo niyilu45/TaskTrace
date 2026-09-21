@@ -14,6 +14,8 @@ import ProjectList from '@/components/project/views/ProjectList.vue'
 import ProjectGantt from '@/components/project/views/ProjectGantt.vue'
 import ProjectTable from '@/components/project/views/ProjectTable.vue'
 import ProjectKanban from '@/components/project/views/ProjectKanban.vue'
+import TasktraceTeamImportButton from '@/components/project/TasktraceTeamImportButton.vue'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 
 import {DEFAULT_PROJECT_VIEW_SETTINGS} from '@/modelTypes/IProjectView'
 import {saveProjectToHistory} from '@/modules/projectHistory'
@@ -30,6 +32,7 @@ const authStore = useAuthStore()
 const route = useRoute()
 
 const editing = computed(() => props.projectId <= 0 || route.query.mode === 'edit')
+const editRevision = ref(0)
 function setEditing(value: boolean) { void router.replace({query: {...route.query, mode: value ? 'edit' : 'browse'}}) }
 const currentProject = computed(() => projectStore.projects[props.projectId])
 
@@ -142,13 +145,21 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 		class="project-mode-bar"
 	>
 		<div><strong>{{ editing ? '编辑模式' : '展示模式' }}</strong><span>{{ editing ? '完成修改后返回展示模式查看整体进展' : '浏览项目进展，展开查看，不会修改内容' }}</span></div>
-		<XButton
-			v-if="editing || (currentProject?.maxPermission > 0 && !currentProject?.isArchived)"
-			class="button is-primary"
-			@click="setEditing(!editing)"
-		>
-			{{ editing ? '返回展示模式' : '进入编辑模式' }}
-		</XButton>
+		<div class="project-mode-actions">
+			<TasktraceTeamImportButton
+				v-if="editing && isLocalBuild"
+				:project-id="projectId"
+				:project-name="currentProject?.title"
+				@imported="editRevision++"
+			/>
+			<XButton
+				v-if="editing || (currentProject?.maxPermission > 0 && !currentProject?.isArchived)"
+				class="button is-primary"
+				@click="setEditing(!editing)"
+			>
+				{{ editing ? '返回展示模式' : '进入编辑模式' }}
+			</XButton>
+		</div>
 	</div>
 	<ProjectProgressOverview
 		v-if="!editing && !isLoadingProject && loadedProjectId === projectId"
@@ -158,12 +169,14 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 	<template v-if="editing">
 		<ProjectList
 			v-if="currentView?.viewKind === 'list'"
+			:key="`${projectId}-${editRevision}`"
 			:project-id="projectId"
 			:is-loading-project="isLoadingProject"
 			:view-id
 		/>
 		<ProjectGantt
 			v-if="currentView?.viewKind === 'gantt'"
+			:key="`${projectId}-${editRevision}`"
 			:project-id="projectId"
 			:route
 			:is-loading-project="isLoadingProject"
@@ -171,12 +184,14 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 		/>
 		<ProjectTable
 			v-if="currentView?.viewKind === 'table'"
+			:key="`${projectId}-${editRevision}`"
 			:project-id="projectId"
 			:is-loading-project="isLoadingProject"
 			:view-id
 		/>
 		<ProjectKanban
 			v-if="currentView?.viewKind === 'kanban'"
+			:key="`${projectId}-${editRevision}`"
 			:project-id="projectId"
 			:is-loading-project="isLoadingProject"
 			:view-id
@@ -198,5 +213,11 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 	color: var(--grey-600);
 	margin-block-start: .2rem;
 	}
+}
+.project-mode-actions {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: .75rem;
 }
 </style>
