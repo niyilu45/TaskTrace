@@ -216,7 +216,19 @@ func TaskTraceTeamRemoveMemberAccess(s *xorm.Session, a web.Auth, accountName st
 		return nil, fmt.Errorf("无法删除 %s 的 teamData 权限：%w", accountName, err)
 	}
 	status, err := taskTraceTeamStatusLocked(s, a, state)
+	if err == nil {
+		taskTraceTeamRemoveMemberFromStatus(&status, accountName)
+	}
 	return &status, err
+}
+
+func taskTraceTeamRemoveMemberFromStatus(status *TaskTraceTeamStatus, accountName string) {
+	status.Repository.Candidates = slices.DeleteFunc(status.Repository.Candidates, func(member string) bool {
+		return taskTraceTeamMembersEqual(member, accountName)
+	})
+	status.UnassignedMembers = slices.DeleteFunc(status.UnassignedMembers, func(member string) bool {
+		return taskTraceTeamMembersEqual(member, accountName)
+	})
 }
 
 func taskTraceTeamImportMemberNames(members []string, current string, grant func(string) (string, error)) (added, skipped []string, failed []TaskTraceTeamMemberFailure) {

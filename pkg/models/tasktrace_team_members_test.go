@@ -49,3 +49,23 @@ func TestTaskTraceTeamUnassignedMembers(t *testing.T) {
 		t.Fatalf("unexpected unassigned members: got %#v want %#v", got, want)
 	}
 }
+
+func TestTaskTraceTeamRemoveMemberFromStatus(t *testing.T) {
+	status := TaskTraceTeamStatus{
+		Repository:        TaskTraceTeamRepositoryInfo{Candidates: []string{`OFFICE\Alice`, `OFFICE\Bob`}},
+		UnassignedMembers: []string{`OFFICE\Alice`, `OFFICE\Bob`},
+		Profiles:          []TaskTraceTeamMemberProfile{{Username: "Alice"}, {Username: "Bob"}},
+	}
+
+	taskTraceTeamRemoveMemberFromStatus(&status, "alice")
+
+	if !reflect.DeepEqual(status.Repository.Candidates, []string{`OFFICE\Bob`}) {
+		t.Fatalf("unexpected repository candidates: %#v", status.Repository.Candidates)
+	}
+	if !reflect.DeepEqual(status.UnassignedMembers, []string{`OFFICE\Bob`}) {
+		t.Fatalf("unexpected unassigned members: %#v", status.UnassignedMembers)
+	}
+	if len(status.Profiles) != 2 {
+		t.Fatalf("identity profiles should remain available for historical content: %#v", status.Profiles)
+	}
+}

@@ -269,7 +269,6 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				for (const permission of target.permissions ?? []) add(permission.username)
 			}
 		}
-		for (const profile of status.value.profiles ?? []) add(profile.username)
 		for (const member of status.value.repository?.candidates ?? []) add(member)
 		for (const member of status.value.unassigned_members ?? []) add(member)
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))

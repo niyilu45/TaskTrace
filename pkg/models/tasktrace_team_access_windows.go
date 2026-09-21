@@ -119,7 +119,9 @@ $username=if($separator -ge 0){$canonical.Substring($separator+1)}else{$canonica
 $share=Get-SmbShare -ErrorAction Stop | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $rootPath)} | Select-Object -First 1
 if($null -eq $share){throw 'teamData 尚未创建 Windows 文件共享'}
 $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in @('Change','Full')})
-$acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
+$directory=[IO.DirectoryInfo]::new($rootPath)
+$legacyAclApi=@($directory.PSObject.Methods.Name) -contains 'GetAccessControl'
+$acl=if($legacyAclApi){$directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)}else{[IO.FileSystemAclExtensions]::GetAccessControl($directory,[Security.AccessControl.AccessControlSections]::Access)}
 $aclExisting=@($acl.Access | Where-Object {
   $entrySid=$null
   try {$entrySid=$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier])} catch {}
@@ -132,7 +134,7 @@ try {
   $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
   $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::Modify,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
   $acl.SetAccessRule($rule)
-  Set-Acl -LiteralPath $rootPath -AclObject $acl -ErrorAction Stop
+  if($legacyAclApi){$directory.SetAccessControl($acl)}else{[IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}
 } catch {
   if($shareAdded){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue}
   throw
@@ -150,9 +152,11 @@ if($null -ne $share){
   $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow'})
   if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop}
 }
-$acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
+$directory=[IO.DirectoryInfo]::new($rootPath)
+$legacyAclApi=@($directory.PSObject.Methods.Name) -contains 'GetAccessControl'
+$acl=if($legacyAclApi){$directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)}else{[IO.FileSystemAclExtensions]::GetAccessControl($directory,[Security.AccessControl.AccessControlSections]::Access)}
 $acl.PurgeAccessRules($sid)
-Set-Acl -LiteralPath $rootPath -AclObject $acl -ErrorAction Stop`
+if($legacyAclApi){$directory.SetAccessControl($acl)}else{[IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}`
 
 func taskTraceTeamPowerShellContext(parent context.Context, timeout time.Duration, script string, environment ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -227,7 +231,7 @@ func taskTraceTeamAccessNeedsElevation(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"access is denied", "access denied", "拒绝访问", "windows system error 5", "system error 5", "unauthorizedaccessexception", "0x80070005"} {
+	for _, marker := range []string{"access is denied", "access denied", "拒绝访问", "windows system error 5", "system error 5", "unauthorizedaccessexception", "0x80070005", "sesecurityprivilege", "required privilege is not held", "所需的特权"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

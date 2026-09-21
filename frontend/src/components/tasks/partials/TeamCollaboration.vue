@@ -3,271 +3,286 @@
 		v-if="isLocalBuild && teamStore.status.enabled && (binding || canWrite)"
 		class="content details team-collaboration d-print-none"
 	>
-		<h2 class="task-section-title">
-			<span class="icon is-grey"><Icon icon="users" /></span>
-			团队协作
-		</h2>
+		<button
+			type="button"
+			class="team-collaboration__toggle"
+			:aria-expanded="expanded"
+			:aria-controls="`team-collaboration-body-${taskId}`"
+			@click="toggleExpanded"
+		>
+			<span class="task-section-title">
+				<span class="icon is-grey"><Icon icon="users" /></span>
+				团队协作
+			</span>
+			<span class="team-collaboration__toggle-label">{{ expanded ? '收起' : '展开' }}</span>
+		</button>
 
-		<template v-if="binding">
-			<div class="team-summary">
-				<div class="team-members">
-					<strong>协作成员：</strong>
-					<span
-						v-for="member in teamStore.uniqueMembers(binding.members ?? [])"
-						:key="teamStore.memberKey(member)"
-						class="team-member-chip"
-					>
-						<img
-							v-if="avatarFor(member)"
-							:src="avatarFor(member)"
-							alt=""
-							class="team-member-avatar"
-						>
+		<div
+			v-if="expanded"
+			:id="`team-collaboration-body-${taskId}`"
+			class="team-collaboration__body"
+		>
+			<template v-if="binding">
+				<div class="team-summary">
+					<div class="team-members">
+						<strong>协作成员：</strong>
 						<span
-							v-else
-							class="team-member-avatar team-member-avatar--fallback"
-						>{{ initials(member) }}</span>
-						<TeamMemberIdentity :username="member" />
-					</span>
+							v-for="member in teamStore.uniqueMembers(binding.members ?? [])"
+							:key="teamStore.memberKey(member)"
+							class="team-member-chip"
+						>
+							<img
+								v-if="avatarFor(member)"
+								:src="avatarFor(member)"
+								alt=""
+								class="team-member-avatar"
+							>
+							<span
+								v-else
+								class="team-member-avatar team-member-avatar--fallback"
+							>{{ initials(member) }}</span>
+							<TeamMemberIdentity :username="member" />
+						</span>
+					</div>
+					<p
+						v-if="binding.last_sync"
+						class="has-text-grey"
+					>
+						最近同步：{{ formatDisplayDate(binding.last_sync) }}
+					</p>
+					<p
+						v-if="binding.last_error"
+						class="notification is-warning is-light"
+					>
+						共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。
+					</p>
+					<XButton
+						v-if="binding.member_link"
+						variant="secondary"
+						@click="copyMemberLink"
+					>
+						分享成员
+					</XButton>
+					<XButton
+						variant="secondary"
+						:loading="openingPermissions"
+						@click="openPermissions"
+					>
+						编辑权限
+					</XButton>
+					<XButton
+						v-if="binding.can_manage_permissions"
+						variant="secondary"
+						@click="openMemberEditor"
+					>
+						编辑成员
+					</XButton>
 				</div>
-				<p
-					v-if="binding.last_sync"
-					class="has-text-grey"
+				<form
+					v-if="editingMembers"
+					class="team-member-editor"
+					@submit.prevent="saveMembers"
 				>
-					最近同步：{{ formatDisplayDate(binding.last_sync) }}
-				</p>
+					<p class="label">
+						共享人员名单
+					</p>
+					<label
+						v-for="member in rosterCandidates"
+						:key="teamStore.memberKey(member)"
+						class="checkbox team-member"
+					>
+						<input
+							v-model="selectedMembers"
+							type="checkbox"
+							:value="member"
+						>
+						<TeamMemberIdentity :username="member" />
+					</label>
+					<TeamMemberPicker
+						:input-id="`team-members-edit-${taskId}`"
+						label="查找并添加新成员"
+						:excluded="[teamStore.status.username || '', ...selectedMembers]"
+						@select="addMember"
+					/>
+					<div
+						v-if="selectedMembers.length"
+						class="team-selected-members"
+					>
+						<button
+							v-for="member in selectedMembers"
+							:key="teamStore.memberKey(member)"
+							type="button"
+							class="team-member-chip team-member-chip--remove"
+							:title="`从当前协作任务移除 ${teamStore.identityTitleFor(member)}`"
+							@click="removeSelected(member)"
+						>
+							{{ teamStore.displayNameFor(member) }} ×
+						</button>
+					</div>
+					<div class="team-member-editor__actions">
+						<XButton
+							type="button"
+							variant="secondary"
+							@click="editingMembers = false"
+						>
+							取消
+						</XButton>
+						<XButton
+							type="submit"
+							variant="primary"
+							:loading="teamStore.loading"
+						>
+							保存成员
+						</XButton>
+					</div>
+					<p class="help">
+						成员保存后，受理人、权限设置和概览筛选会使用同一份人员名单。受理人需先取消分配后才能移出。
+					</p>
+				</form>
+				<div class="field">
+					<label
+						class="label"
+						:for="`team-link-${taskId}`"
+					>任务链接</label>
+					<div class="field has-addons">
+						<div class="control is-expanded">
+							<input
+								:id="`team-link-${taskId}`"
+								class="input"
+								:value="binding.link"
+								readonly
+							>
+						</div>
+						<div class="control">
+							<XButton
+								type="button"
+								variant="secondary"
+								@click="copyLink"
+							>
+								复制链接
+							</XButton>
+						</div>
+					</div>
+					<p class="help">
+						接收者通过完整界面的“导入任务链接”添加，只能看到此任务和它的子任务、进展及遗留事项。
+					</p>
+				</div>
+				<label class="checkbox team-notify">
+					<input
+						:checked="binding.notify"
+						type="checkbox"
+						@change="setNotify(($event.target as HTMLInputElement).checked)"
+					>
+					更新后通知其他协作成员
+				</label>
 				<p
-					v-if="binding.last_error"
+					v-if="binding.conflicts?.length"
+					class="notification is-danger is-light"
+				>
+					检测到 {{ binding.conflicts.length }} 项冲突，请从顶部的团队通知入口一次性处理。
+				</p>
+			</template>
+
+			<form
+				v-else
+				@submit.prevent="shareTask"
+			>
+				<p>把当前任务及其全部子任务加入 teamData。父任务、同级任务和个人优先级不会共享。</p>
+				<div
+					v-if="candidateMembers.length"
+					class="field"
+				>
+					<span class="label">从 teamData 文件夹权限中发现的成员</span>
+					<label
+						v-for="member in candidateMembers"
+						:key="teamStore.memberKey(member)"
+						class="checkbox team-member"
+					>
+						<input
+							v-model="selectedMembers"
+							type="checkbox"
+							:value="member"
+						>
+						<TeamMemberIdentity :username="member" />
+					</label>
+				</div>
+				<div class="field">
+					<TeamMemberPicker
+						:input-id="`team-members-${taskId}`"
+						:excluded="[teamStore.status.username || '', ...selectedMembers]"
+						@select="addMember"
+					/>
+					<div
+						v-if="selectedMembers.length"
+						class="team-selected-members"
+					>
+						<button
+							v-for="member in selectedMembers"
+							:key="teamStore.memberKey(member)"
+							type="button"
+							class="team-member-chip team-member-chip--remove"
+							:title="`移除 ${teamStore.identityTitleFor(member)}`"
+							@click="removeSelected(member)"
+						>
+							{{ teamStore.displayNameFor(member) }} ×
+						</button>
+					</div>
+				</div>
+				<div class="field">
+					<label
+						class="label"
+						:for="`team-member-link-${taskId}`"
+					>通过成员链接创建团队</label>
+					<div class="field has-addons">
+						<div class="control is-expanded">
+							<input
+								:id="`team-member-link-${taskId}`"
+								v-model="memberLink"
+								class="input"
+								placeholder="粘贴 tasktrace-team-members:// 链接"
+							>
+						</div>
+						<div class="control">
+							<XButton
+								type="button"
+								variant="secondary"
+								:loading="teamStore.loading"
+								@click="importMembersForShare"
+							>
+								导入成员
+							</XButton>
+						</div>
+					</div>
+					<p class="help">
+						有效成员会加入上方列表并自动获得 teamData 读写权限；失效成员会单独提示。
+					</p>
+				</div>
+				<div
+					v-if="!teamStore.status.repository?.shared"
 					class="notification is-warning is-light"
 				>
-					共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。
-				</p>
-				<XButton
-					v-if="binding.member_link"
-					variant="secondary"
-					@click="copyMemberLink"
-				>
-					分享成员
-				</XButton>
-				<XButton
-					variant="secondary"
-					:loading="openingPermissions"
-					@click="openPermissions"
-				>
-					编辑权限
-				</XButton>
-				<XButton
-					v-if="binding.can_manage_permissions"
-					variant="secondary"
-					@click="openMemberEditor"
-				>
-					编辑成员
-				</XButton>
-			</div>
-			<form
-				v-if="editingMembers"
-				class="team-member-editor"
-				@submit.prevent="saveMembers"
-			>
-				<p class="label">
-					共享人员名单
-				</p>
-				<label
-					v-for="member in rosterCandidates"
-					:key="teamStore.memberKey(member)"
-					class="checkbox team-member"
-				>
-					<input
-						v-model="selectedMembers"
-						type="checkbox"
-						:value="member"
-					>
-					<TeamMemberIdentity :username="member" />
-				</label>
-				<TeamMemberPicker
-					:input-id="`team-members-edit-${taskId}`"
-					label="查找并添加新成员"
-					:excluded="[teamStore.status.username || '', ...selectedMembers]"
-					@select="addMember"
-				/>
-				<div
-					v-if="selectedMembers.length"
-					class="team-selected-members"
-				>
-					<button
-						v-for="member in selectedMembers"
-						:key="teamStore.memberKey(member)"
-						type="button"
-						class="team-member-chip team-member-chip--remove"
-						:title="`从当前协作任务移除 ${teamStore.identityTitleFor(member)}`"
-						@click="removeSelected(member)"
-					>
-						{{ teamStore.displayNameFor(member) }} ×
-					</button>
+					尚未检测到 Windows 共享。添加成员时程序会明确提示需要先创建 teamData 共享。
 				</div>
-				<div class="team-member-editor__actions">
-					<XButton
-						type="button"
-						variant="secondary"
-						@click="editingMembers = false"
-					>
-						取消
-					</XButton>
-					<XButton
-						type="submit"
-						variant="primary"
-						:loading="teamStore.loading"
-					>
-						保存成员
-					</XButton>
-				</div>
-				<p class="help">
-					成员保存后，受理人、权限设置和概览筛选会使用同一份人员名单。受理人需先取消分配后才能移出。
-				</p>
+				<XButton
+					type="submit"
+					variant="primary"
+					:loading="teamStore.loading"
+				>
+					共享当前任务
+				</XButton>
 			</form>
-			<div class="field">
-				<label
-					class="label"
-					:for="`team-link-${taskId}`"
-				>任务链接</label>
-				<div class="field has-addons">
-					<div class="control is-expanded">
-						<input
-							:id="`team-link-${taskId}`"
-							class="input"
-							:value="binding.link"
-							readonly
-						>
-					</div>
-					<div class="control">
-						<XButton
-							type="button"
-							variant="secondary"
-							@click="copyLink"
-						>
-							复制链接
-						</XButton>
-					</div>
-				</div>
-				<p class="help">
-					接收者通过完整界面的“导入任务链接”添加，只能看到此任务和它的子任务、进展及遗留事项。
-				</p>
-			</div>
-			<label class="checkbox team-notify">
-				<input
-					:checked="binding.notify"
-					type="checkbox"
-					@change="setNotify(($event.target as HTMLInputElement).checked)"
-				>
-				更新后通知其他协作成员
-			</label>
-			<p
-				v-if="binding.conflicts?.length"
-				class="notification is-danger is-light"
-			>
-				检测到 {{ binding.conflicts.length }} 项冲突，请从顶部的团队通知入口一次性处理。
-			</p>
-		</template>
-
-		<form
-			v-else
-			@submit.prevent="shareTask"
-		>
-			<p>把当前任务及其全部子任务加入 teamData。父任务、同级任务和个人优先级不会共享。</p>
-			<div
-				v-if="candidateMembers.length"
-				class="field"
-			>
-				<span class="label">从 teamData 文件夹权限中发现的成员</span>
-				<label
-					v-for="member in candidateMembers"
-					:key="teamStore.memberKey(member)"
-					class="checkbox team-member"
-				>
-					<input
-						v-model="selectedMembers"
-						type="checkbox"
-						:value="member"
-					>
-					<TeamMemberIdentity :username="member" />
-				</label>
-			</div>
-			<div class="field">
-				<TeamMemberPicker
-					:input-id="`team-members-${taskId}`"
-					:excluded="[teamStore.status.username || '', ...selectedMembers]"
-					@select="addMember"
-				/>
-				<div
-					v-if="selectedMembers.length"
-					class="team-selected-members"
-				>
-					<button
-						v-for="member in selectedMembers"
-						:key="teamStore.memberKey(member)"
-						type="button"
-						class="team-member-chip team-member-chip--remove"
-						:title="`移除 ${teamStore.identityTitleFor(member)}`"
-						@click="removeSelected(member)"
-					>
-						{{ teamStore.displayNameFor(member) }} ×
-					</button>
-				</div>
-			</div>
-			<div class="field">
-				<label
-					class="label"
-					:for="`team-member-link-${taskId}`"
-				>通过成员链接创建团队</label>
-				<div class="field has-addons">
-					<div class="control is-expanded">
-						<input
-							:id="`team-member-link-${taskId}`"
-							v-model="memberLink"
-							class="input"
-							placeholder="粘贴 tasktrace-team-members:// 链接"
-						>
-					</div>
-					<div class="control">
-						<XButton
-							type="button"
-							variant="secondary"
-							:loading="teamStore.loading"
-							@click="importMembersForShare"
-						>
-							导入成员
-						</XButton>
-					</div>
-				</div>
-				<p class="help">
-					有效成员会加入上方列表并自动获得 teamData 读写权限；失效成员会单独提示。
-				</p>
-			</div>
-			<div
-				v-if="!teamStore.status.repository?.shared"
-				class="notification is-warning is-light"
-			>
-				尚未检测到 Windows 共享。添加成员时程序会明确提示需要先创建 teamData 共享。
-			</div>
-			<XButton
-				type="submit"
-				variant="primary"
-				:loading="teamStore.loading"
-			>
-				共享当前任务
-			</XButton>
-		</form>
-		<TeamPermissionEditor
-			v-if="binding && showPermissions"
-			:task-id="taskId"
-			:binding="binding"
-			@close="showPermissions = false"
-		/>
+			<TeamPermissionEditor
+				v-if="binding && showPermissions"
+				:task-id="taskId"
+				:binding="binding"
+				@close="showPermissions = false"
+			/>
+		</div>
 	</section>
 </template>
 
 <script setup lang="ts">
-import {computed, onMounted, ref} from 'vue'
+import {computed, onMounted, ref, watch} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
 import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
@@ -286,6 +301,7 @@ const memberLink = ref('')
 const showPermissions = ref(false)
 const openingPermissions = ref(false)
 const editingMembers = ref(false)
+const expanded = ref(false)
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const candidateMembers = computed(() => teamStore.memberRoster.filter(member => teamStore.memberKey(member) !== teamStore.memberKey(teamStore.status.username)))
@@ -301,6 +317,17 @@ function initials(username: string) {
 
 onMounted(() => {
 	if (!teamStore.loaded) teamStore.refresh().catch(() => undefined)
+})
+
+function toggleExpanded() {
+	expanded.value = !expanded.value
+	if (expanded.value) void teamStore.refresh().catch(() => undefined)
+}
+
+watch(() => props.taskId, () => {
+	expanded.value = false
+	editingMembers.value = false
+	showPermissions.value = false
 })
 
 async function shareTask() {
@@ -476,6 +503,38 @@ async function setNotify(notify: boolean) {
 	flex-wrap: wrap;
 	gap: .4rem;
 	margin-block-start: .5rem;
+}
+
+.team-collaboration__toggle {
+	display: flex;
+	inline-size: 100%;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	cursor: pointer;
+	text-align: start;
+}
+
+.team-collaboration__toggle .task-section-title {
+	margin: 0;
+}
+
+.team-collaboration__toggle-label {
+	color: var(--primary);
+	font-weight: 600;
+}
+
+.team-collaboration__toggle:focus-visible {
+	border-radius: .25rem;
+	outline: 2px solid var(--primary);
+	outline-offset: .25rem;
+}
+
+.team-collaboration__body {
+	margin-block-start: 1rem;
 }
 
 .team-member-editor {

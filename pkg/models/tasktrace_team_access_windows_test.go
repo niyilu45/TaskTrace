@@ -23,12 +23,25 @@ func TestTaskTraceTeamAccessNeedsElevation(t *testing.T) {
 		{name: "windows system error", message: "Windows System Error 5", want: true},
 		{name: "localized access denied", message: "拒绝访问", want: true},
 		{name: "cim exception", message: "CimException 0x80070005", want: true},
+		{name: "security privilege", message: "The process does not possess the SeSecurityPrivilege privilege which is required for this operation", want: true},
 		{name: "unrelated failure", message: "teamData 尚未创建 Windows 文件共享", want: false},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, taskTraceTeamAccessNeedsElevation(errors.New(test.message)))
+		})
+	}
+}
+
+func TestTaskTraceTeamAccessScriptsOnlyWriteAccessRules(t *testing.T) {
+	for name, script := range map[string]string{
+		"grant":  taskTraceTeamGrantAccessScript,
+		"remove": taskTraceTeamRemoveAccessScript,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Contains(t, script, "AccessControlSections]::Access")
+			assert.NotContains(t, script, "Set-Acl")
 		})
 	}
 }

@@ -102,6 +102,11 @@ function syncTeamAssignees() {
 let hasPreloaded = false
 
 function preloadUsers() {
+	if (teamMode.value) {
+		void findUser()
+		void teamStore.refresh().then(() => findUser()).catch(() => undefined)
+		return
+	}
 	if (hasPreloaded) return
 	hasPreloaded = true
 	findUser()
@@ -118,7 +123,10 @@ watch(
 	},
 )
 
-watch([teamMode, teamTarget], syncTeamAssignees, {immediate: true, deep: true})
+watch([teamMode, teamTarget, () => binding.value?.members], () => {
+	syncTeamAssignees()
+	if (teamMode.value) void findUser()
+}, {immediate: true, deep: true})
 
 async function addAssignee(user: IUser) {
 	if (isAdding) {
@@ -172,7 +180,11 @@ async function findUser(query = '') {
 	if (teamMode.value) {
 		const selected = new Set(assignees.value.map(user => teamStore.memberKey(user.username)))
 		const keyword = query.trim().toLocaleLowerCase()
-		const collaborationMembers = teamStore.uniqueMembers([binding.value?.owner, ...(binding.value?.members ?? [])])
+		const collaborationMembers = teamStore.uniqueMembers([
+			binding.value?.owner,
+			...(binding.value?.members ?? []),
+			...(binding.value?.permission_targets ?? []).flatMap(target => target.permissions?.map(permission => permission.username) ?? []),
+		])
 		foundUsers.value = collaborationMembers
 			.filter(username => !selected.has(teamStore.memberKey(username)) && (!keyword || teamStore.identityTitleFor(username).toLocaleLowerCase().includes(keyword)))
 			.map(teamUser)

@@ -82,7 +82,7 @@ describe('TaskTrace team bindings', () => {
 		expect(store.canWriteTask(42)).toBe(true)
 	})
 
-	it('shares one deduplicated member roster across bindings, permissions, profiles and folder access', () => {
+	it('shares one deduplicated active member roster without retaining profile-only accounts', () => {
 		const store = useTasktraceTeamStore()
 		store.status = {
 			enabled: true,
@@ -98,7 +98,7 @@ describe('TaskTrace team bindings', () => {
 		}
 
 		expect(store.memberRoster.map(member => member.toLocaleLowerCase()).sort()).toEqual([
-			'current', 'folderuser', 'member', 'owner', 'profileonly', 'reader', 'unassigned',
+			'current', 'folderuser', 'member', 'owner', 'reader', 'unassigned',
 		].sort())
 	})
 
