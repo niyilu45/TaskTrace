@@ -12,6 +12,8 @@ import {error, success} from '@/message'
 import {useAuthStore} from '@/stores/auth'
 import {useTaskStore} from '@/stores/tasks'
 import type {IProjectView} from '@/modelTypes/IProjectView'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {tasktraceNewTaskStoredPriority} from '@/helpers/tasktracePriority'
 
 export interface UseGanttTaskListReturn {
 	tasks: Ref<Map<ITask['id'], ITask>>
@@ -83,7 +85,10 @@ export function useGanttTaskList<F extends Filters>(
 	)
 
 	async function addTask(task: Partial<ITask>) {
-		const newTask = await taskService.create(new TaskModel({...task}))
+		const newTask = await taskService.create(new TaskModel({
+			...task,
+			priority: tasktraceNewTaskStoredPriority(task.priority ?? null, isLocalBuild),
+		}))
 		tasks.value.set(newTask.id, newTask)
 
 		return newTask
