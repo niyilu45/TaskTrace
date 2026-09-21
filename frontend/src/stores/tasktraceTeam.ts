@@ -36,9 +36,13 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const directoryProfiles = ref<Record<string, TaskTraceTeamMemberCandidate>>({})
 	let activeRead: Promise<TaskTraceTeamStatus> | null = null
 	let pending = 0
+	let requestSequence = 0
+	let appliedSequence = 0
 	const hydratingProfiles = new Set<string>()
 
-	function apply(next?: TaskTraceTeamStatus) {
+	function apply(next?: TaskTraceTeamStatus, sequence = ++requestSequence) {
+		if (sequence < appliedSequence) return status.value
+		appliedSequence = sequence
 		if (next) {
 			status.value = next
 			rememberMemberProfiles((next.profiles ?? []).map(profile => ({
@@ -55,9 +59,10 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 
 	async function run(request: () => Promise<{data: TaskTraceTeamStatus}>, deduplicate = false) {
 		if (deduplicate && activeRead) return activeRead
+		const sequence = ++requestSequence
 		pending++
 		loading.value = true
-		const operation = request().then(result => apply(result.data)).finally(() => {
+		const operation = request().then(result => apply(result.data, sequence)).finally(() => {
 			pending--
 			loading.value = pending > 0
 			if (activeRead === operation) activeRead = null
@@ -191,8 +196,9 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				.then(async candidates => {
 					const candidate = candidates.find(item => teamMemberKey(item.account_name || item.username || item.email) === key)
 					if (!candidate || !hasKnownTeamDataAccess(member)) return
+					const sequence = ++requestSequence
 					const result = await tasktraceTeamMembersAccessCreate(memberAccessOptions(candidate))
-					apply(result.data)
+					apply(result.data, sequence)
 				})
 				.catch(() => undefined)
 				.finally(() => hydratingProfiles.delete(key))
@@ -211,11 +217,12 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function importMembers(link: string): Promise<TaskTraceTeamMemberImportResult> {
+		const sequence = ++requestSequence
 		pending++
 		loading.value = true
 		try {
 			const result = await tasktraceTeamMembersImport({body: {link}})
-			if (result.data.status) apply(result.data.status)
+			if (result.data.status) apply(result.data.status, sequence)
 			return result.data
 		} finally {
 			pending--

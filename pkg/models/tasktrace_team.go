@@ -324,7 +324,7 @@ func taskTraceTeamAppendRepository(paths []string, value string) []string {
 	return append(paths, value)
 }
 
-func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
+func taskTraceTeamRepositoryMetadata(root string) TaskTraceTeamRepositoryInfo {
 	info := TaskTraceTeamRepositoryInfo{Path: root, Paths: []string{}, Candidates: []string{}}
 	path := filepath.Join(root, "repository-info.json")
 	_ = taskTraceTeamReadJSON(path, &info)
@@ -337,6 +337,11 @@ func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
 		info.Path = root
 	}
 	info.Paths = taskTraceTeamAppendRepository(info.Paths, info.Path)
+	return info
+}
+
+func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
+	info := taskTraceTeamRepositoryMetadata(root)
 	if candidates, err := taskTraceTeamListWindowsAccess(root); err == nil {
 		info.Candidates = candidates
 	}
@@ -1713,7 +1718,6 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		return nil, err
 	}
 	shareID := uuid.NewString()
-	info := taskTraceTeamRepositoryInfo(root)
 	binding := TaskTraceTeamBinding{ShareID: shareID, Repository: root, Secret: secret, Owner: u.Username, Members: members, RootTaskID: request.TaskID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
 	snapshot, err := taskTraceTeamBuildSnapshot(s, &binding, u.Username, state.DeviceID)
 	if err != nil {
@@ -1742,7 +1746,6 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	_ = info
 	status, err := taskTraceTeamStatusLocked(s, a, state)
 	return &status, err
 }
@@ -2123,7 +2126,10 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		linkPath := binding.Repository
 		linkPaths := []string{}
 		if binding.Owner == u.Username {
-			info := taskTraceTeamRepositoryInfo(binding.Repository)
+			// Only the main repository needs an ACL scan. Reading the same Windows
+			// share permissions once per collaboration made a page refresh slower
+			// as more shared tasks were added.
+			info := taskTraceTeamRepositoryMetadata(binding.Repository)
 			linkPath = info.Path
 			linkPaths = info.Paths
 		}

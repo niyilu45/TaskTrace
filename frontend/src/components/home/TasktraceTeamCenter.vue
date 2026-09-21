@@ -419,6 +419,7 @@ onMounted(async () => {
 	if (activityHost.value) {
 		window.addEventListener('focus', poll)
 		window.addEventListener('tasktrace-team-activity-open', openActivity)
+		void poll()
 		timer = setInterval(poll, 15_000)
 	}
 })

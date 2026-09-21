@@ -437,37 +437,118 @@ func taskTraceTeamStripHTML(value string) string {
 
 func taskTraceTeamApplyPermissionUpdates(existing []TaskTraceTeamMemberPermission, updates map[string]TaskTraceTeamPermissionUpdate) []TaskTraceTeamMemberPermission {
 	result := append([]TaskTraceTeamMemberPermission{}, existing...)
+	seen := make(map[string]bool, len(result))
 	for index := range result {
+		key := strings.ToLower(taskTraceTeamMembershipName(result[index].Username))
+		seen[key] = true
 		if result[index].Owner || result[index].Assignee {
 			continue
 		}
-		if update, ok := updates[strings.ToLower(result[index].Username)]; ok {
+		if update, ok := updates[key]; ok {
 			result[index].Read = update.Read || update.Write
 			result[index].Write = update.Write
+		}
+	}
+	for key, update := range updates {
+		if seen[key] {
+			continue
+		}
+		username := taskTraceTeamMembershipName(update.Username)
+		if username == "" {
+			continue
+		}
+		result = append(result, TaskTraceTeamMemberPermission{
+			Username: username,
+			Read:     update.Read || update.Write,
+			Write:    update.Write,
+		})
+	}
+	return result
+}
+
+func taskTraceTeamChangedPermissionMembers(before, after []TaskTraceTeamMemberPermission) map[string]bool {
+	previous := taskTraceTeamPermissionMap(before)
+	changed := map[string]bool{}
+	for key, permission := range taskTraceTeamPermissionMap(after) {
+		old, exists := previous[key]
+		if !exists || old.Read != permission.Read || old.Write != permission.Write {
+			changed[key] = true
+		}
+	}
+	return changed
+}
+
+// taskTraceTeamInheritPermissions applies a parent's access floor without
+// replacing child-only choices. A permission explicitly changed on the parent
+// is copied to matching children; unchanged permissions only raise children
+// that would otherwise have less access than their parent.
+func taskTraceTeamInheritPermissions(child, parent []TaskTraceTeamMemberPermission, changed map[string]bool) []TaskTraceTeamMemberPermission {
+	result := append([]TaskTraceTeamMemberPermission{}, child...)
+	indices := make(map[string]int, len(result))
+	for index := range result {
+		if key := strings.ToLower(taskTraceTeamMembershipName(result[index].Username)); key != "" {
+			indices[key] = index
+		}
+	}
+	for _, inherited := range parent {
+		key := strings.ToLower(taskTraceTeamMembershipName(inherited.Username))
+		if key == "" {
+			continue
+		}
+		index, exists := indices[key]
+		if !exists {
+			result = append(result, TaskTraceTeamMemberPermission{
+				Username: inherited.Username,
+				Read:     inherited.Read || inherited.Write,
+				Write:    inherited.Write,
+			})
+			indices[key] = len(result) - 1
+			continue
+		}
+		permission := &result[index]
+		if changed[key] && !permission.Owner && !permission.Assignee {
+			permission.Read = inherited.Read || inherited.Write
+			permission.Write = inherited.Write
+			continue
+		}
+		if inherited.Write {
+			permission.Read = true
+			permission.Write = true
+		} else if inherited.Read {
+			permission.Read = true
 		}
 	}
 	return result
 }
 
-func taskTraceTeamPermissionDescendants(s *xorm.Session, binding *TaskTraceTeamBinding, rootNode string) map[string]bool {
-	result := map[string]bool{rootNode: true}
+func taskTraceTeamPermissionHierarchy(s *xorm.Session, binding *TaskTraceTeamBinding, rootNode string) ([]string, map[string]string) {
+	result := []string{rootNode}
+	parentNodes := map[string]string{}
+	included := map[string]bool{rootNode: true}
 	ids, parents, err := taskTraceTeamSubtree(s, binding.RootTaskID)
 	if err != nil {
-		return result
+		return result, parentNodes
 	}
-	changed := true
-	for changed {
-		changed = false
-		for _, taskID := range ids {
-			node := taskTraceTeamNodeForTask(binding, taskID)
-			parentNode := taskTraceTeamNodeForTask(binding, parents[taskID])
-			if node != "" && !result[node] && result[parentNode] {
-				result[node] = true
-				changed = true
-			}
+	for _, taskID := range ids {
+		node := taskTraceTeamNodeForTask(binding, taskID)
+		parentNode := taskTraceTeamNodeForTask(binding, parents[taskID])
+		if node == "" || node == rootNode || !included[parentNode] {
+			continue
 		}
+		result = append(result, node)
+		parentNodes[node] = parentNode
+		included[node] = true
 	}
-	return result
+	return result, parentNodes
+}
+
+func taskTraceTeamPermissionParent(s *xorm.Session, binding *TaskTraceTeamBinding, nodeID string) string {
+	_, parents, err := taskTraceTeamSubtree(s, binding.RootTaskID)
+	if err != nil {
+		return ""
+	}
+	taskID := binding.NodeTasks[nodeID]
+	return taskTraceTeamNodeForTask(binding, parents[taskID])
 }
 
 func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request TaskTraceTeamPermissionsRequest) (*TaskTraceTeamStatus, error) {
@@ -542,19 +623,41 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 		if request.OutstandingID != "" {
 			owner := taskTraceTeamPermissionOwner(existing, manifest.Owner)
 			assignees := taskTraceTeamPermissionAssignees(existing)
-			manifest.Permissions[key] = taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamApplyPermissionUpdates(existing, updates))
+			updated := taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamApplyPermissionUpdates(existing, updates))
+			if taskPermissions := manifest.Permissions[taskTraceTeamPermissionKey(nodeID, "")]; len(taskPermissions) > 0 {
+				updated = taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamInheritPermissions(updated, taskPermissions, nil))
+			}
+			manifest.Permissions[key] = updated
 		} else {
-			// A task-level permission change is inherited by every existing child task
-			// and outstanding item. Each target keeps its own owner and assignee roles.
-			for targetNode := range taskTraceTeamPermissionDescendants(s, binding, nodeID) {
-				targetKey := taskTraceTeamPermissionKey(targetNode, "")
-				target := manifest.Permissions[targetKey]
-				if len(target) == 0 {
-					target = existing
+			owner := taskTraceTeamPermissionOwner(existing, manifest.Owner)
+			assignees := taskTraceTeamPermissionAssignees(existing)
+			updatedParent := taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamApplyPermissionUpdates(existing, updates))
+			if parentNode := taskTraceTeamPermissionParent(s, binding, nodeID); parentNode != "" {
+				if parentPermissions := manifest.Permissions[taskTraceTeamPermissionKey(parentNode, "")]; len(parentPermissions) > 0 {
+					updatedParent = taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamInheritPermissions(updatedParent, parentPermissions, nil))
 				}
-				owner := taskTraceTeamPermissionOwner(target, manifest.Owner)
-				assignees := taskTraceTeamPermissionAssignees(target)
-				manifest.Permissions[targetKey] = taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamApplyPermissionUpdates(target, updates))
+			}
+			changedMembers := taskTraceTeamChangedPermissionMembers(existing, updatedParent)
+			manifest.Permissions[key] = updatedParent
+
+			// Propagate only the parent's actual changes. Existing child-only members
+			// and stronger unchanged permissions remain intact, while every child is
+			// still guaranteed at least the access currently granted by its parent.
+			targetNodes, parentNodes := taskTraceTeamPermissionHierarchy(s, binding, nodeID)
+			for _, targetNode := range targetNodes {
+				targetKey := taskTraceTeamPermissionKey(targetNode, "")
+				if targetNode != nodeID {
+					target := manifest.Permissions[targetKey]
+					inherited := manifest.Permissions[taskTraceTeamPermissionKey(parentNodes[targetNode], "")]
+					if len(target) == 0 {
+						target = inherited
+					}
+					targetOwner := taskTraceTeamPermissionOwner(target, manifest.Owner)
+					targetAssignees := taskTraceTeamPermissionAssignees(target)
+					manifest.Permissions[targetKey] = taskTraceTeamNormalizePermissions(manifest.Members, targetOwner, targetAssignees, taskTraceTeamInheritPermissions(target, inherited, changedMembers))
+				}
+				targetPermissions := manifest.Permissions[targetKey]
+				targetOwner := taskTraceTeamPermissionOwner(targetPermissions, manifest.Owner)
 				items, _ := taskTraceTeamOutstandingItems(binding.Base[targetNode].Outstanding)
 				for outstandingID := range items {
 					outstandingKey := taskTraceTeamPermissionKey(targetNode, outstandingID)
@@ -562,7 +665,9 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 					if len(outstanding) == 0 {
 						outstanding = manifest.Permissions[targetKey]
 					}
-					manifest.Permissions[outstandingKey] = taskTraceTeamNormalizePermissions(manifest.Members, owner, assignees, taskTraceTeamApplyPermissionUpdates(outstanding, updates))
+					outstandingOwner := taskTraceTeamPermissionOwner(outstanding, targetOwner)
+					outstandingAssignees := taskTraceTeamPermissionAssignees(outstanding)
+					manifest.Permissions[outstandingKey] = taskTraceTeamNormalizePermissions(manifest.Members, outstandingOwner, outstandingAssignees, taskTraceTeamInheritPermissions(outstanding, targetPermissions, changedMembers))
 				}
 			}
 		}

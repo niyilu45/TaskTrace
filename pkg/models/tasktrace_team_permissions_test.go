@@ -62,6 +62,67 @@ func TestTaskTraceTeamPermissionUpdatesKeepOwnerAndAssigneeWritable(t *testing.T
 	require.True(t, byUser["member"].Write)
 }
 
+func TestTaskTraceTeamPermissionUpdatesAddNewMember(t *testing.T) {
+	updated := taskTraceTeamApplyPermissionUpdates(
+		[]TaskTraceTeamMemberPermission{{Username: "owner", Read: true, Write: true, Owner: true}},
+		map[string]TaskTraceTeamPermissionUpdate{
+			"new-member": {Username: "new-member", Write: true},
+		},
+	)
+
+	byUser := taskTraceTeamPermissionMap(updated)
+	require.True(t, byUser["new-member"].Read)
+	require.True(t, byUser["new-member"].Write)
+}
+
+func TestTaskTraceTeamPermissionsInheritParentDeltaWithoutReplacingChildChoices(t *testing.T) {
+	parentBefore := []TaskTraceTeamMemberPermission{
+		{Username: "owner", Read: true, Write: true, Owner: true},
+		{Username: "changed", Read: true},
+		{Username: "unchanged", Read: true},
+	}
+	parentAfter := []TaskTraceTeamMemberPermission{
+		{Username: "owner", Read: true, Write: true, Owner: true},
+		{Username: "changed", Read: true, Write: true},
+		{Username: "unchanged", Read: true},
+		{Username: "new-member", Read: true},
+	}
+	child := []TaskTraceTeamMemberPermission{
+		{Username: "owner", Read: true, Write: true, Owner: true},
+		{Username: "changed", Read: true},
+		{Username: "unchanged", Read: true, Write: true},
+		{Username: "child-only", Read: true, Write: true},
+	}
+
+	result := taskTraceTeamInheritPermissions(child, parentAfter, taskTraceTeamChangedPermissionMembers(parentBefore, parentAfter))
+	byUser := taskTraceTeamPermissionMap(result)
+	require.True(t, byUser["changed"].Write, "a changed parent permission is copied to the child")
+	require.True(t, byUser["unchanged"].Write, "an unchanged stronger child permission is preserved")
+	require.True(t, byUser["child-only"].Write, "a child-only member is preserved")
+	require.True(t, byUser["new-member"].Read, "a new parent member is added to the child")
+}
+
+func TestTaskTraceTeamPermissionsKeepChildrenAtLeastAsPermissiveAsParent(t *testing.T) {
+	parent := []TaskTraceTeamMemberPermission{{Username: "member", Read: true, Write: true}}
+	child := []TaskTraceTeamMemberPermission{{Username: "member"}}
+
+	result := taskTraceTeamInheritPermissions(child, parent, nil)
+	byUser := taskTraceTeamPermissionMap(result)
+	require.True(t, byUser["member"].Read)
+	require.True(t, byUser["member"].Write)
+}
+
+func TestTaskTraceTeamPermissionsCopyParentDowngradeWhenItChanged(t *testing.T) {
+	parentBefore := []TaskTraceTeamMemberPermission{{Username: "member", Read: true, Write: true}}
+	parentAfter := []TaskTraceTeamMemberPermission{{Username: "member", Read: true}}
+	child := []TaskTraceTeamMemberPermission{{Username: "member", Read: true, Write: true}}
+
+	result := taskTraceTeamInheritPermissions(child, parentAfter, taskTraceTeamChangedPermissionMembers(parentBefore, parentAfter))
+	byUser := taskTraceTeamPermissionMap(result)
+	require.True(t, byUser["member"].Read)
+	require.False(t, byUser["member"].Write)
+}
+
 func TestTaskTraceTeamPermissionsChildAndOutstandingInheritIndependently(t *testing.T) {
 	manifest := TaskTraceTeamManifest{
 		Owner:   "owner",
