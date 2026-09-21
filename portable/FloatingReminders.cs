@@ -116,7 +116,9 @@ internal sealed partial class FloatingWindow {
                 try {
                     await DeleteReminderTarget(target);
                     reminderState.Dismissed.Remove(target.Key);reminderState.SnoozedUntil.Remove(target.Key);changed=true;
-                } catch { }
+                } catch(Exception error) {
+                    if(!closing&&!IsDisposed){status.ForeColor=Color.Firebrick;status.Text="提醒已关闭，删除同步将在后台重试："+error.Message;}
+                }
             }
             if(changed){SaveReminderState();try{await LoadTasks();}catch { }}
         } finally {dismissedReminderCleanupRunning=false;}
@@ -145,18 +147,12 @@ internal sealed partial class FloatingWindow {
         var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var close=new Button{Text="关闭",Width=88,Height=30};var delay=new Button{Text="延迟",Width=88,Height=30};actions.Controls.Add(close);actions.Controls.Add(delay);
         layout.Controls.Add(message);layout.Controls.Add(delayRow);layout.Controls.Add(hint);layout.Controls.Add(actions);dialog.Controls.Add(layout);
         bool handled=false,removing=false;
-        close.Click+=async delegate {
+        close.Click+=delegate {
             if(removing)return;
             removing=true;close.Enabled=false;delay.Enabled=false;minutes.Enabled=false;hint.ForeColor=Color.DimGray;hint.Text="正在删除本次提醒…";
-            try {
-                await DeleteReminderTarget(target);
-                handled=true;reminderState.Dismissed.Remove(target.Key);reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();
-                try {await LoadTasks();}catch { }
-                dialog.Close();
-            } catch(Exception error) {
-                hint.ForeColor=Color.Firebrick;hint.Text="提醒删除失败："+error.Message+" 请保持窗口打开后重试。";
-                removing=false;close.Enabled=true;delay.Enabled=true;minutes.Enabled=true;
-            }
+            handled=true;reminderState.Dismissed[target.Key]=ReminderStamp(target.Due);reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();
+            removing=false;dialog.Close();
+            if(!closing&&!IsDisposed)BeginInvoke(new Action(CleanupDismissedReminderTargets));
         };
         delay.Click+=delegate {handled=true;reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes((double)minutes.Value).ToString("o");SaveReminderState();dialog.Close();};
         dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e) {if(removing){e.Cancel=true;return;}if(!handled){reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes(15).ToString("o");SaveReminderState();}};
