@@ -34,10 +34,12 @@
 				type="button"
 				class="team-member-option"
 				role="option"
+				:title="teamMemberVerification(candidate)"
 				@mousedown.prevent="choose(candidate)"
 			>
-				<strong>{{ candidate.display_name || candidate.username }}</strong>
-				<span>{{ candidate.account_name }}</span>
+				<strong>{{ teamMemberDisplayName(candidate) }}</strong>
+				<span>工号：{{ teamMemberEmployeeId(candidate) || '未提供' }}</span>
+				<span>邮箱：{{ candidate.email || '未提供' }}</span>
 			</button>
 			<p
 				v-if="!loading && !availableCandidates.length"
@@ -56,6 +58,13 @@
 import {computed, onBeforeUnmount, ref, watch} from 'vue'
 
 import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
+import {
+	mergeTeamMemberCandidates,
+	teamMemberDisplayName,
+	teamMemberEmployeeId,
+	teamMemberKey,
+	teamMemberVerification,
+} from '@/helpers/tasktraceTeamMembers'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
 const props = withDefaults(defineProps<{
@@ -80,31 +89,18 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
 let searchRevision = 0
 let searchController: AbortController | undefined
 
-function memberKey(value = '') {
-	return value.trim().split('\\').pop()?.split('@')[0]?.toLowerCase() || ''
-}
-
-function mergeCandidates(...groups: TaskTraceTeamMemberCandidate[][]) {
-	const merged = new Map<string, TaskTraceTeamMemberCandidate>()
-	for (const candidate of groups.flat()) {
-		const key = (candidate.account_name || candidate.username || '').trim().toLocaleLowerCase()
-		if (key && !merged.has(key)) merged.set(key, candidate)
-	}
-	return [...merged.values()]
-}
-
 const availableCandidates = computed(() => {
 	const keyword = query.value.trim().toLocaleLowerCase()
 	const combined: TaskTraceTeamMemberCandidate[] = [
 		...teamStore.memberRoster
-			.filter(member => !keyword || member.toLocaleLowerCase().includes(keyword))
-			.map(member => ({username: memberKey(member), account_name: member, display_name: member})),
+			.map(member => teamStore.memberProfile(member))
+			.filter(member => !keyword || [member.display_name, member.username, member.account_name, member.email].some(value => value?.toLocaleLowerCase().includes(keyword))),
 		...candidates.value,
 	]
 	const seen = new Set<string>()
-	return combined.filter(candidate => {
-		const key = memberKey(candidate.account_name || candidate.username)
-		if (!key || seen.has(key) || props.excluded.some(member => memberKey(member) === key)) return false
+	return mergeTeamMemberCandidates(combined).filter(candidate => {
+		const key = teamMemberKey(candidate.account_name || candidate.username || candidate.email)
+		if (!key || seen.has(key) || props.excluded.some(member => teamMemberKey(member) === key)) return false
 		seen.add(key)
 		return true
 	})
@@ -137,7 +133,7 @@ watch(query, value => {
 			quickResult = await teamStore.searchMembers(keyword, controller.signal, true)
 			if (revision === searchRevision) candidates.value = quickResult
 			const result = await teamStore.searchMembers(keyword, controller.signal)
-			if (revision === searchRevision) candidates.value = mergeCandidates(quickResult, result)
+			if (revision === searchRevision) candidates.value = mergeTeamMemberCandidates(quickResult, result)
 		} catch (cause) {
 			if (revision === searchRevision) {
 				candidates.value = quickResult
@@ -193,10 +189,10 @@ function closeLater() {
 }
 
 .team-member-option {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(8rem, 1fr) minmax(7rem, auto) minmax(10rem, auto);
 	inline-size: 100%;
 	align-items: center;
-	justify-content: space-between;
 	gap: 1rem;
 	padding: .65rem .75rem;
 	border: 0;
@@ -216,6 +212,13 @@ function closeLater() {
 	color: var(--grey-500);
 	font-size: .8rem;
 	overflow-wrap: anywhere;
+}
+
+@media screen and (max-width: $tablet) {
+	.team-member-option {
+		grid-template-columns: 1fr;
+		gap: .15rem;
+	}
 }
 
 .team-member-state {

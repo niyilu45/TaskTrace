@@ -23,6 +23,7 @@ type TaskTraceTeamMemberCandidate struct {
 	Username    string `json:"username" readOnly:"true" doc:"The account's short Windows username used as the TaskTrace collaboration identity."`
 	AccountName string `json:"account_name" readOnly:"true" doc:"The canonical Windows account name used when granting folder and SMB permissions."`
 	DisplayName string `json:"display_name,omitempty" readOnly:"true" doc:"The display name reported by Windows when available."`
+	Email       string `json:"email,omitempty" readOnly:"true" doc:"The email address reported by the Windows directory when available."`
 }
 
 type TaskTraceTeamMemberSearchResult struct {

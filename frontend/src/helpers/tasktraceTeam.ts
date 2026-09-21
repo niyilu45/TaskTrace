@@ -62,7 +62,7 @@ export function collaborationMembers(
 	for (const candidate of [binding?.owner, currentUsername, ...(binding?.members ?? [])]) {
 		const member = candidate?.trim()
 		if (!member) continue
-		const key = member.toLowerCase()
+		const key = (member.split('\\').pop()?.split('@')[0] || member).toLocaleLowerCase()
 		if (seen.has(key)) continue
 		seen.add(key)
 		result.push(member)

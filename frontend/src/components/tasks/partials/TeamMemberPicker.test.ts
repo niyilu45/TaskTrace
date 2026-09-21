@@ -32,7 +32,8 @@ describe('TeamMemberPicker', () => {
 		await wrapper.get('input').trigger('focus')
 
 		const options = wrapper.findAll('.team-member-option strong').map(option => option.text())
-		expect(options).toEqual(expect.arrayContaining(['LAN-PC\\alice', 'LAN-PC\\bob', 'carol']))
+		expect(options).toEqual(expect.arrayContaining(['alice', 'bob', 'carol']))
+		expect(options).toHaveLength(3)
 		expect(teamStore.refresh).toHaveBeenCalledTimes(1)
 	})
 })

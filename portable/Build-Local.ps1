@@ -19,10 +19,8 @@ function Source-Identifier {
 }
 Push-Location $repoRoot
 try {
-    $dependencyManifest = Join-Path $repoRoot 'dist\install-dependencies.txt'
-    $dependencies = Write-TaskTraceDependencyManifest $repoRoot $dependencyManifest
-    Write-Host ('完整构建依赖清单：' + $dependencyManifest)
-    Write-Host ('共 ' + $dependencies.Frontend.Count + ' 项前端锁定依赖、' + $dependencies.GoModules.Count + ' 项 Go 模块。')
+	$dependencyManifest = Join-Path $repoRoot 'dist\install-dependencies.txt'
+	$dependencies = Write-TaskTraceDependencyManifest $repoRoot $dependencyManifest
     if (!$SkipFrontend) {
         $nodeVersion = & node -p 'process.versions.node'
         Assert-Exit 'Node version check'

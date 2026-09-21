@@ -25,22 +25,27 @@ const taskTraceTeamSearchScript = `$Keyword=$env:TASKTRACE_TEAM_KEYWORD
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $result=New-Object 'System.Collections.Generic.List[object]'
-function Add-Candidate([string]$Username,[string]$AccountName,[string]$DisplayName) {
+function Add-Candidate([string]$Username,[string]$AccountName,[string]$DisplayName,[string]$Email) {
   if([string]::IsNullOrWhiteSpace($Username)-or[string]::IsNullOrWhiteSpace($AccountName)){return}
-  if($result | Where-Object {$_.account_name -ieq $AccountName}){return}
-  [void]$result.Add([ordered]@{username=$Username;account_name=$AccountName;display_name=$DisplayName})
+  $existing=$result | Where-Object {$_.account_name -ieq $AccountName -or $_.username -ieq $Username} | Select-Object -First 1
+  if($null -ne $existing){
+    if($DisplayName -and -not $existing.display_name){$existing.display_name=$DisplayName}
+    if($Email -and -not $existing.email){$existing.email=$Email}
+    return
+  }
+  [void]$result.Add([ordered]@{username=$Username;account_name=$AccountName;display_name=$DisplayName;email=$Email})
 }
 try {
   $resolved=([Security.Principal.NTAccount]::new($Keyword)).Translate([Security.Principal.SecurityIdentifier]).Translate([Security.Principal.NTAccount]).Value
   $separator=$resolved.LastIndexOf([char]92)
   $short=if($separator -ge 0){$resolved.Substring($separator+1)}else{$resolved}
-  Add-Candidate $short $resolved ''
+  Add-Candidate $short $resolved '' ''
 } catch {}
 $domainFailure=''
 try {
   foreach($account in @(Get-CimInstance -ClassName Win32_UserAccount -Filter 'LocalAccount = TRUE AND Disabled = FALSE' -ErrorAction Stop)) {
     if(([string]$account.Name).IndexOf($Keyword,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or ([string]$account.FullName).IndexOf($Keyword,[StringComparison]::OrdinalIgnoreCase)-ge 0) {
-      Add-Candidate ([string]$account.Name) (([string]$account.Domain)+'\'+([string]$account.Name)) ([string]$account.FullName)
+      Add-Candidate ([string]$account.Name) (([string]$account.Domain)+'\'+([string]$account.Name)) ([string]$account.FullName) ''
     }
   }
 } catch {}
@@ -60,17 +65,18 @@ try {
     $searcher.SizeLimit=25
 	$searcher.ClientTimeout=[TimeSpan]::FromSeconds(15)
 	$searcher.ServerTimeLimit=[TimeSpan]::FromSeconds(15)
-    $searcher.Filter="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(|(sAMAccountName=*$ldap*)(displayName=*$ldap*)))"
-    foreach($property in @('sAMAccountName','displayName','objectSid')){[void]$searcher.PropertiesToLoad.Add($property)}
+    $searcher.Filter="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(|(sAMAccountName=*$ldap*)(displayName=*$ldap*)(mail=*$ldap*)))"
+    foreach($property in @('sAMAccountName','displayName','mail','objectSid')){[void]$searcher.PropertiesToLoad.Add($property)}
     $found=$searcher.FindAll()
     try {
       foreach($entry in $found) {
         try {
           $username=[string]$entry.Properties['samaccountname'][0]
           $display=if($entry.Properties['displayname'].Count){[string]$entry.Properties['displayname'][0]}else{''}
+          $email=if($entry.Properties['mail'].Count){[string]$entry.Properties['mail'][0]}else{''}
           $sid=[Security.Principal.SecurityIdentifier]::new([byte[]]$entry.Properties['objectsid'][0],0)
           $account=$sid.Translate([Security.Principal.NTAccount]).Value
-          Add-Candidate $username $account $display
+          Add-Candidate $username $account $display $email
         } catch {}
       }
     } finally {$found.Dispose();$searcher.Dispose()}

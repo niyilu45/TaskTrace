@@ -29,6 +29,7 @@
 				:avatar-size="24"
 				:show-username="true"
 				:user="user"
+				:title="teamMode ? teamStore.identityTitleFor(user.username) : undefined"
 			/>
 		</template>
 	</Multiselect>
@@ -84,7 +85,7 @@ const loading = computed(() => projectUserService.loading || teamStore.loading)
 function teamUser(username: string) {
 	let hash = 0
 	for (const char of username.toLocaleLowerCase()) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0
-	return new UserModel({id: -(Math.abs(hash) + 1), username, name: username})
+	return new UserModel({id: -(Math.abs(hash) + 1), username, name: teamStore.displayNameFor(username)})
 }
 
 function syncTeamAssignees() {
@@ -159,10 +160,10 @@ async function removeAssignee(user: IUser) {
 
 async function findUser(query = '') {
 	if (teamMode.value) {
-		const selected = new Set(assignees.value.map(user => user.username.toLocaleLowerCase()))
+		const selected = new Set(assignees.value.map(user => teamStore.memberKey(user.username)))
 		const keyword = query.trim().toLocaleLowerCase()
 		foundUsers.value = teamStore.memberRoster
-			.filter(username => !selected.has(username.toLocaleLowerCase()) && (!keyword || username.toLocaleLowerCase().includes(keyword)))
+			.filter(username => !selected.has(teamStore.memberKey(username)) && (!keyword || teamStore.identityTitleFor(username).toLocaleLowerCase().includes(keyword)))
 			.map(teamUser)
 		return
 	}

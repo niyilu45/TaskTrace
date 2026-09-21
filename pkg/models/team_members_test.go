@@ -17,6 +17,7 @@
 package models
 
 import (
+	"context"
 	"testing"
 
 	"code.vikunja.io/api/pkg/db"
@@ -77,6 +78,44 @@ func TestTeamMember_Create(t *testing.T) {
 		err := tm.Create(s, doer)
 		require.Error(t, err)
 		assert.True(t, user.IsErrUserDoesNotExist(err))
+	})
+	t.Run("TaskTrace Windows collaborator", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		t.Setenv("TASKTRACE_TEAM_ROOT", t.TempDir())
+		originalSearch := taskTraceSearchTeamMembers
+		taskTraceSearchTeamMembers = func(_ context.Context, query string, quick bool) (TaskTraceTeamMemberSearchResult, error) {
+			assert.Equal(t, `CHINA\654321`, query)
+			assert.False(t, quick)
+			return TaskTraceTeamMemberSearchResult{Candidates: []TaskTraceTeamMemberCandidate{{
+				Username:    "654321",
+				AccountName: `CHINA\654321`,
+				DisplayName: "张三",
+				Email:       "zhangsan@example.com",
+			}}}, nil
+		}
+		t.Cleanup(func() { taskTraceSearchTeamMembers = originalSearch })
+
+		s := db.NewSession()
+		defer s.Close()
+		tm := &TeamMember{TeamID: 1, Username: "654321", AccountName: `CHINA\654321`}
+		err := tm.Create(s, doer)
+		require.NoError(t, err)
+		require.NoError(t, s.Commit())
+
+		readSession := db.NewSession()
+		defer readSession.Close()
+		mapped := &user.User{}
+		found, err := readSession.Where("username = ?", "654321").Get(mapped)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "张三", mapped.Name)
+		assert.Equal(t, "zhangsan@example.com", mapped.Email)
+		assert.Equal(t, taskTraceWindowsTeamIssuer, mapped.Issuer)
+		assert.Equal(t, `CHINA\654321`, mapped.Subject)
+		db.AssertExists(t, "team_members", map[string]interface{}{
+			"team_id": 1,
+			"user_id": mapped.ID,
+		}, false)
 	})
 	t.Run("nonexisting team", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)

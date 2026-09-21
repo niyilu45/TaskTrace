@@ -100,9 +100,7 @@ function Install-TaskTraceFrontendDependencies([int]$LockedCount) {
     [long]$downloadedBytes = 0
     $downloadedPackages = 0
     $downloadStartedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Write-Host ('前端锁定依赖：' + $LockedCount + ' 项；开始检查本机 pnpm 缓存。')
-
-    & pnpm install --frozen-lockfile --reporter ndjson 2>&1 | ForEach-Object {
+	& pnpm install --frozen-lockfile --reporter ndjson 2>&1 | ForEach-Object {
         $line = [string]$_
         try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { Write-Host $line; return }
         $name = [string]$event.name
@@ -136,8 +134,7 @@ function Install-TaskTraceFrontendDependencies([int]$LockedCount) {
         }
     }
     if ($LASTEXITCODE -ne 0) { throw ('Frontend dependency installation failed with exit code ' + $LASTEXITCODE) }
-    if ($downloadedPackages -eq 0) { Write-Host '前端依赖均已在 pnpm 缓存中，没有联网下载。' -ForegroundColor Green }
-    else { Write-Host ('前端依赖下载结束：本次下载 ' + $downloadedPackages + ' 项，共 ' + (Format-TaskTraceBytes $downloadedBytes) + '。') -ForegroundColor Green }
+	if ($downloadedPackages -gt 0) { Write-Host ('前端依赖下载结束：本次下载 ' + $downloadedPackages + ' 项，共 ' + (Format-TaskTraceBytes $downloadedBytes) + '。') -ForegroundColor Green }
 }
 
 function ConvertTo-TaskTraceGoCachePart([string]$Value) {
@@ -163,7 +160,8 @@ function Download-TaskTraceGoDependencies([object[]]$Modules) {
         $zip = Get-TaskTraceGoZipPath $cacheRoot $module
         if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { $missing.Add($module) }
     }
-    Write-Host ('Go 模块：' + $Modules.Count + ' 项；已缓存 ' + ($Modules.Count - $missing.Count) + ' 项，需要下载 ' + $missing.Count + ' 项。')
+	if ($missing.Count -eq 0) { return }
+	Write-Host ('Go 模块需要下载：' + $missing.Count + ' 项。')
     [long]$totalBytes = 0
     $overall = [Diagnostics.Stopwatch]::StartNew()
     for ($index = 0; $index -lt $missing.Count; $index++) {
@@ -192,5 +190,4 @@ function Download-TaskTraceGoDependencies([object[]]$Modules) {
         Write-Host ('Go 下载完成：' + $module.Id + ' · ' + (Format-TaskTraceBytes $bytes) + ' · ' + (Format-TaskTraceBytes ([long]($bytes / $seconds))) + '/s；累计 ' + (Format-TaskTraceBytes $totalBytes) + '，平均 ' + (Format-TaskTraceBytes ([long]($totalBytes / $averageSeconds))) + '/s') -ForegroundColor Green
     }
     $overall.Stop()
-    if ($missing.Count -eq 0) { Write-Host 'Go 模块均已缓存，没有联网下载。' -ForegroundColor Green }
 }

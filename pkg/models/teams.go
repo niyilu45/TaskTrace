@@ -82,6 +82,12 @@ type TeamMember struct {
 	TeamID int64 `xorm:"bigint not null INDEX" json:"-" param:"team"`
 	// The username of the member. We use this to prevent automated user id entering.
 	Username string `xorm:"-" json:"username" param:"user" valid:"required" minLength:"1" doc:"The username of the member."`
+	// The Windows account name selected by TaskTrace. Used only by the local build.
+	AccountName string `xorm:"-" json:"account_name,omitempty" doc:"The Windows account name selected by TaskTrace local mode."`
+	// The display name reported by the Windows directory.
+	Name string `xorm:"-" json:"name,omitempty" doc:"The Windows display name used by TaskTrace local mode."`
+	// The email address reported by the Windows directory.
+	Email string `xorm:"-" json:"email,omitempty" doc:"The Windows directory email used by TaskTrace local mode."`
 	// Used under the hood to manage team members
 	UserID int64 `xorm:"bigint not null INDEX" json:"-"`
 	// Whether or not the member is an admin of the team. See the docs for more about what a team admin can do

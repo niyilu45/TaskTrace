@@ -92,7 +92,7 @@
 						>{{ initials(notice.actor || '') }}</span>
 						<span class="detail">
 							<span class="team-notification-message">
-								<strong>{{ notice.actor || '协作成员' }}</strong> 更新了事项
+								<strong><TeamMemberIdentity :username="notice.actor || '协作成员'" /></strong> 更新了事项
 								<button
 									type="button"
 									class="team-task-link"
@@ -204,6 +204,7 @@ import {useI18n} from 'vue-i18n'
 import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
+import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import type {TaskTraceTeamNotification} from '@/client/generated'
 
@@ -340,7 +341,7 @@ async function openTeamNotification(notice: TaskTraceTeamNotification) {
 }
 
 function teamAvatar(username: string, preferred = '') {
-	return preferred || teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+	return preferred || teamStore.avatarFor(username)
 }
 
 function initials(username: string) {

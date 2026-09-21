@@ -227,6 +227,7 @@ import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {useAuthStore} from '@/stores/auth'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {createTeamCommentId, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
+import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {deleteTaskTraceDraft, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
@@ -268,11 +269,11 @@ const progressDates = computed(() => {
 	return [...dates]
 })
 const otherAuthorsForDate = computed(() => {
-	const current = currentUsername.value.trim().toLowerCase()
+	const current = teamMemberKey(currentUsername.value)
 	const result: string[] = []
 	for (const note of finalProgressNotes(referenceHistory.value)) {
-		if (!note.daily || note.date !== date.value || !note.author || note.author.trim().toLowerCase() === current) continue
-		if (!result.some(author => author.toLowerCase() === note.author.trim().toLowerCase())) result.push(note.author.trim())
+		if (!note.daily || note.date !== date.value || !note.author || teamMemberKey(note.author) === current) continue
+		if (!result.some(author => teamMemberKey(author) === teamMemberKey(note.author))) result.push(note.author.trim())
 	}
 	return result
 })

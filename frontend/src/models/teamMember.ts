@@ -6,6 +6,7 @@ import type {IProject} from '@/modelTypes/IProject'
 export default class TeamMemberModel extends UserModel implements ITeamMember {
 	admin = false
 	teamId: IProject['id'] = 0
+	accountName = ''
 
 	constructor(data: Partial<ITeamMember>) {
 		super(data)

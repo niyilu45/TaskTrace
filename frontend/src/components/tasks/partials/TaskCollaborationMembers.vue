@@ -24,7 +24,7 @@
 		>
 			<li
 				v-for="member in members"
-				:key="member.toLowerCase()"
+				:key="teamStore.memberKey(member)"
 			>
 				<img
 					v-if="avatarFor(member)"
@@ -35,7 +35,7 @@
 					v-else
 					class="task-collaboration__avatar"
 				>{{ initials(member) }}</span>
-				<span>{{ member }}</span>
+				<TeamMemberIdentity :username="member" />
 			</li>
 		</ul>
 	</div>
@@ -45,6 +45,7 @@
 import {computed, onMounted, ref} from 'vue'
 
 import Icon from '@/components/misc/Icon'
+import TeamMemberIdentity from './TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {collaborationMembers} from '@/helpers/tasktraceTeam'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
@@ -56,7 +57,7 @@ const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const members = computed(() => collaborationMembers(binding.value, teamStore.status.username))
 
 function avatarFor(username: string) {
-	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+	return teamStore.avatarFor(username)
 }
 
 function initials(username: string) {

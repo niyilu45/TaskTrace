@@ -45,7 +45,7 @@
 						:key="member"
 						class="team-unassigned-row"
 					>
-						<span>{{ member }}</span>
+						<TeamMemberIdentity :username="member" />
 						<XButton
 							variant="secondary"
 							:loading="removingMember === member"
@@ -80,7 +80,13 @@
 				>
 					<div>
 						<strong>{{ binding.root_task_title || `任务 #${binding.root_task_id}` }}</strong>
-						<p>{{ binding.members?.join('、') }}</p>
+						<p class="team-member-names">
+							<TeamMemberIdentity
+								v-for="member in teamStore.uniqueMembers(binding.members ?? [])"
+								:key="teamStore.memberKey(member)"
+								:username="member"
+							/>
+						</p>
 					</div>
 					<XButton
 						v-if="binding.member_link"
@@ -238,7 +244,7 @@
 						class="team-avatar team-avatar--fallback"
 					>{{ initials(teamStore.status.username || '') }}</span>
 					<div>
-						<strong>{{ teamStore.status.username }}</strong>
+						<strong><TeamMemberIdentity :username="teamStore.status.username || ''" /></strong>
 						<p class="has-text-grey">
 							这是其他协作成员看到的身份。
 						</p>
@@ -278,7 +284,7 @@
 						>{{ initials(notice.actor || '') }}</span>
 						<div class="team-notification__content">
 							<p>
-								<strong>{{ notice.actor || '协作成员' }}</strong> 更新了事项
+								<strong><TeamMemberIdentity :username="notice.actor || '协作成员'" /></strong> 更新了事项
 								<button
 									type="button"
 									class="team-notification__task-link"
@@ -348,6 +354,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import Modal from '@/components/misc/Modal.vue'
 import ProjectSearch from '@/components/tasks/partials/ProjectSearch.vue'
 import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
+import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import XButton from '@/components/input/Button.vue'
 import type {IProject} from '@/modelTypes/IProject'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
@@ -386,7 +393,7 @@ const knownMembers = computed(() => [
 ])
 
 function avatarFor(username: string, preferred = '') {
-	return preferred || teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+	return preferred || teamStore.avatarFor(username)
 }
 
 function initials(username: string) {
@@ -493,7 +500,7 @@ async function confirmRemoveMember() {
 	} catch (cause) {
 		try {
 			await teamStore.refresh()
-			if (!teamStore.status.unassigned_members?.some(value => value.toLowerCase() === member.toLowerCase())) {
+			if (!teamStore.status.unassigned_members?.some(value => teamStore.memberKey(value) === teamStore.memberKey(member))) {
 				pendingRemoval.value = ''
 				success({message: `已删除 ${member} 的 teamData 权限。`})
 				return
@@ -668,6 +675,12 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 .team-binding-card p,
 .team-unassigned-row span {
 	overflow-wrap: anywhere;
+}
+
+.team-member-names {
+	display: flex;
+	flex-wrap: wrap;
+	gap: .2rem .65rem;
 }
 
 .team-empty-state {

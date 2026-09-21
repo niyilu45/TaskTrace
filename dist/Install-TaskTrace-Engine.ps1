@@ -19,6 +19,10 @@ function Write-InstallLine([string]$Text, [ConsoleColor]$Color = [ConsoleColor]:
     try { [IO.File]::AppendAllText($logFile, $Text + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
 }
 
+function Write-InstallLog([string]$Text) {
+	try { [IO.File]::AppendAllText($logFile, $Text + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
+}
+
 function Show-InstallResult([string]$Title, [string]$Message, [bool]$IsError = $false) {
     if (!$Interactive) { return }
     try {
@@ -183,11 +187,11 @@ try {
     Write-InstallLine 'TaskTrace 免安装程序生成工具' Cyan
     Write-InstallLine ('源码目录：' + $root)
     Import-FreshBuildEnvironment
-    Write-InstallLine '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
+	Write-InstallLog '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
     $env:TASKTRACE_NPM_PROXY = Select-DependencyProxy 'https://registry.npmjs.org/'
     $env:TASKTRACE_GO_PROXY = Select-DependencyProxy 'https://proxy.golang.org/'
-    Write-InstallLine ('前端依赖网络：' + (Format-ProxyForLog $env:TASKTRACE_NPM_PROXY))
-    Write-InstallLine ('Go 模块网络：' + (Format-ProxyForLog $env:TASKTRACE_GO_PROXY))
+	Write-InstallLog ('前端依赖网络：' + (Format-ProxyForLog $env:TASKTRACE_NPM_PROXY))
+	Write-InstallLog ('Go 模块网络：' + (Format-ProxyForLog $env:TASKTRACE_GO_PROXY))
 
     if ($PSVersionTable.PSVersion -lt [Version]'5.1') {
         Add-DependencyIssue ('PowerShell 版本过低：' + $PSVersionTable.PSVersion) '请升级到 Windows PowerShell 5.1 或 PowerShell 7。'
@@ -201,7 +205,7 @@ try {
         }
     }
 
-    Write-InstallLine 'Git 和 .git 信息不是生成免安装程序的必要条件。'
+	Write-InstallLog 'Git 和 .git 信息不是生成免安装程序的必要条件。'
 
     if (!$SkipFrontend) {
         $nodeCandidates = @(
@@ -224,7 +228,7 @@ try {
             try {
                 Register-CommandPath $node
                 $nodeText = Read-CommandText $node.Source @('--version'); $nodeVersion = Read-Version $nodeText
-                Write-InstallLine ('Node.js：' + $nodeText + ' · ' + $node.Source)
+				Write-InstallLog ('Node.js：' + $nodeText + ' · ' + $node.Source)
                 if ($null -eq $nodeVersion -or $nodeVersion -lt [Version]'24.0.0') { Add-DependencyIssue ('Node.js 版本过低：' + $nodeText + '，要求 24.0.0 或更新版本。') '安装 Node.js 24 或更新版本：https://nodejs.org/' }
             } catch { Add-DependencyIssue ('Node.js 无法运行：' + $_.Exception.Message) '重新安装 Node.js 24 或更新版本：https://nodejs.org/' }
         }
@@ -248,7 +252,7 @@ try {
                     $shimDirectory = Join-Path $env:TEMP 'TaskTrace-build-tools'; New-Item -ItemType Directory -Path $shimDirectory -Force | Out-Null
                     $shim = Join-Path $shimDirectory 'pnpm.cmd'; [IO.File]::WriteAllText($shim, "@echo off`r`n`"$($corepack.Source)`" pnpm %*`r`n", [Text.Encoding]::ASCII)
                     $pnpm = [pscustomobject]@{ Source = $shim }
-                    Write-InstallLine ('pnpm 由 Corepack 提供：' + $corepackText + ' · ' + $corepack.Source)
+					Write-InstallLog ('pnpm 由 Corepack 提供：' + $corepackText + ' · ' + $corepack.Source)
                 } catch { }
             }
         }
@@ -258,7 +262,7 @@ try {
             try {
                 Register-CommandPath $pnpm
                 $pnpmText = Read-CommandText $pnpm.Source @('--version'); $pnpmVersion = Read-Version $pnpmText
-                Write-InstallLine ('pnpm：' + $pnpmText + ' · ' + $pnpm.Source)
+				Write-InstallLog ('pnpm：' + $pnpmText + ' · ' + $pnpm.Source)
                 if ($null -eq $pnpmVersion -or $pnpmVersion -lt [Version]'11.26.0') { Add-DependencyIssue ('pnpm 版本过低：' + $pnpmText + '，要求 11.26.0 或更新版本。') '升级 pnpm：npm install -g pnpm@11.26.0' }
             } catch { Add-DependencyIssue ('pnpm 无法运行：' + $_.Exception.Message) '重新安装 pnpm：npm install -g pnpm@11.26.0' }
         }
@@ -277,7 +281,7 @@ try {
         try {
             Register-CommandPath $go
             $goText = Read-CommandText $go.Source @('version'); $goVersion = Read-Version $goText
-            Write-InstallLine ('Go：' + $goText + ' · ' + $go.Source)
+			Write-InstallLog ('Go：' + $goText + ' · ' + $go.Source)
             if ($null -eq $goVersion -or $goVersion -lt [Version]'1.27.0') { Add-DependencyIssue ('Go 版本过低：' + $goText + '，要求 1.27.0 或更新版本。') '安装 Go 1.27.0 或更新版本：https://go.dev/dl/' }
         } catch { Add-DependencyIssue ('Go 无法运行：' + $_.Exception.Message) '重新安装 Go：https://go.dev/dl/' }
     }
@@ -290,7 +294,7 @@ try {
         try {
             Register-CommandPath $gcc
             $gccTarget = Read-CommandText $gcc.Source @('-dumpmachine')
-            Write-InstallLine ('GCC 目标：' + $gccTarget + ' · ' + $gcc.Source)
+			Write-InstallLog ('GCC 目标：' + $gccTarget + ' · ' + $gcc.Source)
             if ($gccTarget -notmatch 'x86_64.*(mingw|windows)') { Add-DependencyIssue ('GCC 目标不兼容：' + $gccTarget + '，要求 Windows x64 GCC。') '安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
         } catch { Add-DependencyIssue ('GCC 无法运行：' + $_.Exception.Message) '重新安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
     }
@@ -300,14 +304,14 @@ try {
     if ($null -eq $strip) {
         Add-DependencyIssue '未找到 GNU Binutils strip；Windows 服务端构建后需要它整理 PE 文件。' '安装 MSYS2 UCRT64 GCC（其中包含 strip）：https://www.msys2.org/'
     } else {
-        try { Register-CommandPath $strip; Write-InstallLine ('strip：' + (Read-CommandText $strip.Source @('--version')).Split([Environment]::NewLine)[0] + ' · ' + $strip.Source) }
+		try { Register-CommandPath $strip; Write-InstallLog ('strip：' + (Read-CommandText $strip.Source @('--version')).Split([Environment]::NewLine)[0] + ' · ' + $strip.Source) }
         catch { Add-DependencyIssue ('strip 无法运行：' + $_.Exception.Message) '重新安装 MSYS2 UCRT64 GCC：https://www.msys2.org/' }
     }
 
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) {
         Add-DependencyIssue ('未找到 .NET Framework C# 编译器：' + $compiler) '在“启用或关闭 Windows 功能”中启用 .NET Framework 4.8，或安装 .NET Framework 4.8 Developer Pack。'
-    } else { Write-InstallLine ('C# 编译器：' + $compiler) }
+	} else { Write-InstallLog ('C# 编译器：' + $compiler) }
 
     # Dependency inspection does not write package files. A full build only
     # conflicts with an instance launched from the package directory which is
@@ -345,14 +349,14 @@ try {
 
     if ($CheckOnly) {
         Write-InstallLine ''
-        Write-InstallLine '构建依赖检查通过。' Green
-        Show-InstallResult 'TaskTrace：检查完成' ("构建依赖检查通过。`r`n`r`n详细记录：" + $logFile)
+		Write-InstallLine '构建环境检查通过。' Green
+		Show-InstallResult 'TaskTrace：检查完成' ("构建环境检查通过。`r`n`r`n详细记录：" + $logFile)
         exit 0
     }
 
     $stage = '生成免安装程序'
     Write-InstallLine ''
-    Write-InstallLine '依赖检查通过，开始生成免安装程序。若本机尚未缓存项目所需的前端包或 Go 模块，构建工具会自动下载，耗时会相应增加。' Green
+	Write-InstallLine '环境检查通过，开始生成免安装程序。' Green
     $buildScript = Join-Path $root 'portable\Build-Local.ps1'
     $buildArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-PackageDirectory', 'dist/TaskTrace-local', '-Version', $Version, '-SkipArchive')
     if ($SkipFrontend) { $buildArguments += '-SkipFrontend' }

@@ -17,6 +17,12 @@
 package models
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
 	"code.vikunja.io/api/pkg/events"
 	user2 "code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
@@ -48,7 +54,13 @@ func (tm *TeamMember) Create(s *xorm.Session, a web.Auth) (err error) {
 	// Check if the user exists
 	member, err := user2.GetUserByUsername(s, tm.Username)
 	if err != nil {
-		return
+		if !user2.IsErrUserDoesNotExist(err) || strings.TrimSpace(os.Getenv("TASKTRACE_TEAM_ROOT")) == "" {
+			return err
+		}
+		member, err = createTaskTraceWindowsTeamUser(s, tm)
+		if err != nil {
+			return err
+		}
 	}
 	tm.UserID = member.ID
 
@@ -75,6 +87,76 @@ func (tm *TeamMember) Create(s *xorm.Session, a web.Auth) (err error) {
 		Doer:   doerFromAuth(s, a),
 	})
 	return nil
+}
+
+const taskTraceWindowsTeamIssuer = "tasktrace-windows"
+
+var taskTraceSearchTeamMembers = TaskTraceTeamSearchMembers
+
+// createTaskTraceWindowsTeamUser creates a directory mapping for a Windows collaborator.
+// This external issuer has no login provider, so it cannot create a second interactive account.
+func createTaskTraceWindowsTeamUser(s *xorm.Session, tm *TeamMember) (*user2.User, error) {
+	lookup := strings.TrimSpace(tm.AccountName)
+	if lookup == "" {
+		lookup = strings.TrimSpace(tm.Username)
+	}
+	if lookup == "" {
+		return nil, user2.ErrUserDoesNotExist{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	result, err := taskTraceSearchTeamMembers(ctx, lookup, false)
+	if err != nil {
+		return nil, fmt.Errorf("verify Windows team member %s: %w", lookup, err)
+	}
+	var candidate *TaskTraceTeamMemberCandidate
+	for index := range result.Candidates {
+		item := &result.Candidates[index]
+		if taskTraceTeamMembersEqual(item.Username, tm.Username) || taskTraceTeamMembersEqual(item.AccountName, lookup) {
+			candidate = item
+			break
+		}
+	}
+	if candidate == nil {
+		return nil, fmt.Errorf("Windows team member %s was not found", lookup)
+	}
+
+	username := taskTraceTeamMembershipName(candidate.Username)
+	if username == "" {
+		username = taskTraceTeamMembershipName(candidate.AccountName)
+	}
+	name := strings.TrimSpace(candidate.DisplayName)
+	if name == "" {
+		name = strings.TrimSpace(tm.Name)
+	}
+	if name == "" {
+		name = username
+	}
+	email := strings.TrimSpace(candidate.Email)
+	if email == "" {
+		email = strings.TrimSpace(tm.Email)
+	}
+	if email == "" {
+		email = username + "@tasktrace.invalid"
+	}
+	accountName := strings.TrimSpace(candidate.AccountName)
+	if accountName == "" {
+		accountName = lookup
+	}
+
+	created, err := user2.CreateUser(s, &user2.User{
+		Username: username,
+		Name:     name,
+		Email:    email,
+		Issuer:   taskTraceWindowsTeamIssuer,
+		Subject:  accountName,
+		Language: "zh-CN",
+	}, user2.CreateUserOptions{SkipEmailConfirm: true})
+	if user2.IsErrUsernameExists(err) {
+		return user2.GetUserByUsername(s, username)
+	}
+	return created, err
 }
 
 // Delete deletes a user from a team

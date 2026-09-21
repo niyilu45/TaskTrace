@@ -146,11 +146,12 @@
 				:key="note.id"
 				class="history-entry"
 			>
-				<time>{{ note.date }}<template v-if="showAuthors(note.date)"> · {{ authorsByDate[note.date].join('、') }}</template>：</time>
+				<time :title="authorVerification(note.date)">{{ note.date }}<template v-if="showAuthors(note.date)"> · {{ authorNames(note.date) }}</template>：</time>
 				<strong
 					v-if="showAuthors(note.date)"
 					class="progress-author"
-				>{{ note.author }}：</strong><ReadonlyRichText :html="note.progress" />
+					:title="teamStore.identityTitleFor(note.author || '')"
+				>{{ teamStore.displayNameFor(note.author || '') }}：</strong><ReadonlyRichText :html="note.progress" />
 				<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
 			</div>
 			<button
@@ -178,11 +179,14 @@ import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 import {useAuthStore} from '@/stores/auth'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
 const props = defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean}>()
 defineEmits<{toggle: [], edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const authStore = useAuthStore()
+const teamStore = useTasktraceTeamStore()
 const history = ref<TaskComment[]>([])
 const allNotes = computed(() => finalProgressNotes(history.value))
 const progressBacklinkMap = computed(() => progressBacklinks(history.value))
@@ -194,14 +198,16 @@ const authorsByDate = computed<Record<string, string[]>>(() => {
 	for (const note of allNotes.value) {
 		if (!note.author) continue
 		const authors = result[note.date] ||= []
-		if (!authors.includes(note.author)) authors.push(note.author)
+		if (!authors.some(author => teamMemberKey(author) === teamMemberKey(note.author))) authors.push(note.author)
 	}
 	return result
 })
 const showAuthors = (date: string) => {
 	const authors = authorsByDate.value[date] ?? []
-	return authors.length > 1 || (authors.length === 1 && authors[0].toLowerCase() !== (authStore.info?.username || '').toLowerCase())
+	return authors.length > 1 || (authors.length === 1 && teamMemberKey(authors[0]) !== teamMemberKey(authStore.info?.username || ''))
 }
+const authorNames = (date: string) => (authorsByDate.value[date] ?? []).map(author => teamStore.displayNameFor(author)).join('、')
+const authorVerification = (date: string) => (authorsByDate.value[date] ?? []).map(author => teamStore.identityTitleFor(author)).join('\n')
 const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
 watch(() => props.progressDays, () => { showAllProgress.value = false })
 const numberedOutstanding = computed(() => sharedOutstanding(history.value).items.map((item, index) => ({item, number: index + 1})))

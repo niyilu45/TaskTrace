@@ -65,6 +65,7 @@
 						v-for="person in peopleOptions"
 						:key="person.key"
 						class="people-filter__option"
+						:title="teamStore.identityTitleFor(person.username)"
 					>
 						<input
 							type="checkbox"
@@ -82,7 +83,6 @@
 						>{{ person.initials }}</span>
 						<span class="people-filter__name">
 							<strong>{{ person.name }}</strong>
-							<small v-if="person.name !== person.username">{{ person.username }}</small>
 						</span>
 						<small v-if="person.key === currentPersonKey">自己</small>
 					</label>
@@ -446,23 +446,24 @@ const peopleMenuOpen = ref(false)
 const selectedPersonKeys = ref<string[]>([])
 const personSelectionDirty = ref(false)
 const currentUsername = computed(() => teamStore.status.username?.trim() || authStore.info?.username?.trim() || '')
-const currentPersonKey = computed(() => currentUsername.value.toLocaleLowerCase())
+const currentPersonKey = computed(() => teamStore.memberKey(currentUsername.value))
 const peopleOptions = computed(() => {
 	const people = new Map<string, {key: string, username: string, name: string, avatar: string, initials: string}>()
 	const names = new Map<string, string>()
 	for (const task of tasks.value) {
 		for (const user of [task.created_by, ...(task.assignees ?? [])]) {
 			const username = user?.username?.trim()
-			if (username) names.set(username.toLocaleLowerCase(), user?.name?.trim() || username)
+			if (username) names.set(teamStore.memberKey(username), user?.name?.trim() || username)
 		}
 	}
 	const add = (username: string) => {
 		const value = username.trim()
 		if (!value) return
-		const key = value.toLocaleLowerCase()
+		const key = teamStore.memberKey(value)
 		if (people.has(key)) return
-		const avatar = teamStore.status.profiles?.find(profile => profile.username?.toLocaleLowerCase() === key)?.avatar || ''
-		people.set(key, {key, username: value, name: names.get(key) || value, avatar, initials: value.slice(0, 2).toLocaleUpperCase() || '?'})
+		const avatar = teamStore.avatarFor(value)
+		const name = names.get(key) || teamStore.displayNameFor(value)
+		people.set(key, {key, username: value, name, avatar, initials: name.slice(0, 2).toLocaleUpperCase() || '?'})
 	}
 	add(currentUsername.value)
 	for (const username of teamStore.memberRoster) add(username)
@@ -492,7 +493,7 @@ const personMatches = computed<ReadonlySet<number> | null>(() => {
 	if (!personFilterActive.value) return null
 	const selected = new Set(selectedPersonKeys.value)
 	return new Set(tasks.value.filter(task => progressTaskPeople(task, teamStore.bindingForTask(task.id), currentUsername.value)
-		.some(username => selected.has(username.toLocaleLowerCase()))).map(task => task.id))
+		.some(username => selected.has(teamStore.memberKey(username)))).map(task => task.id))
 })
 const eligibleTaskIds = computed<ReadonlySet<number> | null>(() => {
 	const filters = [recentProgressMatches.value, personMatches.value].filter((value): value is ReadonlySet<number> => value !== null)

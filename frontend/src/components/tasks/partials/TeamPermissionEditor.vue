@@ -80,7 +80,7 @@
 							<tbody>
 								<tr
 									v-for="permission in draftPermissions"
-									:key="permission.username.toLowerCase()"
+									:key="teamStore.memberKey(permission.username)"
 								>
 									<td>
 										<span class="permission-member">
@@ -93,7 +93,7 @@
 												v-else
 												class="permission-member__avatar"
 											>{{ initials(permission.username) }}</span>
-											{{ permission.username }}
+											<TeamMemberIdentity :username="permission.username" />
 										</span>
 									</td>
 									<td>
@@ -166,6 +166,7 @@
 import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
+import TeamMemberIdentity from './TeamMemberIdentity.vue'
 import type {
 	TaskTraceTeamBindingStatus,
 	TaskTraceTeamPermissionTarget,
@@ -207,7 +208,7 @@ function targetKey(target: TaskTraceTeamPermissionTarget) {
 
 function signature(permissions: EditablePermission[]) {
 	return JSON.stringify(permissions.map(permission => ({
-		username: permission.username.toLowerCase(),
+		username: teamStore.memberKey(permission.username),
 		read: permission.read,
 		write: permission.write,
 	})))
@@ -251,7 +252,7 @@ function setWrite(permission: EditablePermission, value: boolean) {
 }
 
 function avatarFor(username: string) {
-	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+	return teamStore.avatarFor(username)
 }
 
 function initials(username: string) {

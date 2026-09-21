@@ -22,17 +22,26 @@ import {
 	type TaskTraceTeamStatus,
 } from '@/client/generated'
 import {overrideTeamLinkRepository} from '@/helpers/tasktraceTeam'
+import {
+	mergeTeamMemberCandidates,
+	teamMemberDisplayName,
+	teamMemberKey,
+	teamMemberVerification,
+} from '@/helpers/tasktraceTeamMembers'
 
 export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const status = ref<TaskTraceTeamStatus>({enabled: false, bindings: [], conflicts: [], notifications: []})
 	const loading = ref(false)
 	const loaded = ref(false)
+	const directoryProfiles = ref<Record<string, TaskTraceTeamMemberCandidate>>({})
 	let activeRead: Promise<TaskTraceTeamStatus> | null = null
 	let pending = 0
+	const hydratingProfiles = new Set<string>()
 
 	function apply(next?: TaskTraceTeamStatus) {
 		if (next) status.value = next
 		loaded.value = true
+		void hydrateMemberProfiles()
 		return status.value
 	}
 
@@ -92,7 +101,60 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			signal,
 			headers: quick ? {'X-TaskTrace-Quick': 'true'} : undefined,
 		})
-		return result.data.candidates ?? []
+		const candidates = result.data.candidates ?? []
+		rememberMemberProfiles(candidates)
+		return candidates
+	}
+
+	function rememberMemberProfiles(candidates: TaskTraceTeamMemberCandidate[]) {
+		const next = {...directoryProfiles.value}
+		for (const candidate of candidates) {
+			const key = teamMemberKey(candidate.account_name || candidate.username || candidate.email)
+			if (!key) continue
+			next[key] = mergeTeamMemberCandidates([next[key]].filter(Boolean) as TaskTraceTeamMemberCandidate[], [candidate])[0]
+		}
+		directoryProfiles.value = next
+	}
+
+	function memberProfile(username: string): TaskTraceTeamMemberCandidate {
+		const key = teamMemberKey(username)
+		return directoryProfiles.value[key] || {
+			username: key || username,
+			account_name: username,
+		}
+	}
+
+	function displayNameFor(username: string) {
+		return teamMemberDisplayName(memberProfile(username))
+	}
+
+	function identityTitleFor(username: string) {
+		return teamMemberVerification(memberProfile(username))
+	}
+
+	function avatarFor(username: string) {
+		const key = teamMemberKey(username)
+		return status.value.profiles?.find(profile => teamMemberKey(profile.username) === key)?.avatar || ''
+	}
+
+	function uniqueMembers(values: Array<string | null | undefined>) {
+		const members = new Map<string, string>()
+		for (const value of values) {
+			const member = value?.trim()
+			const key = teamMemberKey(member)
+			if (member && key && !members.has(key)) members.set(key, member)
+		}
+		return [...members.values()]
+	}
+
+	async function hydrateMemberProfiles() {
+		for (const member of memberRoster.value) {
+			const key = teamMemberKey(member)
+			const profile = directoryProfiles.value[key]
+			if (!key || hydratingProfiles.has(key) || (profile?.display_name && profile.email)) continue
+			hydratingProfiles.add(key)
+			void searchMembers(key).catch(() => undefined).finally(() => hydratingProfiles.delete(key))
+		}
 	}
 
 	async function grantMember(accountName: string, elevate = false) {
@@ -129,8 +191,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	function permissionForTask(taskId: number) {
 		const binding = bindingForTask(taskId)
 		const target = binding?.permission_targets?.find(item => item.kind === 'task' && item.task_id === taskId)
-		const username = status.value.username?.toLowerCase()
-		return target?.permissions?.find(permission => permission.username?.toLowerCase() === username)
+		const username = teamMemberKey(status.value.username)
+		return target?.permissions?.find(permission => teamMemberKey(permission.username) === username)
 	}
 
 	function canWriteTask(taskId: number) {
@@ -138,7 +200,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		if (!binding) return true
 		const permission = permissionForTask(taskId)
 		if (permission) return permission.write === true
-		return binding.owner?.toLowerCase() === status.value.username?.toLowerCase()
+		return teamMemberKey(binding.owner) === teamMemberKey(status.value.username)
 	}
 
 	async function configureAssignees(shareId: string, taskId: number, assignees: string[]) {
@@ -157,7 +219,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		const add = (value?: string | null) => {
 			const username = value?.trim()
 			if (!username) return
-			const key = username.toLocaleLowerCase()
+			const key = teamMemberKey(username)
 			if (!members.has(key)) members.set(key, username)
 		}
 		add(status.value.username)
@@ -174,5 +236,5 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
 	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
 })

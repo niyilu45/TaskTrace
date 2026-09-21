@@ -2820,6 +2820,10 @@ export type TaskTraceTeamMemberCandidate = {
      */
     readonly display_name?: string;
     /**
+     * The email address reported by the Windows directory when available.
+     */
+    readonly email?: string;
+    /**
      * The account's short Windows username used as the TaskTrace collaboration identity.
      */
     readonly username?: string;
@@ -2982,13 +2986,13 @@ export type TaskTraceTeamPermissionsRequest = {
      */
     readonly $schema?: string;
     /**
+     * When supplied for a task, replaces the collaboration members assigned to complete it.
+     */
+    assignees?: Array<string>;
+    /**
      * The outstanding-item id to update. Leave empty to update the task itself.
      */
     outstanding_id?: string;
-    /**
-     * When supplied for a task, replaces the collaboration members assigned to complete it.
-     */
-    assignees?: Array<string> | null;
     /**
      * The complete set of editable member read and write choices.
      */
@@ -3163,6 +3167,10 @@ export type TeamMember = {
      */
     readonly $schema?: string;
     /**
+     * The Windows account name selected by TaskTrace local mode.
+     */
+    account_name?: string;
+    /**
      * Whether the member is an admin of the team. Team admins can add and remove members and toggle other members' admin status.
      */
     admin?: boolean;
@@ -3171,9 +3179,17 @@ export type TeamMember = {
      */
     readonly created?: string;
     /**
+     * The Windows directory email used by TaskTrace local mode.
+     */
+    email?: string;
+    /**
      * The unique, numeric id of this team member relation. Set by the server.
      */
     readonly id?: number;
+    /**
+     * The Windows display name used by TaskTrace local mode.
+     */
+    name?: string;
     /**
      * The username of the member.
      */
@@ -5242,13 +5258,13 @@ export type TaskTraceTeamPermissionTargetWritable = {
 
 export type TaskTraceTeamPermissionsRequestWritable = {
     /**
+     * When supplied for a task, replaces the collaboration members assigned to complete it.
+     */
+    assignees?: Array<string>;
+    /**
      * The outstanding-item id to update. Leave empty to update the task itself.
      */
     outstanding_id?: string;
-    /**
-     * When supplied for a task, replaces the collaboration members assigned to complete it.
-     */
-    assignees?: Array<string> | null;
     /**
      * The complete set of editable member read and write choices.
      */
@@ -5331,9 +5347,21 @@ export type TeamWritable = {
 
 export type TeamMemberWritable = {
     /**
+     * The Windows account name selected by TaskTrace local mode.
+     */
+    account_name?: string;
+    /**
      * Whether the member is an admin of the team. Team admins can add and remove members and toggle other members' admin status.
      */
     admin?: boolean;
+    /**
+     * The Windows directory email used by TaskTrace local mode.
+     */
+    email?: string;
+    /**
+     * The Windows display name used by TaskTrace local mode.
+     */
+    name?: string;
     /**
      * The username of the member.
      */
@@ -10864,6 +10892,12 @@ export type TasktraceTeamImportResponse = TasktraceTeamImportResponses[keyof Tas
 
 export type TasktraceTeamMembersAccessCreateData = {
     body: TaskTraceTeamMemberAccessRequestWritable;
+    headers?: {
+        /**
+         * Retry this permission change with a one-time Windows administrator prompt.
+         */
+        'X-TaskTrace-Elevate'?: boolean;
+    };
     path?: never;
     query?: never;
     url: '/tasktrace/team/members/access';
@@ -10889,6 +10923,12 @@ export type TasktraceTeamMembersAccessCreateResponse = TasktraceTeamMembersAcces
 
 export type TasktraceTeamMembersAccessDeleteData = {
     body?: never;
+    headers?: {
+        /**
+         * Retry this permission change with a one-time Windows administrator prompt.
+         */
+        'X-TaskTrace-Elevate'?: boolean;
+    };
     path: {
         /**
          * The Windows account whose unassigned access should be removed.
@@ -10944,6 +10984,12 @@ export type TasktraceTeamMembersImportResponse = TasktraceTeamMembersImportRespo
 
 export type TasktraceTeamMembersSearchData = {
     body?: never;
+    headers?: {
+        /**
+         * Return direct and local matches without waiting for domain search.
+         */
+        'X-TaskTrace-Quick'?: boolean;
+    };
     path?: never;
     query?: {
         /**

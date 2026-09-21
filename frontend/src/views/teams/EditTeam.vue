@@ -75,8 +75,28 @@
 				class="p-4"
 				@submit.prevent="addUser"
 			>
+				<div v-if="isLocalBuild">
+					<TeamMemberPicker
+						:input-id="`edit-team-member-search-${teamId}`"
+						label="搜索团队成员"
+						:excluded="teamMemberNames"
+						@select="selectWindowsMember"
+					/>
+					<div
+						v-if="newWindowsMember"
+						class="selected-directory-member"
+						:title="teamMemberVerification(newWindowsMember)"
+					>
+						<strong>{{ teamMemberDisplayName(newWindowsMember) }}</strong>
+						<span>工号：{{ teamMemberEmployeeId(newWindowsMember) }}</span>
+						<span>邮箱：{{ newWindowsMember.email || '未提供' }}</span>
+					</div>
+				</div>
 				<div class="field has-addons">
-					<div class="control is-expanded">
+					<div
+						v-if="!isLocalBuild"
+						class="control is-expanded"
+					>
 						<Multiselect
 							v-model="newMember"
 							:loading="userService.loading"
@@ -97,6 +117,7 @@
 					<div class="control">
 						<XButton
 							icon="plus"
+							:disabled="isLocalBuild && !newWindowsMember"
 							@click="addUser"
 						>
 							{{ $t('team.edit.addUser') }}
@@ -118,7 +139,12 @@
 							:key="m.id"
 						>
 							<td>
+								<TeamMemberIdentity
+									v-if="isLocalBuild"
+									:username="m.username"
+								/>
 								<User
+									v-else
 									:avatar-size="24"
 									:user="m"
 									class="m-0"
@@ -244,10 +270,13 @@ import FancyCheckbox from '@/components/input/FancyCheckbox.vue'
 import FormField from '@/components/input/FormField.vue'
 import Multiselect from '@/components/input/Multiselect.vue'
 import User from '@/components/misc/User.vue'
+import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
+import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
 
 import {getDisplayName} from '@/models/user'
 import TeamService from '@/services/team'
 import TeamMemberService from '@/services/teamMember'
+import TeamMemberModel from '@/models/teamMember'
 import UserService from '@/services/user'
 
 import {PERMISSIONS as Permissions} from '@/constants/permissions'
@@ -256,6 +285,15 @@ import {useTitle} from '@/composables/useTitle'
 import {success} from '@/message'
 import {useAuthStore} from '@/stores/auth'
 import {useConfigStore} from '@/stores/config'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {
+	teamMemberCandidatePayload,
+	teamMemberDisplayName,
+	teamMemberEmployeeId,
+	teamMemberVerification,
+} from '@/helpers/tasktraceTeamMembers'
 
 import type {ITeam} from '@/modelTypes/ITeam'
 import type {IUser} from '@/modelTypes/IUser'
@@ -263,6 +301,7 @@ import type {ITeamMember} from '@/modelTypes/ITeamMember'
 
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+const tasktraceTeamStore = useTasktraceTeamStore()
 const route = useRoute()
 const router = useRouter()
 const {t} = useI18n({useScope: 'global'})
@@ -290,7 +329,9 @@ const team = ref<ITeam>()
 const teamId = computed(() => Number(route.params.id))
 const memberToDelete = ref<ITeamMember>()
 const newMember = ref<IUser>()
+const newWindowsMember = ref<TaskTraceTeamMemberCandidate>()
 const foundUsers = ref<IUser[]>()
+const teamMemberNames = computed(() => (team.value?.members ?? []).map(member => member.username))
 
 const showDeleteModal = ref(false)
 const showUserDeleteModal = ref(false)
@@ -304,6 +345,11 @@ loadTeam()
 
 async function loadTeam() {
 	team.value = await teamService.value.get({id: teamId.value})
+	if (isLocalBuild) {
+		for (const member of team.value?.members ?? []) {
+			void tasktraceTeamStore.searchMembers(member.username).catch(() => undefined)
+		}
+	}
 	title.value = t('team.edit.title', {team: team.value?.name})
 	useTitle(() => title.value)
 }
@@ -340,17 +386,22 @@ async function deleteMember() {
 
 async function addUser() {
 	showMustSelectUserError.value = false
-	if(!newMember.value) {
+	if(!newMember.value && !newWindowsMember.value) {
 		showMustSelectUserError.value = true
 		return
 	}
-	await teamMemberService.value.create({
-		teamId: teamId.value,
-		username: newMember.value.username,
-	})
+	const member = newWindowsMember.value
+		? new TeamMemberModel({...teamMemberCandidatePayload(newWindowsMember.value), teamId: teamId.value})
+		: new TeamMemberModel({teamId: teamId.value, username: newMember.value!.username})
+	await teamMemberService.value.create(member)
 	newMember.value = null
+	newWindowsMember.value = undefined
 	await loadTeam()
 	success({message: t('team.edit.userAddedSuccess')})
+}
+
+function selectWindowsMember(candidate: TaskTraceTeamMemberCandidate) {
+	newWindowsMember.value = candidate
 }
 
 async function toggleUserType(member: ITeamMember) {
@@ -401,6 +452,30 @@ async function leave() {
 
 	.content {
 		padding: 0;
+	}
+}
+
+.selected-directory-member {
+	display: grid;
+	grid-template-columns: minmax(8rem, 1fr) minmax(7rem, auto) minmax(10rem, auto);
+	gap: 1rem;
+	padding: .65rem .75rem;
+	margin-block: .75rem;
+	border: 1px solid var(--grey-200);
+	border-radius: $radius;
+	background: var(--grey-50);
+}
+
+.selected-directory-member span {
+	color: var(--grey-500);
+	font-size: .85rem;
+	overflow-wrap: anywhere;
+}
+
+@media screen and (max-width: $tablet) {
+	.selected-directory-member {
+		grid-template-columns: 1fr;
+		gap: .15rem;
 	}
 }
 </style>

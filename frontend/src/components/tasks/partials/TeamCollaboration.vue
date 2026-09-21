@@ -13,8 +13,8 @@
 				<div class="team-members">
 					<strong>协作成员：</strong>
 					<span
-						v-for="member in binding.members"
-						:key="member"
+						v-for="member in teamStore.uniqueMembers(binding.members ?? [])"
+						:key="teamStore.memberKey(member)"
 						class="team-member-chip"
 					>
 						<img
@@ -27,7 +27,7 @@
 							v-else
 							class="team-member-avatar team-member-avatar--fallback"
 						>{{ initials(member) }}</span>
-						{{ member }}
+						<TeamMemberIdentity :username="member" />
 					</span>
 				</div>
 				<p
@@ -74,7 +74,7 @@
 				</p>
 				<label
 					v-for="member in rosterCandidates"
-					:key="member.toLowerCase()"
+					:key="teamStore.memberKey(member)"
 					class="checkbox team-member"
 				>
 					<input
@@ -82,7 +82,7 @@
 						type="checkbox"
 						:value="member"
 					>
-					{{ member }}
+					<TeamMemberIdentity :username="member" />
 				</label>
 				<TeamMemberPicker
 					:input-id="`team-members-edit-${taskId}`"
@@ -96,13 +96,13 @@
 				>
 					<button
 						v-for="member in selectedMembers"
-						:key="member"
+						:key="teamStore.memberKey(member)"
 						type="button"
 						class="team-member-chip team-member-chip--remove"
-						:title="`从当前协作任务移除 ${member}`"
+						:title="`从当前协作任务移除 ${teamStore.identityTitleFor(member)}`"
 						@click="removeSelected(member)"
 					>
-						{{ member }} ×
+						{{ teamStore.displayNameFor(member) }} ×
 					</button>
 				</div>
 				<div class="team-member-editor__actions">
@@ -181,7 +181,7 @@
 				<span class="label">从 teamData 文件夹权限中发现的成员</span>
 				<label
 					v-for="member in candidateMembers"
-					:key="member"
+					:key="teamStore.memberKey(member)"
 					class="checkbox team-member"
 				>
 					<input
@@ -189,7 +189,7 @@
 						type="checkbox"
 						:value="member"
 					>
-					{{ member }}
+					<TeamMemberIdentity :username="member" />
 				</label>
 			</div>
 			<div class="field">
@@ -204,13 +204,13 @@
 				>
 					<button
 						v-for="member in selectedMembers"
-						:key="member"
+						:key="teamStore.memberKey(member)"
 						type="button"
 						class="team-member-chip team-member-chip--remove"
-						:title="`移除 ${member}`"
+						:title="`移除 ${teamStore.identityTitleFor(member)}`"
 						@click="removeSelected(member)"
 					>
-						{{ member }} ×
+						{{ teamStore.displayNameFor(member) }} ×
 					</button>
 				</div>
 			</div>
@@ -271,6 +271,7 @@ import {computed, onMounted, ref} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
 import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
+import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import TeamPermissionEditor from '@/components/tasks/partials/TeamPermissionEditor.vue'
 import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
@@ -287,11 +288,11 @@ const openingPermissions = ref(false)
 const editingMembers = ref(false)
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
-const candidateMembers = computed(() => teamStore.memberRoster.filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
-const rosterCandidates = computed(() => teamStore.memberRoster.filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
+const candidateMembers = computed(() => teamStore.memberRoster.filter(member => teamStore.memberKey(member) !== teamStore.memberKey(teamStore.status.username)))
+const rosterCandidates = computed(() => candidateMembers.value)
 
 function avatarFor(username: string) {
-	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
+	return teamStore.avatarFor(username)
 }
 
 function initials(username: string) {
@@ -303,7 +304,7 @@ onMounted(() => {
 })
 
 async function shareTask() {
-	const members = [...new Set(selectedMembers.value.filter(value => value.toLowerCase() !== teamStore.status.username?.toLowerCase()))]
+	const members = teamStore.uniqueMembers(selectedMembers.value.filter(value => teamStore.memberKey(value) !== teamStore.memberKey(teamStore.status.username)))
 	if (!members.length) {
 		error({message: '请至少选择或填写一位其他成员。'})
 		return
@@ -318,11 +319,11 @@ async function shareTask() {
 
 function addMember(candidate: TaskTraceTeamMemberCandidate) {
 	const member = candidate.account_name || candidate.username
-	if (member && !selectedMembers.value.includes(member)) selectedMembers.value.push(member)
+	if (member && !selectedMembers.value.some(value => teamStore.memberKey(value) === teamStore.memberKey(member))) selectedMembers.value.push(member)
 }
 
 function removeSelected(member: string) {
-	selectedMembers.value = selectedMembers.value.filter(value => value !== member)
+	selectedMembers.value = selectedMembers.value.filter(value => teamStore.memberKey(value) !== teamStore.memberKey(member))
 }
 
 async function importMembersForShare() {
@@ -333,7 +334,7 @@ async function importMembersForShare() {
 	try {
 		const result = await teamStore.importMembers(memberLink.value.trim())
 		for (const member of result.added ?? []) {
-			if (!selectedMembers.value.includes(member)) selectedMembers.value.push(member)
+			if (!selectedMembers.value.some(value => teamStore.memberKey(value) === teamStore.memberKey(member))) selectedMembers.value.push(member)
 		}
 		memberLink.value = ''
 		const failed = result.failed ?? []
@@ -360,7 +361,7 @@ async function copyMemberLink() {
 }
 
 function openMemberEditor() {
-	selectedMembers.value = (binding.value?.members ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase())
+	selectedMembers.value = teamStore.uniqueMembers(binding.value?.members ?? []).filter(member => teamStore.memberKey(member) !== teamStore.memberKey(teamStore.status.username))
 	editingMembers.value = true
 }
 

@@ -17,7 +17,14 @@ vi.mock('@/services/taskComment', () => ({default: class {loading = false; total
 vi.mock('@/models/taskComment', () => ({default: class {constructor(data: object = {}) {Object.assign(this, data)}}}))
 vi.mock('@/stores/config', () => ({useConfigStore: () => ({taskCommentsEnabled: true, maxItemsPerPage: 100, frontendUrl: 'http://localhost/'})}))
 vi.mock('@/stores/auth', () => ({useAuthStore: () => ({info: {id: 1}, settings: {frontendSettings: {commentSortOrder: 'asc'}}})}))
-vi.mock('@/stores/tasktraceTeam', () => ({useTasktraceTeamStore: () => ({loaded: true, status: {profiles: []}, refresh: vi.fn()})}))
+vi.mock('@/stores/tasktraceTeam', () => ({useTasktraceTeamStore: () => ({
+	loaded: true,
+	status: {profiles: []},
+	refresh: vi.fn(),
+	avatarFor: vi.fn(() => ''),
+	displayNameFor: vi.fn((username: string) => username),
+	identityTitleFor: vi.fn((username: string) => username),
+})}))
 vi.mock('@/helpers/attachments', () => ({uploadFile: vi.fn(), uploadFilesForEditor: vi.fn()}))
 vi.mock('@/message', () => ({success: vi.fn()}))
 vi.mock('@/helpers/time/formatDate', () => ({formatDateLong: () => '', formatDisplayDate: () => ''}))
