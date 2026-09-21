@@ -1,7 +1,7 @@
 const marker = /<!--tasktrace-team:([A-Za-z0-9_-]+)-->/
 const teamLinkPrefix = 'tasktrace-team://import/'
 
-export type TeamCommentMarker = {id: string, author: string}
+export type TeamCommentMarker = {id: string, author: string, editor?: string}
 
 export function readTeamCommentMarker(html: string): TeamCommentMarker | null {
 	const encoded = html.match(marker)?.[1]
@@ -18,6 +18,11 @@ export function readTeamCommentMarker(html: string): TeamCommentMarker | null {
 
 export function teamCommentAuthor(html: string, fallback: string) {
 	return readTeamCommentMarker(html)?.author || fallback
+}
+
+export function teamCommentActor(html: string, fallback: string) {
+	const value = readTeamCommentMarker(html)
+	return value?.editor || value?.author || fallback
 }
 
 export function serializeTeamCommentMarker(value: TeamCommentMarker) {

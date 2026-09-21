@@ -51,6 +51,7 @@ const props = defineProps<{
 	taskId: number,
 	date: string,
 	author: string,
+	editor: string,
 	history: TaskComment[],
 }>()
 const emit = defineEmits<{saved: []}>()
@@ -128,7 +129,7 @@ async function save() {
 		const numericAttribute = absorbedIds.length ? ` data-tasktrace-merged="${absorbedIds.join(',')}"` : ''
 		const teamAttribute = absorbedTeamIds.length ? ` data-tasktrace-team-merged="${absorbedTeamIds.join(',')}"` : ''
 		const teamId = createTeamCommentId()
-		const comment = `<h3${numericAttribute}${teamAttribute}>每日进展 · ${props.date}</h3>${body}${serializeProgressReferences(references.value)}${serializeTeamCommentMarker({id: teamId, author: props.author})}`
+		const comment = `<h3${numericAttribute}${teamAttribute}>每日进展 · ${props.date}</h3>${body}${serializeProgressReferences(references.value)}${serializeTeamCommentMarker({id: teamId, author: props.author, editor: props.editor})}`
 		const result = await taskCommentsCreate({path: {task: props.taskId}, body: {comment}, headers: undoGroupHeaders()})
 		progress.value = body
 		loadedId.value = result.data.id

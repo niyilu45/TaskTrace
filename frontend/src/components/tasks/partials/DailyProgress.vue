@@ -69,6 +69,7 @@
 					:task-id="taskId"
 					:date="date"
 					:author="author"
+					:editor="currentUsername"
 					:history="referenceHistory"
 					@saved="memberSaved"
 				/>
@@ -633,6 +634,8 @@ onBeforeUnmount(() => {
 .reference-table {
 	inline-size: 100%;
 	border-collapse: collapse;
+	background: var(--white);
+	color: var(--text);
 
 	th,
 	td {
@@ -664,9 +667,13 @@ onBeforeUnmount(() => {
 	padding: 1.25rem;
 	border-radius: $radius;
 	background: var(--white);
+	color: var(--text);
 	overflow: auto;
 
-	h2 { margin-block: 0 .5rem; }
+	h2 {
+		margin-block: 0 .5rem;
+		color: var(--text-strong);
+	}
 }
 
 .reference-dialog__actions {

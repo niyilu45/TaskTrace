@@ -99,6 +99,13 @@
 						/>
 						<strong :title="commentAuthorTitle(c)">{{ commentAuthor(c) }}</strong>
 						<span
+							v-if="commentProgressEditLabel(c)"
+							class="comment-progress-editor-label"
+							:title="commentProgressEditTitle(c)"
+						>
+							{{ commentProgressEditLabel(c) }}
+						</span>
+						<span
 							v-tooltip="formatDateLong(c.created)"
 							class="has-text-grey"
 						>
@@ -319,7 +326,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import Reactions from '@/components/input/Reactions.vue'
 import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
 import {commentReplyContextKey, scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
-import {readTeamCommentMarker, teamCommentAuthor} from '@/helpers/tasktraceTeam'
+import {readTeamCommentMarker, teamCommentActor} from '@/helpers/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 
 const props = withDefaults(defineProps<{
@@ -378,15 +385,25 @@ const commentSortOrder = ref<'asc' | 'desc'>('desc')
 const comments = ref<ITaskComment[]>([])
 const selectedAuthor = ref('')
 const commentIsTeamAuthored = (comment: ITaskComment) => Boolean(readTeamCommentMarker(comment.comment || ''))
-const commentAuthorIdentity = (comment: ITaskComment) => teamCommentAuthor(comment.comment || '', getDisplayName(comment.author))
+const commentAuthorIdentity = (comment: ITaskComment) => teamCommentActor(comment.comment || '', getDisplayName(comment.author))
 const commentAuthor = (comment: ITaskComment) => commentIsTeamAuthored(comment) ? teamStore.displayNameFor(commentAuthorIdentity(comment)) : commentAuthorIdentity(comment)
 const commentAuthorTitle = (comment: ITaskComment) => commentIsTeamAuthored(comment) ? teamStore.identityTitleFor(commentAuthorIdentity(comment)) : commentAuthor(comment)
+const commentProgressEditLabel = (comment: ITaskComment) => {
+	const value = readTeamCommentMarker(comment.comment || '')
+	if (!value?.editor || teamMemberKey(value.editor) === teamMemberKey(value.author)) return ''
+	return `修改了 ${teamStore.displayNameFor(value.author)} 的进展`
+}
+const commentProgressEditTitle = (comment: ITaskComment) => {
+	const author = readTeamCommentMarker(comment.comment || '')?.author || ''
+	return author ? `被修改的进展属于：${teamStore.identityTitleFor(author)}` : ''
+}
 const commentAvatar = (comment: ITaskComment) => {
 	return teamStore.avatarFor(commentAuthorIdentity(comment))
 }
 const commentOwnedByCurrent = (comment: ITaskComment) => {
 	const marker = readTeamCommentMarker(comment.comment || '')
-	return marker ? teamMemberKey(marker.author) === teamMemberKey(authStore.info?.username || '') : comment.author.id === currentUserId.value
+	const current = authStore.info?.username || teamStore.status.username || ''
+	return marker ? teamMemberKey(commentAuthorIdentity(comment)) === teamMemberKey(current) : comment.author.id === currentUserId.value
 }
 const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
 const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
@@ -760,6 +777,11 @@ function getCommentUrl(commentId: string) {
 	> :first-child {
 		margin-inline-end: auto;
 	}
+}
+
+.comment-progress-editor-label {
+	color: var(--grey-600);
+	font-size: .75rem;
 }
 
 .comment-author-filter {

@@ -116,7 +116,7 @@ describe('daily progress Undo drafts', () => {
 		expect(body).toContain('alice corrected')
 		expect(body).toContain('data-tasktrace-team-merged="alice-old,alice-final"')
 		expect(body).not.toContain('bob-final')
-		expect(readTeamCommentMarker(body)).toMatchObject({author: 'alice'})
+		expect(readTeamCommentMarker(body)).toMatchObject({author: 'alice', editor: 'current'})
 
 		expect(await exposed.switchDate('2026-09-21')).toBe(true)
 		await flushPromises()
