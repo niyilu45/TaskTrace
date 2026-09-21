@@ -3,6 +3,7 @@ package apiv2
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"code.vikunja.io/api/pkg/db"
@@ -12,6 +13,15 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"xorm.io/xorm"
 )
+
+func taskTraceTeamMutationError(message string, err error) error {
+	translated := translateDomainError(err)
+	var statusError huma.StatusError
+	if errors.As(translated, &statusError) {
+		return translated
+	}
+	return huma.Error422UnprocessableEntity(message, err)
+}
 
 func init() { AddRouteRegistrar(RegisterTaskTraceTeamRoutes) }
 
@@ -121,7 +131,7 @@ func taskTraceTeamShare(ctx context.Context, in *struct {
 	defer s.Close()
 	status, err := models.TaskTraceTeamShare(s, a, models.TaskTraceTeamShareRequest{TaskID: in.TaskID, Members: in.Body.Members})
 	if err != nil {
-		return nil, translateDomainError(err)
+		return nil, taskTraceTeamMutationError("无法更新协作成员", err)
 	}
 	if err := s.Commit(); err != nil {
 		return nil, huma.Error500InternalServerError("save team task", err)
@@ -191,7 +201,7 @@ func taskTraceTeamPermissionsConfigure(ctx context.Context, in *struct {
 	defer s.Close()
 	status, err := models.TaskTraceTeamConfigurePermissions(s, a, in.Body)
 	if err != nil {
-		return nil, translateDomainError(err)
+		return nil, taskTraceTeamMutationError("无法更新协作权限或受理人", err)
 	}
 	if err := s.Commit(); err != nil {
 		return nil, huma.Error500InternalServerError("save team task permissions", err)

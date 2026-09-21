@@ -112,6 +112,15 @@ func TestTeamMember_Create(t *testing.T) {
 		assert.Equal(t, "zhangsan@example.com", mapped.Email)
 		assert.Equal(t, taskTraceWindowsTeamIssuer, mapped.Issuer)
 		assert.Equal(t, `CHINA\654321`, mapped.Subject)
+		remembered, err := rememberTaskTraceWindowsTeamUser(readSession, TaskTraceTeamMemberCandidate{Username: "654321", AccountName: `CHINA\654321`})
+		require.NoError(t, err)
+		assert.Equal(t, "张三", remembered.Name)
+		assert.Equal(t, "zhangsan@example.com", remembered.Email)
+		profiles, err := taskTraceTeamStoredProfiles(readSession)
+		require.NoError(t, err)
+		assert.Contains(t, profiles, TaskTraceTeamMemberProfile{
+			Username: "654321", AccountName: `CHINA\654321`, DisplayName: "张三", Email: "zhangsan@example.com",
+		})
 		db.AssertExists(t, "team_members", map[string]interface{}{
 			"team_id": 1,
 			"user_id": mapped.ID,

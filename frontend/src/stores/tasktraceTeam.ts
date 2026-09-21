@@ -39,7 +39,15 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const hydratingProfiles = new Set<string>()
 
 	function apply(next?: TaskTraceTeamStatus) {
-		if (next) status.value = next
+		if (next) {
+			status.value = next
+			rememberMemberProfiles((next.profiles ?? []).map(profile => ({
+				username: profile.username || '',
+				account_name: profile.account_name || profile.username || '',
+				display_name: profile.display_name,
+				email: profile.email,
+			})))
+		}
 		loaded.value = true
 		void hydrateMemberProfiles()
 		return status.value
@@ -99,7 +107,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		const result = await tasktraceTeamMembersSearch({
 			query: {q: query},
 			signal,
-			headers: quick ? {'X-TaskTrace-Quick': 'true'} : undefined,
+			headers: quick ? {'X-TaskTrace-Quick': true} : undefined,
 		})
 		const candidates = result.data.candidates ?? []
 		rememberMemberProfiles(candidates)
@@ -151,23 +159,32 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		for (const member of memberRoster.value) {
 			const key = teamMemberKey(member)
 			const profile = directoryProfiles.value[key]
-			if (!key || hydratingProfiles.has(key) || (profile?.display_name && profile.email)) continue
+			const hasDirectoryIdentity = Boolean(profile?.email || (profile?.display_name && teamMemberKey(profile.display_name) !== key))
+			if (!key || hydratingProfiles.has(key) || hasDirectoryIdentity) continue
 			hydratingProfiles.add(key)
 			void searchMembers(key).catch(() => undefined).finally(() => hydratingProfiles.delete(key))
 		}
 	}
 
-	async function grantMember(accountName: string, elevate = false) {
+	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false) {
+		const candidate = typeof member === 'string' ? memberProfile(member) : member
+		const accountName = candidate.account_name || candidate.username
+		if (!accountName) throw new Error('缺少 Windows 账户名，无法设置 teamData 权限。')
 		return run(() => tasktraceTeamMembersAccessCreate({
-			body: {account_name: accountName},
-			headers: elevate ? {'X-TaskTrace-Elevate': 'true'} : undefined,
+			body: {
+				account_name: accountName,
+				username: candidate.username,
+				display_name: candidate.display_name,
+				email: candidate.email,
+			},
+			headers: elevate ? {'X-TaskTrace-Elevate': true} : undefined,
 		}))
 	}
 
 	async function removeMember(accountName: string, elevate = false) {
 		return run(() => tasktraceTeamMembersAccessDelete({
 			path: {member: accountName},
-			headers: elevate ? {'X-TaskTrace-Elevate': 'true'} : undefined,
+			headers: elevate ? {'X-TaskTrace-Elevate': true} : undefined,
 		}))
 	}
 

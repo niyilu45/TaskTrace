@@ -114,13 +114,21 @@ $ErrorActionPreference='Stop'
 $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\')
 $sid=([Security.Principal.NTAccount]::new($Member)).Translate([Security.Principal.SecurityIdentifier])
 $canonical=$sid.Translate([Security.Principal.NTAccount]).Value
+$separator=$canonical.LastIndexOf([char]92)
+$username=if($separator -ge 0){$canonical.Substring($separator+1)}else{$canonical}
 $share=Get-SmbShare -ErrorAction Stop | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $rootPath)} | Select-Object -First 1
 if($null -eq $share){throw 'teamData 尚未创建 Windows 文件共享'}
+$existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in @('Change','Full')})
+$acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
+$aclExisting=@($acl.Access | Where-Object {
+  $entrySid=$null
+  try {$entrySid=$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier])} catch {}
+  $entrySid -eq $sid -and $_.AccessControlType -eq 'Allow' -and (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -ne 0)
+})
+if($existing.Count -gt 0 -and $aclExisting.Count -gt 0){[ordered]@{account_name=$canonical;username=$username} | ConvertTo-Json -Compress;exit 0}
 $shareAdded=$false
 try {
-  $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in @('Change','Full')})
   if($existing.Count -eq 0){Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight Change -Force -ErrorAction Stop | Out-Null;$shareAdded=$true}
-  $acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
   $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
   $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::Modify,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
   $acl.SetAccessRule($rule)
@@ -129,8 +137,6 @@ try {
   if($shareAdded){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue}
   throw
 }
-$separator=$canonical.LastIndexOf([char]92)
-$username=if($separator -ge 0){$canonical.Substring($separator+1)}else{$canonical}
 [ordered]@{account_name=$canonical;username=$username} | ConvertTo-Json -Compress`
 
 const taskTraceTeamRemoveAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT

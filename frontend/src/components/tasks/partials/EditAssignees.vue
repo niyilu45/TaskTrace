@@ -28,15 +28,15 @@
 			<User
 				:avatar-size="24"
 				:show-username="true"
-				:user="user"
-				:title="teamMode ? teamStore.identityTitleFor(user.username) : undefined"
+				:user="asUser(user)"
+				:title="teamMode ? teamStore.identityTitleFor(asUser(user).username) : undefined"
 			/>
 		</template>
 	</Multiselect>
 </template>
 
 <script setup lang="ts">
-import {computed, ref, shallowReactive, watch, nextTick} from 'vue'
+import {computed, ref, shallowReactive, watch} from 'vue'
 import {useI18n} from 'vue-i18n'
 
 import User from '@/components/misc/User.vue'
@@ -44,7 +44,7 @@ import Multiselect from '@/components/input/Multiselect.vue'
 
 import {includesById} from '@/helpers/utils'
 import ProjectUserService from '@/services/projectUsers'
-import {success} from '@/message'
+import {error, success} from '@/message'
 import {useAuthStore} from '@/stores/auth'
 import {useTaskStore} from '@/stores/tasks'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
@@ -88,6 +88,10 @@ function teamUser(username: string) {
 	return new UserModel({id: -(Math.abs(hash) + 1), username, name: teamStore.displayNameFor(username)})
 }
 
+function asUser(value: string | IUser): IUser {
+	return typeof value === 'string' ? teamUser(value) : value
+}
+
 function syncTeamAssignees() {
 	if (!teamMode.value) return
 	assignees.value = (teamTarget.value?.permissions ?? [])
@@ -121,8 +125,8 @@ async function addAssignee(user: IUser) {
 		return
 	}
 
+	isAdding = true
 	try {
-		nextTick(() => isAdding = true)
 		if (teamMode.value && binding.value?.share_id) {
 			if (!canManageTeamAssignees.value) return
 			const usernames = [...new Set([...assignees.value.map(item => item.username), user.username].filter(Boolean))]
@@ -135,39 +139,47 @@ async function addAssignee(user: IUser) {
 		await taskStore.addAssignee({user: user, taskId: props.taskId})
 		emit('update:modelValue', assignees.value)
 		success({message: t('task.assignee.assignSuccess')})
+	} catch (cause) {
+		if (teamMode.value) syncTeamAssignees()
+		error(cause)
 	} finally {
-		nextTick(() => isAdding = false)
+		isAdding = false
 	}
 }
 
 async function removeAssignee(user: IUser) {
-	if (teamMode.value && binding.value?.share_id) {
-		if (!canManageTeamAssignees.value) return
-		await teamStore.configureAssignees(binding.value.share_id, props.taskId, assignees.value.filter(item => item.username.toLocaleLowerCase() !== user.username.toLocaleLowerCase()).map(item => item.username))
-		syncTeamAssignees()
-		success({message: t('task.assignee.unassignSuccess')})
-		return
-	}
-	await taskStore.removeAssignee({user: user, taskId: props.taskId})
+	try {
+		if (teamMode.value && binding.value?.share_id) {
+			if (!canManageTeamAssignees.value) return
+			await teamStore.configureAssignees(binding.value.share_id, props.taskId, assignees.value.filter(item => teamStore.memberKey(item.username) !== teamStore.memberKey(user.username)).map(item => item.username))
+			syncTeamAssignees()
+			success({message: t('task.assignee.unassignSuccess')})
+			return
+		}
+		await taskStore.removeAssignee({user: user, taskId: props.taskId})
 
-	// Remove the assignee from the project
-	const idx = assignees.value.findIndex(a => a.id === user.id)
-	if (idx !== -1) {
-		assignees.value.splice(idx, 1)
+		// Remove the assignee from the project
+		const idx = assignees.value.findIndex(a => a.id === user.id)
+		if (idx !== -1) assignees.value.splice(idx, 1)
+		success({message: t('task.assignee.unassignSuccess')})
+	} catch (cause) {
+		if (teamMode.value) syncTeamAssignees()
+		error(cause)
 	}
-	success({message: t('task.assignee.unassignSuccess')})
 }
 
 async function findUser(query = '') {
 	if (teamMode.value) {
 		const selected = new Set(assignees.value.map(user => teamStore.memberKey(user.username)))
 		const keyword = query.trim().toLocaleLowerCase()
-		foundUsers.value = teamStore.memberRoster
+		const collaborationMembers = teamStore.uniqueMembers([binding.value?.owner, ...(binding.value?.members ?? [])])
+		foundUsers.value = collaborationMembers
 			.filter(username => !selected.has(teamStore.memberKey(username)) && (!keyword || teamStore.identityTitleFor(username).toLocaleLowerCase().includes(keyword)))
 			.map(teamUser)
 		return
 	}
-	const response = await projectUserService.getAll({projectId: props.projectId}, {s: query}) as IUser[]
+	const routeModel = Object.assign(new UserModel(), {projectId: props.projectId})
+	const response = await projectUserService.getAll(routeModel, {s: query}) as IUser[]
 
 	const currentUserId = authStore.info?.id
 

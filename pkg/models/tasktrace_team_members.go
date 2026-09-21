@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
@@ -32,6 +33,9 @@ type TaskTraceTeamMemberSearchResult struct {
 
 type TaskTraceTeamMemberAccessRequest struct {
 	AccountName string `json:"account_name" minLength:"1" doc:"A canonical or resolvable Windows account name."`
+	Username    string `json:"username,omitempty" doc:"The account's short Windows username."`
+	DisplayName string `json:"display_name,omitempty" doc:"The display name returned by Windows directory search."`
+	Email       string `json:"email,omitempty" doc:"The email address returned by Windows directory search."`
 }
 
 type TaskTraceTeamMemberImportRequest struct {
@@ -144,6 +148,26 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 	resolved, err := taskTraceTeamGrantWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, elevate)
 	if err != nil {
 		return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", request.AccountName, err)
+	}
+	candidate := TaskTraceTeamMemberCandidate{Username: request.Username, AccountName: resolved, DisplayName: request.DisplayName, Email: request.Email}
+	if candidate.Username == "" {
+		candidate.Username = taskTraceTeamMembershipName(resolved)
+	}
+	if candidate.DisplayName != "" || candidate.Email != "" {
+		if _, err := rememberTaskTraceWindowsTeamUser(s, candidate); err != nil {
+			return nil, fmt.Errorf("保存协作成员资料失败：%w", err)
+		}
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if found, searchErr := taskTraceSearchTeamMembers(ctx, resolved, false); searchErr == nil {
+			for _, profile := range found.Candidates {
+				if taskTraceTeamMembersEqual(profile.AccountName, resolved) {
+					_, _ = rememberTaskTraceWindowsTeamUser(s, profile)
+					break
+				}
+			}
+		}
 	}
 	state, err := taskTraceTeamLoadState()
 	if err != nil {

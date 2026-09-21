@@ -110,3 +110,14 @@ func TestNewError_SchemaProbeUnaffected(t *testing.T) {
 	assert.Empty(t, vm.Errors)
 	assert.Equal(t, 0, vm.Status)
 }
+
+func TestTaskTraceTeamMutationErrorKeepsActionableDetail(t *testing.T) {
+	cause := errors.New("selected assignee is not a collaboration member")
+	result := taskTraceTeamMutationError("无法更新协作权限或受理人", cause)
+	model, ok := result.(*vikunjaErrorModel)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnprocessableEntity, model.Status)
+	assert.Equal(t, "无法更新协作权限或受理人", model.Detail)
+	require.Len(t, model.Errors, 1)
+	assert.Equal(t, cause.Error(), model.Errors[0].Message)
+}

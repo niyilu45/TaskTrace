@@ -213,8 +213,11 @@ type TaskTraceTeamNotification struct {
 }
 
 type TaskTraceTeamMemberProfile struct {
-	Username string `json:"username"`
-	Avatar   string `json:"avatar,omitempty"`
+	Username    string `json:"username"`
+	AccountName string `json:"account_name,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Email       string `json:"email,omitempty"`
+	Avatar      string `json:"avatar,omitempty"`
 }
 
 type TaskTraceTeamStatus struct {
@@ -2006,12 +2009,12 @@ func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, 
 func taskTraceTeamProfiles(binding *TaskTraceTeamBinding) []TaskTraceTeamMemberProfile {
 	profiles := map[string]TaskTraceTeamMemberProfile{}
 	for _, member := range binding.Members {
-		profiles[strings.ToLower(member)] = TaskTraceTeamMemberProfile{Username: member}
+		profiles[taskTraceTeamProfileKey(member)] = TaskTraceTeamMemberProfile{Username: member}
 	}
 	snapshots, err := taskTraceTeamReadSnapshots(binding)
 	if err == nil {
 		for _, snapshot := range taskTraceTeamLatestActorSnapshots(snapshots) {
-			key := strings.ToLower(snapshot.Actor)
+			key := taskTraceTeamProfileKey(snapshot.Actor)
 			profile := profiles[key]
 			profile.Username = snapshot.Actor
 			if safe := taskTraceTeamSafeAvatar(snapshot.Avatar); safe != "" {
@@ -2028,6 +2031,48 @@ func taskTraceTeamProfiles(binding *TaskTraceTeamBinding) []TaskTraceTeamMemberP
 	return result
 }
 
+func taskTraceTeamProfileKey(username string) string {
+	return strings.ToLower(taskTraceTeamMembershipName(username))
+}
+
+func taskTraceTeamStoredProfiles(s *xorm.Session) ([]TaskTraceTeamMemberProfile, error) {
+	accounts := []*user.User{}
+	if err := s.Where("issuer = ?", taskTraceWindowsTeamIssuer).Find(&accounts); err != nil {
+		return nil, err
+	}
+	profiles := make([]TaskTraceTeamMemberProfile, 0, len(accounts))
+	for _, account := range accounts {
+		email := strings.TrimSpace(account.Email)
+		if strings.HasSuffix(strings.ToLower(email), "@tasktrace.invalid") {
+			email = ""
+		}
+		profiles = append(profiles, TaskTraceTeamMemberProfile{
+			Username: account.Username, AccountName: account.Subject,
+			DisplayName: account.Name, Email: email,
+		})
+	}
+	return profiles, nil
+}
+
+func taskTraceTeamMergeProfile(current, incoming TaskTraceTeamMemberProfile) TaskTraceTeamMemberProfile {
+	if incoming.Username != "" {
+		current.Username = incoming.Username
+	}
+	if incoming.AccountName != "" {
+		current.AccountName = incoming.AccountName
+	}
+	if incoming.DisplayName != "" {
+		current.DisplayName = incoming.DisplayName
+	}
+	if incoming.Email != "" {
+		current.Email = incoming.Email
+	}
+	if incoming.Avatar != "" {
+		current.Avatar = incoming.Avatar
+	}
+	return current
+}
+
 func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamState) (TaskTraceTeamStatus, error) {
 	u, err := user.GetFromAuth(a)
 	if err != nil {
@@ -2037,7 +2082,7 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), UnassignedMembers: []string{}, Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
 	status.UnassignedMembers = taskTraceTeamUnassignedMembers(state, status.Repository.Candidates, u.Username)
 	profiles := map[string]TaskTraceTeamMemberProfile{
-		strings.ToLower(u.Username): {Username: u.Username, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
+		taskTraceTeamProfileKey(u.Username): {Username: u.Username, DisplayName: u.Name, Email: u.Email, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
 	}
 	for _, binding := range state.Bindings {
 		manifest := TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
@@ -2081,12 +2126,17 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(s, &binding, u.Username)...)
 		for _, profile := range taskTraceTeamProfiles(&binding) {
-			key := strings.ToLower(profile.Username)
-			if current := profiles[key]; current.Avatar != "" && profile.Avatar == "" {
-				continue
-			}
-			profiles[key] = profile
+			key := taskTraceTeamProfileKey(profile.Username)
+			profiles[key] = taskTraceTeamMergeProfile(profiles[key], profile)
 		}
+	}
+	storedProfiles, err := taskTraceTeamStoredProfiles(s)
+	if err != nil {
+		return TaskTraceTeamStatus{}, err
+	}
+	for _, profile := range storedProfiles {
+		key := taskTraceTeamProfileKey(profile.Username)
+		profiles[key] = taskTraceTeamMergeProfile(profiles[key], profile)
 	}
 	for _, profile := range profiles {
 		status.Profiles = append(status.Profiles, profile)

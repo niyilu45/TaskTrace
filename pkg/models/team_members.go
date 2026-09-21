@@ -122,29 +122,66 @@ func createTaskTraceWindowsTeamUser(s *xorm.Session, tm *TeamMember) (*user2.Use
 		return nil, fmt.Errorf("Windows team member %s was not found", lookup)
 	}
 
+	if candidate.DisplayName == "" {
+		candidate.DisplayName = tm.Name
+	}
+	if candidate.Email == "" {
+		candidate.Email = tm.Email
+	}
+	return rememberTaskTraceWindowsTeamUser(s, *candidate)
+}
+
+func rememberTaskTraceWindowsTeamUser(s *xorm.Session, candidate TaskTraceTeamMemberCandidate) (*user2.User, error) {
 	username := taskTraceTeamMembershipName(candidate.Username)
 	if username == "" {
 		username = taskTraceTeamMembershipName(candidate.AccountName)
 	}
-	name := strings.TrimSpace(candidate.DisplayName)
-	if name == "" {
-		name = strings.TrimSpace(tm.Name)
+	if username == "" {
+		return nil, user2.ErrUserDoesNotExist{}
 	}
+	name := strings.TrimSpace(candidate.DisplayName)
+	email := strings.TrimSpace(candidate.Email)
+	accountName := strings.TrimSpace(candidate.AccountName)
+	if accountName == "" {
+		accountName = username
+	}
+
+	existing := &user2.User{}
+	found, lookupErr := s.Where("username = ?", username).Get(existing)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if found {
+		if existing.Issuer != taskTraceWindowsTeamIssuer {
+			return existing, nil
+		}
+		changed := false
+		if name != "" && existing.Name != name {
+			existing.Name = name
+			changed = true
+		}
+		if existing.Subject != accountName {
+			existing.Subject = accountName
+			changed = true
+		}
+		if email != "" && existing.Email != email {
+			existing.Email = email
+			changed = true
+		}
+		if changed {
+			if _, err := s.ID(existing.ID).Cols("name", "subject", "email").Update(existing); err != nil {
+				return nil, err
+			}
+		}
+		return existing, nil
+	}
+
 	if name == "" {
 		name = username
-	}
-	email := strings.TrimSpace(candidate.Email)
-	if email == "" {
-		email = strings.TrimSpace(tm.Email)
 	}
 	if email == "" {
 		email = username + "@tasktrace.invalid"
 	}
-	accountName := strings.TrimSpace(candidate.AccountName)
-	if accountName == "" {
-		accountName = lookup
-	}
-
 	created, err := user2.CreateUser(s, &user2.User{
 		Username: username,
 		Name:     name,

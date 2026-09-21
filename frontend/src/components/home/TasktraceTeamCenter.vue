@@ -452,7 +452,7 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	if (!accountName) return
 	memberActionError.value = ''
 	try {
-		await teamStore.grantMember(accountName)
+		await teamStore.grantMember(candidate)
 	} catch (cause) {
 		if (!needsAdministratorAuthorization(cause)) {
 			memberActionError.value = getErrorText(cause)
@@ -462,7 +462,7 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 		const confirmed = window.confirm(`为 ${accountName} 设置 teamData 共享读写权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；本次操作完成后 TaskTrace 仍以普通权限运行。`)
 		if (!confirmed) return
 		try {
-			await teamStore.grantMember(accountName, true)
+			await teamStore.grantMember(candidate, true)
 		} catch (elevatedCause) {
 			memberActionError.value = getErrorText(elevatedCause)
 			error(elevatedCause)

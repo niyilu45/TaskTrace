@@ -2808,6 +2808,18 @@ export type TaskTraceTeamMemberAccessRequest = {
      * A canonical or resolvable Windows account name.
      */
     account_name?: string;
+    /**
+     * The display name returned by Windows directory search.
+     */
+    display_name?: string;
+    /**
+     * The email address returned by Windows directory search.
+     */
+    email?: string;
+    /**
+     * The account's short Windows username.
+     */
+    username?: string;
 };
 
 export type TaskTraceTeamMemberCandidate = {
@@ -2898,7 +2910,10 @@ export type TaskTraceTeamMemberPermission = {
 };
 
 export type TaskTraceTeamMemberProfile = {
+    account_name?: string;
     avatar?: string;
+    display_name?: string;
+    email?: string;
     username?: string;
 };
 
@@ -5220,6 +5235,18 @@ export type TaskTraceTeamMemberAccessRequestWritable = {
      * A canonical or resolvable Windows account name.
      */
     account_name?: string;
+    /**
+     * The display name returned by Windows directory search.
+     */
+    display_name?: string;
+    /**
+     * The email address returned by Windows directory search.
+     */
+    email?: string;
+    /**
+     * The account's short Windows username.
+     */
+    username?: string;
 };
 
 export type TaskTraceTeamMemberImportRequestWritable = {

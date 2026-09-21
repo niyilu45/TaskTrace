@@ -1,9 +1,19 @@
-import {beforeEach, describe, expect, it} from 'vitest'
+import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 
+import {tasktraceTeamMembersSearch, tasktraceTeamStatus} from '@/client/generated'
 import {useTasktraceTeamStore} from './tasktraceTeam'
 
-beforeEach(() => setActivePinia(createPinia()))
+vi.mock('@/client/generated', async (importOriginal) => ({
+	...(await importOriginal<typeof import('@/client/generated')>()),
+	tasktraceTeamMembersSearch: vi.fn(),
+	tasktraceTeamStatus: vi.fn(),
+}))
+
+beforeEach(() => {
+	setActivePinia(createPinia())
+	vi.clearAllMocks()
+})
 
 describe('TaskTrace team bindings', () => {
 	it('finds a legacy root binding even when task_ids is empty', () => {
@@ -89,5 +99,23 @@ describe('TaskTrace team bindings', () => {
 		expect(store.memberRoster.map(member => member.toLocaleLowerCase()).sort()).toEqual([
 			'current', 'folderuser', 'member', 'owner', 'profileonly', 'reader', 'unassigned',
 		].sort())
+	})
+
+	it('uses persisted Windows identity details immediately after refresh', async () => {
+		vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: {
+			enabled: true,
+			username: 'current',
+			bindings: [{share_id: 'shared', root_task_id: 42, task_ids: [42], owner: 'current', members: ['654321']}],
+			profiles: [{username: '654321', account_name: 'CHINA\\654321', display_name: '张三', email: 'zhangsan@example.com'}],
+			conflicts: [],
+			notifications: [],
+		}} as unknown as Awaited<ReturnType<typeof tasktraceTeamStatus>>)
+
+		const store = useTasktraceTeamStore()
+		await store.refresh()
+
+		expect(store.displayNameFor('654321')).toBe('张三')
+		expect(store.identityTitleFor('654321')).toContain('zhangsan@example.com')
+		expect(vi.mocked(tasktraceTeamMembersSearch).mock.calls.some(([request]) => request?.query?.q === '654321')).toBe(false)
 	})
 })

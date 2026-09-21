@@ -276,7 +276,7 @@ import TeamPermissionEditor from '@/components/tasks/partials/TeamPermissionEdit
 import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import {error, success} from '@/message'
+import {error, getErrorText, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
 const props = defineProps<{taskId: number, canWrite: boolean}>()
@@ -310,6 +310,7 @@ async function shareTask() {
 		return
 	}
 	try {
+		await ensureTeamDataAccess(members)
 		await teamStore.share(props.taskId, members)
 		success({message: '团队任务已创建，请把任务链接发给协作成员。'})
 	} catch (cause) {
@@ -371,11 +372,47 @@ async function saveMembers() {
 		return
 	}
 	try {
+		await ensureTeamDataAccess(selectedMembers.value)
 		await teamStore.share(binding.value.root_task_id, selectedMembers.value)
 		editingMembers.value = false
 		success({message: '协作人员名单已更新。'})
 	} catch (cause) {
 		error(cause)
+	}
+}
+
+function hasTeamDataAccess(member: string) {
+	const known = [
+		teamStore.status.username,
+		...(teamStore.status.repository?.candidates ?? []),
+		...(teamStore.status.unassigned_members ?? []),
+		...(teamStore.status.bindings ?? []).flatMap(item => item.members ?? []),
+	]
+	return known.some(value => teamStore.memberKey(value) === teamStore.memberKey(member))
+}
+
+function needsAdministratorAuthorization(cause: unknown) {
+	const value = cause as {status?: number, response?: {status?: number}, reason?: {response?: {status?: number}}}
+	const status = value?.reason?.response?.status ?? value?.response?.status ?? value?.status
+	const message = getErrorText(cause).toLocaleLowerCase()
+	return status === 403 || ['windows administrator authorization required', '需要 windows 管理员授权', 'access is denied', 'access denied', '拒绝访问', '系统错误 5']
+		.some(marker => message.includes(marker))
+}
+
+async function ensureTeamDataAccess(members: string[]) {
+	for (const member of teamStore.uniqueMembers(members)) {
+		if (teamStore.memberKey(member) === teamStore.memberKey(teamStore.status.username) || hasTeamDataAccess(member)) continue
+		const candidate = teamStore.memberProfile(member)
+		try {
+			await teamStore.grantMember(candidate)
+		} catch (cause) {
+			if (!needsAdministratorAuthorization(cause)) throw cause
+			const accountName = candidate.account_name || candidate.username || member
+			if (!window.confirm(`为 ${accountName} 设置 teamData 共享读写权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；完成后 TaskTrace 仍以普通权限运行。`)) {
+				throw Object.assign(new Error(`未授权 ${accountName} 的 teamData 读写权限，协作成员没有保存。`), {cause})
+			}
+			await teamStore.grantMember(candidate, true)
+		}
 	}
 }
 
