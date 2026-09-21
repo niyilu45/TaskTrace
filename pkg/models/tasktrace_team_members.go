@@ -3,6 +3,7 @@
 package models
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -93,12 +94,12 @@ func taskTraceTeamDecodeMembersLink(link string) ([]string, error) {
 	return parsed.Members, nil
 }
 
-func TaskTraceTeamSearchMembers(query string) (TaskTraceTeamMemberSearchResult, error) {
+func TaskTraceTeamSearchMembers(ctx context.Context, query string) (TaskTraceTeamMemberSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if len([]rune(query)) < 1 {
 		return TaskTraceTeamMemberSearchResult{Candidates: []TaskTraceTeamMemberCandidate{}}, nil
 	}
-	candidates, err := taskTraceTeamSearchWindowsMembers(query)
+	candidates, err := taskTraceTeamSearchWindowsMembers(ctx, query)
 	if err != nil {
 		return TaskTraceTeamMemberSearchResult{}, err
 	}

@@ -242,7 +242,7 @@ func taskTraceTeamMembersSearch(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
-	result, err := models.TaskTraceTeamSearchMembers(in.Query)
+	result, err := models.TaskTraceTeamSearchMembers(ctx, in.Query)
 	if err != nil {
 		return nil, huma.Error422UnprocessableEntity("search Windows accounts", err)
 	}

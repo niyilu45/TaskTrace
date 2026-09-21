@@ -5,6 +5,7 @@
 package models
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,22 +13,57 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 )
 
 const taskTraceTeamSearchScript = `$Keyword=$env:TASKTRACE_TEAM_KEYWORD
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
-$escaped=$Keyword.Replace("'","''")
-$filter="Disabled = FALSE AND (Name LIKE '%$escaped%' OR FullName LIKE '%$escaped%')"
-$result=@(Get-CimInstance -ClassName Win32_UserAccount -Filter $filter -ErrorAction Stop | Select-Object -First 25 | ForEach-Object {
-  [ordered]@{username=[string]$_.Name;account_name=([string]$_.Domain+'\'+[string]$_.Name);display_name=[string]$_.FullName}
-})
+$result=New-Object 'System.Collections.Generic.List[object]'
+function Add-Candidate([string]$Username,[string]$AccountName,[string]$DisplayName) {
+  if([string]::IsNullOrWhiteSpace($Username)-or[string]::IsNullOrWhiteSpace($AccountName)){return}
+  if($result | Where-Object {$_.account_name -ieq $AccountName}){return}
+  [void]$result.Add([ordered]@{username=$Username;account_name=$AccountName;display_name=$DisplayName})
+}
 try {
   $resolved=([Security.Principal.NTAccount]::new($Keyword)).Translate([Security.Principal.SecurityIdentifier]).Translate([Security.Principal.NTAccount]).Value
   $short=($resolved -split '\')[-1]
-  if(-not ($result | Where-Object {$_.account_name -ieq $resolved})) {$result+=,[ordered]@{username=$short;account_name=$resolved;display_name=''}}
+  Add-Candidate $short $resolved ''
 } catch {}
-ConvertTo-Json -InputObject ([object[]]$result) -Compress`
+$domainFailure=''
+try {
+  foreach($account in @(Get-CimInstance -ClassName Win32_UserAccount -Filter 'LocalAccount = TRUE AND Disabled = FALSE' -ErrorAction Stop)) {
+    if(([string]$account.Name).IndexOf($Keyword,[StringComparison]::OrdinalIgnoreCase)-ge 0 -or ([string]$account.FullName).IndexOf($Keyword,[StringComparison]::OrdinalIgnoreCase)-ge 0) {
+      Add-Candidate ([string]$account.Name) (([string]$account.Domain)+'\'+([string]$account.Name)) ([string]$account.FullName)
+    }
+  }
+} catch {}
+try {
+  $computer=Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain -ErrorAction Stop
+  if($computer.PartOfDomain) {
+    Add-Type -AssemblyName System.DirectoryServices
+    $ldap=$Keyword.Replace('\','\5c').Replace('*','\2a').Replace('(','\28').Replace(')','\29').Replace([string][char]0,'\00')
+    $searcher=New-Object DirectoryServices.DirectorySearcher
+    $searcher.PageSize=25
+    $searcher.SizeLimit=25
+    $searcher.Filter="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(|(sAMAccountName=*$ldap*)(displayName=*$ldap*)))"
+    foreach($property in @('sAMAccountName','displayName','objectSid')){[void]$searcher.PropertiesToLoad.Add($property)}
+    $found=$searcher.FindAll()
+    try {
+      foreach($entry in $found) {
+        try {
+          $username=[string]$entry.Properties['samaccountname'][0]
+          $display=if($entry.Properties['displayname'].Count){[string]$entry.Properties['displayname'][0]}else{''}
+          $sid=[Security.Principal.SecurityIdentifier]::new([byte[]]$entry.Properties['objectsid'][0],0)
+          $account=$sid.Translate([Security.Principal.NTAccount]).Value
+          Add-Candidate $username $account $display
+        } catch {}
+      }
+    } finally {$found.Dispose();$searcher.Dispose()}
+  }
+} catch {$domainFailure=$_.Exception.Message}
+if($result.Count -eq 0 -and $domainFailure){throw ('域账户查询失败：'+$domainFailure)}
+ConvertTo-Json -InputObject ([object[]]@($result | Sort-Object account_name | Select-Object -First 25)) -Compress`
 
 const taskTraceTeamListAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $ErrorActionPreference='Stop'
@@ -85,12 +121,20 @@ $acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
 $acl.PurgeAccessRules($sid)
 Set-Acl -LiteralPath $rootPath -AclObject $acl -ErrorAction Stop`
 
-func taskTraceTeamPowerShell(script string, environment ...string) ([]byte, error) {
+func taskTraceTeamPowerShellContext(parent context.Context, timeout time.Duration, script string, environment ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
 	args := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script}
-	cmd := exec.Command("powershell.exe", args...)
+	cmd := exec.CommandContext(ctx, "powershell.exe", args...)
 	cmd.Env = append(os.Environ(), environment...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, errors.New("Windows 操作超时，请检查域网络连接后重试")
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, ctx.Err()
+		}
 		message := strings.TrimSpace(string(output))
 		if message == "" {
 			message = err.Error()
@@ -100,8 +144,12 @@ func taskTraceTeamPowerShell(script string, environment ...string) ([]byte, erro
 	return output, nil
 }
 
-func taskTraceTeamSearchWindowsMembers(query string) ([]TaskTraceTeamMemberCandidate, error) {
-	output, err := taskTraceTeamPowerShell(taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query)
+func taskTraceTeamPowerShell(script string, environment ...string) ([]byte, error) {
+	return taskTraceTeamPowerShellContext(context.Background(), 30*time.Second, script, environment...)
+}
+
+func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string) ([]TaskTraceTeamMemberCandidate, error) {
+	output, err := taskTraceTeamPowerShellContext(ctx, 8*time.Second, taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query)
 	if err != nil {
 		return nil, err
 	}

@@ -4,9 +4,12 @@
 
 package models
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
-func taskTraceTeamSearchWindowsMembers(string) ([]TaskTraceTeamMemberCandidate, error) {
+func taskTraceTeamSearchWindowsMembers(context.Context, string) ([]TaskTraceTeamMemberCandidate, error) {
 	return nil, errors.New("Windows account search is only available on Windows")
 }
 

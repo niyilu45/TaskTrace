@@ -86,8 +86,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return run(() => tasktraceTeamNotificationsRead({body: {ids}}))
 	}
 
-	async function searchMembers(query: string): Promise<TaskTraceTeamMemberCandidate[]> {
-		const result = await tasktraceTeamMembersSearch({query: {q: query}})
+	async function searchMembers(query: string, signal?: AbortSignal): Promise<TaskTraceTeamMemberCandidate[]> {
+		const result = await tasktraceTeamMembersSearch({query: {q: query}, signal})
 		return result.data.candidates ?? []
 	}
 

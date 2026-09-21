@@ -78,6 +78,7 @@ const focused = ref(false)
 const searchError = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 let searchRevision = 0
+let searchController: AbortController | undefined
 
 function memberKey(value = '') {
 	return value.trim().split('\\').pop()?.split('@')[0]?.toLowerCase() || ''
@@ -90,6 +91,9 @@ const availableCandidates = computed(() => candidates.value.filter(candidate => 
 
 watch(query, value => {
 	if (searchTimer) clearTimeout(searchTimer)
+	searchController?.abort()
+	searchController = undefined
+	const revision = ++searchRevision
 	const keyword = value.trim()
 	if (!keyword) {
 		candidates.value = []
@@ -97,19 +101,29 @@ watch(query, value => {
 		searchError.value = ''
 		return
 	}
-	const revision = ++searchRevision
 	searchTimer = setTimeout(async () => {
+		const controller = new AbortController()
+		searchController = controller
+		let timedOut = false
+		const timeout = setTimeout(() => {
+			timedOut = true
+			controller.abort()
+		}, 10_000)
 		loading.value = true
 		searchError.value = ''
 		try {
-			const result = await teamStore.searchMembers(keyword)
+			const result = await teamStore.searchMembers(keyword, controller.signal)
 			if (revision === searchRevision) candidates.value = result
 		} catch {
 			if (revision === searchRevision) {
 				candidates.value = []
-				searchError.value = '无法查询 Windows 账户，请检查本机或域网络。'
+				searchError.value = timedOut
+					? '查找 Windows 账户超时，请检查域网络或输入更完整的用户名后重试。'
+					: '无法查询 Windows 账户，请检查本机或域网络后重试。'
 			}
 		} finally {
+			clearTimeout(timeout)
+			if (searchController === controller) searchController = undefined
 			if (revision === searchRevision) loading.value = false
 		}
 	}, 250)
@@ -117,6 +131,7 @@ watch(query, value => {
 
 onBeforeUnmount(() => {
 	if (searchTimer) clearTimeout(searchTimer)
+	searchController?.abort()
 })
 
 function choose(candidate: TaskTraceTeamMemberCandidate) {
