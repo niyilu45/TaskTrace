@@ -180,14 +180,15 @@ func TestTaskTraceTeamPermissionsAllowIndependentOutstandingWrite(t *testing.T) 
 		},
 	}
 	previous := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{
-		NodeID: "node", Title: "Trusted", Outstanding: `<ul><li data-id="pending">Old item</li></ul>`,
+		NodeID: "node", Title: "Trusted", Outstanding: `<ul><li data-id="pending" data-priority="7">Old item</li></ul>`,
 	}}}
 	current := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{
-		NodeID: "node", Title: "Unauthorized title", Outstanding: `<ul><li data-id="pending">Updated item</li></ul>`,
+		NodeID: "node", Title: "Unauthorized title", Outstanding: `<ul><li data-id="pending" data-priority="2">Updated item</li></ul>`,
 	}}}
 
 	taskTraceTeamProtectSnapshotPermissions(&current, &previous, &manifest, "reader")
 	require.Equal(t, "Trusted", current.Tasks[0].Title)
 	items, _ := taskTraceTeamOutstandingItems(current.Tasks[0].Outstanding)
 	require.Contains(t, items["pending"], "Updated item")
+	require.Equal(t, map[string]string{"pending": "2"}, taskTraceTeamOutstandingPriorities(current.Tasks[0].Outstanding))
 }

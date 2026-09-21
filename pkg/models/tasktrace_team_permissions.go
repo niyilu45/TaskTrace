@@ -334,6 +334,10 @@ func taskTraceTeamProtectSnapshotPermissions(current *TaskTraceTeamSnapshot, pre
 }
 
 func taskTraceTeamProtectOutstandingChanges(currentHTML, oldHTML, nodeID, actor string, manifest *TaskTraceTeamManifest) string {
+	// Priority is a per-user display preference and is deliberately excluded from
+	// collaborative field merging. Preserve the current device's values while the
+	// permission filter rebuilds the shared outstanding-item markup.
+	localPriorities := taskTraceTeamOutstandingPriorities(currentHTML)
 	currentItems, currentOrder := taskTraceTeamOutstandingItems(currentHTML)
 	oldItems, oldOrder := taskTraceTeamOutstandingItems(oldHTML)
 	result := make(map[string]string, len(oldItems)+len(currentItems))
@@ -362,7 +366,7 @@ func taskTraceTeamProtectOutstandingChanges(currentHTML, oldHTML, nodeID, actor 
 			}
 		}
 	}
-	return taskTraceTeamOutstandingHTML(result, order)
+	return taskTraceTeamApplyOutstandingPriorities(taskTraceTeamOutstandingHTML(result, order), localPriorities)
 }
 
 func taskTraceTeamMergeAttachmentMetadata(groups ...[]TaskTraceTeamAttachment) []TaskTraceTeamAttachment {
