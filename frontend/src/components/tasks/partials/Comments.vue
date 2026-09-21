@@ -75,19 +75,25 @@
 				class="media comment"
 			>
 				<figure class="media-left is-hidden-mobile">
-					<UserAvatar
+					<CommentAuthorAvatar
 						:user="c.author"
+						:author="commentAuthor(c)"
+						:avatar="commentAvatar(c)"
+						:team-authored="commentIsTeamAuthored(c)"
 						:size="48"
 						class="image is-avatar"
 					/>
 					<figcaption class="is-sr-only">
-						{{ $t('misc.avatarOfUser', {user: getDisplayName(c.author)}) }}
+						{{ $t('misc.avatarOfUser', {user: commentAuthor(c)}) }}
 					</figcaption>
 				</figure>
 				<div class="media-content">
 					<div class="comment-info">
-						<UserAvatar
+						<CommentAuthorAvatar
 							:user="c.author"
+							:author="commentAuthor(c)"
+							:avatar="commentAvatar(c)"
+							:team-authored="commentIsTeamAuthored(c)"
 							:size="20"
 							class="image is-avatar d-print-none"
 						/>
@@ -293,6 +299,7 @@ import CustomTransition from '@/components/misc/CustomTransition.vue'
 import Editor from '@/components/input/AsyncEditor'
 import PaginationEmit from '@/components/misc/PaginationEmit.vue'
 import UserAvatar from '@/components/misc/UserAvatar.vue'
+import CommentAuthorAvatar from './CommentAuthorAvatar.vue'
 
 import TaskCommentService from '@/services/taskComment'
 import TaskCommentModel from '@/models/taskComment'
@@ -308,6 +315,7 @@ import {getDisplayName} from '@/models/user'
 import DailyProgress from './DailyProgress.vue'
 import {useConfigStore} from '@/stores/config'
 import {useAuthStore} from '@/stores/auth'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import Reactions from '@/components/input/Reactions.vue'
 import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
 import {commentReplyContextKey, scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
@@ -362,12 +370,19 @@ async function revealSourceComment() {
 const {t} = useI18n({useScope: 'global'})
 const configStore = useConfigStore()
 const authStore = useAuthStore()
+const teamStore = useTasktraceTeamStore()
 
 const commentSortOrder = ref<'asc' | 'desc'>('desc')
 
 const comments = ref<ITaskComment[]>([])
 const selectedAuthor = ref('')
 const commentAuthor = (comment: ITaskComment) => teamCommentAuthor(comment.comment || '', getDisplayName(comment.author))
+const memberKey = (value = '') => (value.trim().split('\\').pop()?.split('@')[0] || '').toLocaleLowerCase()
+const commentIsTeamAuthored = (comment: ITaskComment) => Boolean(readTeamCommentMarker(comment.comment || ''))
+const commentAvatar = (comment: ITaskComment) => {
+	const author = memberKey(commentAuthor(comment))
+	return teamStore.status.profiles?.find(profile => memberKey(profile.username) === author)?.avatar || ''
+}
 const commentOwnedByCurrent = (comment: ITaskComment) => {
 	const marker = readTeamCommentMarker(comment.comment || '')
 	return marker ? marker.author.toLowerCase() === (authStore.info?.username || '').toLowerCase() : comment.author.id === currentUserId.value
@@ -376,9 +391,14 @@ const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuth
 const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
 const savedComments = reactive(new Map<number, string>())
 const uploading = ref(0)
+let teamProfilesRequested = false
 function rememberComments() {
 	savedComments.clear()
 	comments.value.forEach(comment => savedComments.set(comment.id, comment.comment))
+	if (isLocalBuild && !teamProfilesRequested && comments.value.some(commentIsTeamAuthored)) {
+		teamProfilesRequested = true
+		void teamStore.refresh().catch(() => undefined)
+	}
 	void revealSourceComment()
 }
 
@@ -736,7 +756,9 @@ function getCommentUrl(commentId: string) {
 	gap: .75rem;
 	flex-wrap: wrap;
 
-	> :first-child { margin-inline-end: auto; }
+	> :first-child {
+		margin-inline-end: auto;
+	}
 }
 
 .comment-author-filter {
@@ -746,7 +768,10 @@ function getCommentUrl(commentId: string) {
 	font-size: .75rem;
 	font-weight: 400;
 
-	.input { min-inline-size: 8rem; block-size: 2rem; }
+	.input {
+		min-inline-size: 8rem;
+		block-size: 2rem;
+	}
 }
 
 .comment-sort-button {
