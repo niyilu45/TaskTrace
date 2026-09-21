@@ -119,11 +119,11 @@ internal sealed partial class FloatingWindow {
         var message=new Label{Text=target.Kind+"提醒\r\n"+target.Title+"\r\n提醒时间："+target.Due.LocalDateTime.ToString("yyyy-MM-dd HH:mm"),Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft};
         var minutes=new NumericUpDown{Minimum=1,Maximum=10080,Value=15,Dock=DockStyle.Left,Width=110};
         var delayRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight};delayRow.Controls.Add(new Label{Text="延迟分钟数",AutoSize=true,Margin=new Padding(0,7,8,0)});delayRow.Controls.Add(minutes);
-        var hint=new Label{Text="确认后关闭本次提醒；延迟后会按上面的分钟数再次提醒。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
-        var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var confirm=new Button{Text="确认",Width=88,Height=30};var delay=new Button{Text="延迟",Width=88,Height=30};actions.Controls.Add(confirm);actions.Controls.Add(delay);
+        var hint=new Label{Text="关闭后不再显示本次提醒；延迟后会按上面的分钟数再次提醒。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
+        var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var close=new Button{Text="关闭",Width=88,Height=30};var delay=new Button{Text="延迟",Width=88,Height=30};actions.Controls.Add(close);actions.Controls.Add(delay);
         layout.Controls.Add(message);layout.Controls.Add(delayRow);layout.Controls.Add(hint);layout.Controls.Add(actions);dialog.Controls.Add(layout);
         bool handled=false;
-        confirm.Click+=delegate {handled=true;reminderState.Dismissed[target.Key]=DateTimeOffset.UtcNow.ToString("o");reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();dialog.Close();};
+        close.Click+=delegate {handled=true;reminderState.Dismissed[target.Key]=DateTimeOffset.UtcNow.ToString("o");reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();dialog.Close();};
         delay.Click+=delegate {handled=true;reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes((double)minutes.Value).ToString("o");SaveReminderState();dialog.Close();};
         dialog.FormClosing+=delegate {if(!handled){reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes(15).ToString("o");SaveReminderState();}};
         dialog.FormClosed+=delegate {reminderPopup=null;dialog.Dispose();BeginInvoke(new Action(CheckDueReminders));};dialog.Show();dialog.Activate();
