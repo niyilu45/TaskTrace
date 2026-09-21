@@ -28,7 +28,11 @@ internal sealed class ProgressHtmlEditor : UserControl {
             ApplyHtml();
             SetReadOnly(readOnly);
         };
-        browser.DocumentText = "<!doctype html><html><head><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:block;max-width:96%;max-height:260px;margin:8px 0;border:2px solid transparent;cursor:pointer}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>function insertTaskTraceImage(src){var e=document.getElementById('progress-editor');e.focus();document.execCommand('insertImage',false,src);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\"></div></body></html>";
+        browser.DocumentText = "<!doctype html><html><head><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var e=document.getElementById('progress-editor');e.focus();var selection=window.getSelection(),range;if(selection&&selection.rangeCount&&e.contains(selection.anchorNode)){range=selection.getRangeAt(0);}else{range=document.createRange();range.selectNodeContents(e);range.collapse(false);}range.deleteContents();var image=document.createElement('img'),after=document.createTextNode(taskTraceCaret);image.src=src;range.insertNode(after);range.insertNode(image);ensureTaskTraceImageCarets();range.setStartAfter(after);range.collapse(true);selection.removeAllRanges();selection.addRange(range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\"></div></body></html>";
+    }
+
+    static string CleanHtml(string value) {
+        return Regex.Replace((value ?? "").Replace("\u200b", ""), @"&#(?:8203|x200b);", "", RegexOptions.IgnoreCase);
     }
 
     void AttachChangeEvents() {
@@ -47,14 +51,15 @@ internal sealed class ProgressHtmlEditor : UserControl {
         if(editor == null) return;
         changing = true;
         editor.InnerHtml = pendingHtml ?? "";
-        observedHtml = editor.InnerHtml ?? "";
+        browser.Document.InvokeScript("ensureTaskTraceImageCarets");
+        observedHtml = CleanHtml(editor.InnerHtml);
         changing = false;
     }
 
     void NotifyChanged() {
         if(changing || !ready || browser.Document == null)return;
         var editor=browser.Document.GetElementById("progress-editor");
-        string current=editor==null?pendingHtml??"":editor.InnerHtml??"";
+        string current=editor==null?CleanHtml(pendingHtml):CleanHtml(editor.InnerHtml);
         if(String.Equals(current,observedHtml,StringComparison.Ordinal))return;
         observedHtml=current;changeVersion++;
         if(HtmlChanged != null)HtmlChanged(this,EventArgs.Empty);
@@ -64,7 +69,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         get {
             if(!ready || browser.Document == null) return pendingHtml ?? "";
             var editor = browser.Document.GetElementById("progress-editor");
-            return editor == null ? pendingHtml ?? "" : editor.InnerHtml ?? "";
+            return editor == null ? CleanHtml(pendingHtml) : CleanHtml(editor.InnerHtml);
         }
         set { pendingHtml = value ?? ""; ApplyHtml(); }
     }

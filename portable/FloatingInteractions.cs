@@ -390,12 +390,12 @@ internal sealed partial class FloatingWindow {
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0;bool writing=false,loading=false,removeExistingImages=false,restoredDraftDirty=false;
+                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool writing=false,loading=false,removeExistingImages=false,restoredDraftDirty=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();
                     if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog);}
-                    var noteImages=new List<GalleryImage>();CollectImages(noteImages,originalNoteHtml,"遗留事项备注图片");foreach(var image in noteImages)AddImageThumbnail(previews,image,dialog);
+                    var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注图片");foreach(var image in noteImages)AddImageThumbnail(previews,image,dialog);renderedNoteImageCount=noteEditor.ImageCount;
                     foreach(var picture in pictures.ToList()){
                         var image=new GalleryImage{Bytes=picture.Bytes,Caption="待保存的遗留事项图片"};
                         AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}});
@@ -421,7 +421,11 @@ internal sealed partial class FloatingWindow {
                 recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
-                gallery.Click+=async delegate{await ShowImageGallery(id,editingId==null?null:(originalHtml??"")+(originalNoteHtml??""),dialog);};
+                gallery.Click+=async delegate{
+                    string body=removeExistingImages?Regex.Replace(originalHtml??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase):originalHtml??"";
+                    body+=String.Join("",pictures.Select(picture=>"<img src=\"data:image/png;base64,"+Convert.ToBase64String(picture.Bytes)+"\" alt=\"待保存的遗留事项图片\">"));
+                    await ShowImageGallery(id,body+(noteEditor.Html??""),dialog,"当前遗留事项（含未保存图片）");
+                };
                 reminder.Click+=async delegate{if(writing||editingId==null)return;if(dirty()){feedback.Text="请先保存当前内容，再设置提醒。";return;}string selectedId=editingId;reminder.Enabled=false;try{if(await ShowReminderEditor(id,selectedId,dialog)){shared=ReadShared(await ReadHistory(id));render();var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedId);if(selected!=null){loading=true;list.SelectedItem=selected;loading=false;await edit(selected);}feedback.Text="提醒已保存，并已同步到网页模式。";}}catch(Exception e){feedback.Text="提醒未保存："+e.Message;}finally{if(!dialog.IsDisposed)reminder.Enabled=editingId!=null;}};
                 Func<bool,Task<bool>> write=async delegate(bool deleting){
                     if(writing)return false;if(deleting && editingId==null)return false;
@@ -445,7 +449,7 @@ internal sealed partial class FloatingWindow {
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
                 input.TextChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
-                noteEditor.HtmlChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="备注尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
+                noteEditor.HtmlChanged+=delegate{if(loading || writing)return;if(noteEditor.ImageCount!=renderedNoteImageCount)renderPreviews();if(dirty())feedback.Text="备注尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
@@ -460,30 +464,37 @@ internal sealed partial class FloatingWindow {
                         int count=shared.Items.Count;input.Text="编辑器图片验收";noteEditor.Html="<p>备注图片验收</p>";priority.SelectedIndex=4;
                         using(var bitmap=new Bitmap(42,28))using(var stream=new MemoryStream()){using(var canvas=Graphics.FromImage(bitmap))canvas.Clear(Color.Teal);bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}
                         using(var noteBitmap=new Bitmap(36,24))using(var noteStream=new MemoryStream()){using(var canvas=Graphics.FromImage(noteBitmap))canvas.Clear(Color.CornflowerBlue);noteBitmap.Save(noteStream,System.Drawing.Imaging.ImageFormat.Png);noteEditor.InsertImage(noteStream.ToArray());}
+                        using(var noteBitmap=new Bitmap(30,22))using(var noteStream=new MemoryStream()){using(var canvas=Graphics.FromImage(noteBitmap))canvas.Clear(Color.Goldenrod);noteBitmap.Save(noteStream,System.Drawing.Imaging.ImageFormat.Png);noteEditor.InsertImage(noteStream.ToArray());}
+                        if(noteEditor.ImageCount!=2)throw new Exception("Multiple note images were not retained in the editor");
                         renderPreviews();await write(false);
-                        if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=4 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1 || !Plain(shared.Items.Last().NoteHtml).Contains("备注图片验收") || Regex.Matches(shared.Items.Last().NoteHtml,@"<img\b").Count!=1)throw new Exception("Outstanding editor note, image create or priority failed: "+feedback.Text);
+                        if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=4 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1 || !Plain(shared.Items.Last().NoteHtml).Contains("备注图片验收") || Regex.Matches(shared.Items.Last().NoteHtml,@"<img\b").Count!=2)throw new Exception("Outstanding editor note, image create or priority failed: "+feedback.Text);
                         loading=true;list.SelectedIndex=list.Items.Count-1;loading=false;await edit(shared.Items.Last());input.Text="编辑器修改验收";noteEditor.Html=noteEditor.Html.Replace("备注图片验收","备注修改验收");priority.SelectedIndex=2;
                         using(var bitmap=new Bitmap(32,20))using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}
                         await write(false);
                         if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=2 || !shared.Items.Last().Html.Contains("编辑器修改验收") || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=2)throw new Exception("Outstanding editor image or priority update failed: "+feedback.Text);
                         loading=true;list.SelectedIndex=list.Items.Count-1;loading=false;await edit(shared.Items.Last());
                         var editorImages=new List<GalleryImage>();CollectImages(editorImages,shared.Items.Last().Html,"遗留事项缩略图验收");
-                        if(editorImages.Count!=2 || previews.Controls.OfType<Panel>().Count()!=3 || !Plain(shared.Items.Last().NoteHtml).Contains("备注修改验收"))throw new Exception("Saved outstanding or note images did not create thumbnails");
+                        var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注多图验收");
+                        if(editorImages.Count!=2 || noteImages.Count!=2 || previews.Controls.OfType<Panel>().Count()!=4 || !Plain(shared.Items.Last().NoteHtml).Contains("备注修改验收"))throw new Exception("Saved outstanding or note images did not create every thumbnail");
                         await ShowImagePreview(editorImages[0],dialog,true);
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
-                bool closeAfterSave=false;
-                dialog.FormClosing+=async delegate(object sender,FormClosingEventArgs e){
+                bool closeAfterSave=false,closeSavePending=false;
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){
                     if(closeAfterSave || editParentRequested || verify)return;
-                    if(writing){e.Cancel=true;return;}
+                    if(writing || closeSavePending){e.Cancel=true;return;}
                     if(!dirty()){DeleteDraftCache("outstanding",id,draftKey());return;}
                     var choice=MessageBox.Show(dialog,"当前遗留事项尚未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
                     if(choice==DialogResult.Cancel){e.Cancel=true;return;}
                     if(choice==DialogResult.No){DeleteDraftCaches("outstanding",id);return;}
-                    e.Cancel=true;autoTimer.Stop();
-                    if(await write(false)){DeleteDraftCaches("outstanding",id);closeAfterSave=true;dialog.Close();}
-                    else {feedback.Text="遗留事项未能保存，窗口已保留，请检查后重试。";autoTimer.Start();}
+                    e.Cancel=true;closeSavePending=true;autoTimer.Stop();
+                    dialog.BeginInvoke(new Action(async delegate{
+                        bool saved=false;try{saved=await write(false);}catch(Exception error){feedback.Text=error.Message;}
+                        if(saved){DeleteDraftCaches("outstanding",id);closeAfterSave=true;dialog.Close();return;}
+                        closeSavePending=false;feedback.Text="遗留事项未能保存，窗口已保留。"+(String.IsNullOrWhiteSpace(feedback.Text)?"请检查内容后重试。":"原因："+feedback.Text);autoTimer.Start();
+                        MessageBox.Show(dialog,feedback.Text,"遗留事项未保存",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+                    }));
                 };
                 try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
@@ -503,8 +514,18 @@ internal sealed partial class FloatingWindow {
         return match.Success?"/api/v2/tasks/"+match.Groups[1].Value+"/attachments/"+match.Groups[2].Value:null;
     }
     void CollectImages(List<GalleryImage> images,string html,string caption){
-        foreach(Match match in Regex.Matches(html??"","<img\\b[^>]*?\\bsrc\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>",RegexOptions.IgnoreCase)){
-            string source=AttachmentPath(match.Groups[1].Value);if(source!=null && !images.Any(image=>image.Source==source))images.Add(new GalleryImage{Source=source,Caption=caption});
+        foreach(Match match in Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase)){
+            string retained=ReferenceAttribute(match.Value,"data-tasktrace-src")??ReferenceAttribute(match.Value,"data-src")??"";
+            string raw=retained!=""?retained:ReferenceAttribute(match.Value,"src")??"";
+            string source=AttachmentPath(raw);
+            if(source!=null){if(!images.Any(image=>image.Source==source))images.Add(new GalleryImage{Source=source,Caption=caption});continue;}
+            var dataImage=Regex.Match(raw,@"^data:image/(?:png|jpe?g|gif|bmp);base64,(?<data>[A-Za-z0-9+/=\s]+)$",RegexOptions.IgnoreCase);
+            if(!dataImage.Success)continue;
+            try{
+                byte[] bytes=Convert.FromBase64String(Regex.Replace(dataImage.Groups["data"].Value,@"\s",""));
+                string key="data:"+Convert.ToBase64String(bytes);
+                if(!images.Any(image=>image.Source==key))images.Add(new GalleryImage{Source=key,Bytes=bytes,Caption=caption});
+            }catch{}
         }
     }
     async Task<List<GalleryImage>> GatherImages(long taskId,string onlyHtml,Form gallery,string scopeLabel=null){
@@ -556,7 +577,7 @@ internal sealed partial class FloatingWindow {
                 var label=new Label{Text=(++loaded)+". "+item.Caption,Dock=DockStyle.Top,Height=34,AutoEllipsis=true};
                 var box=new PictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.White};card.Controls.Add(box);card.Controls.Add(label);flow.Controls.Add(card);
                 try{
-                    byte[] bytes=await DownloadImage(item.Source);if(gallery.IsDisposed)return;
+                    byte[] bytes=item.Bytes??await DownloadImage(item.Source);if(gallery.IsDisposed)return;
                     using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream)){
                         double scale=Math.Min(1.0,Math.Min(1400.0/image.Width,1000.0/image.Height));var preview=new Bitmap(image,new Size(Math.Max(1,(int)(image.Width*scale)),Math.Max(1,(int)(image.Height*scale))));bitmaps.Add(preview);box.Image=preview;
                         card.Height=Math.Max(170,Math.Min(560,(int)((card.Width-10)*(double)image.Height/image.Width)+34));
