@@ -140,6 +140,7 @@
 		<Modal
 			v-if="pendingRemoval"
 			:enabled="true"
+			submit-label="删除权限"
 			@close="cancelRemoveMember"
 			@submit="confirmRemoveMember"
 		>
@@ -485,17 +486,19 @@ async function confirmRemoveMember() {
 			await teamStore.removeMember(member)
 		} catch (cause) {
 			if (!needsAdministratorAuthorization(cause)) throw cause
-			const confirmed = window.confirm(`删除 ${member} 的 teamData 权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；本次操作完成后 TaskTrace 仍以普通权限运行。`)
-			if (!confirmed) return
 			await teamStore.removeMember(member, true)
-		}
-		await teamStore.refresh()
-		if (teamStore.status.unassigned_members?.some(value => value.toLowerCase() === member.toLowerCase())) {
-			throw new Error(`Windows 仍报告 ${member} 拥有 teamData 权限，请重试或检查文件夹共享设置。`)
 		}
 		pendingRemoval.value = ''
 		success({message: `已删除 ${member} 的 teamData 权限。`})
 	} catch (cause) {
+		try {
+			await teamStore.refresh()
+			if (!teamStore.status.unassigned_members?.some(value => value.toLowerCase() === member.toLowerCase())) {
+				pendingRemoval.value = ''
+				success({message: `已删除 ${member} 的 teamData 权限。`})
+				return
+			}
+		} catch { /* Keep the original permission error when status cannot be refreshed. */ }
 		memberActionError.value = getErrorText(cause)
 		error(cause)
 	} finally {

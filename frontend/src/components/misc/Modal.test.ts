@@ -197,6 +197,23 @@ describe('Modal.vue — open race condition (#2590)', () => {
 })
 
 describe('Modal.vue — accessible name derivation', () => {
+	it('uses caller-provided action labels in confirmation dialogs', async () => {
+		const wrapper = mount(Modal, {
+			...globalMocks,
+			attachTo: document.body,
+			props: {enabled: true, cancelLabel: '保留人员', submitLabel: '删除权限'},
+			slots: {header: '<span>删除协作人员权限</span>', text: '<p>确认删除</p>'},
+		})
+		await flushPromises()
+		await nextTick()
+
+		const actions = document.querySelector('.modal-content .actions')?.textContent || ''
+		expect(actions).toContain('保留人员')
+		expect(actions).toContain('删除权限')
+
+		wrapper.unmount()
+	})
+
 	it('labels the dialog via the rendered header slot when no default slot or aria-label is given', async () => {
 		const wrapper = mount(Modal, {
 			...globalMocks,

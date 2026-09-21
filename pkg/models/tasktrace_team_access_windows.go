@@ -79,6 +79,8 @@ try {
 if($result.Count -eq 0 -and $domainFailure){throw ('域账户查询失败：'+$domainFailure)}
 ConvertTo-Json -InputObject ([object[]]@($result | Sort-Object account_name | Select-Object -First 25)) -Compress`
 
+const taskTraceTeamSystemAccountPattern = `^(BUILTIN|NT AUTHORITY|CREATOR OWNER)\\`
+
 const taskTraceTeamListAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
@@ -89,7 +91,7 @@ foreach($entry in $acl.Access){
   if($entry.AccessControlType -ne 'Allow'){continue}
   if(($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq 0){continue}
   $name=$entry.IdentityReference.Value
-  if($name -and $name -notmatch '^(BUILTIN|NT AUTHORITY|CREATOR OWNER)\' -and $name -notin @('Everyone','Authenticated Users')){$values+=$name}
+  if($name -and $name -notmatch '` + taskTraceTeamSystemAccountPattern + `' -and $name -notin @('Everyone','Authenticated Users')){$values+=$name}
 }
 $share=Get-SmbShare -ErrorAction SilentlyContinue | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $resolvedRoot)} | Select-Object -First 1
 if($null -ne $share){

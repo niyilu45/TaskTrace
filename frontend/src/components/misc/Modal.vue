@@ -64,7 +64,7 @@
 									class="has-text-danger"
 									@click="$emit('close')"
 								>
-									{{ $t('misc.cancel') }}
+									{{ cancelLabel || $t('misc.cancel') }}
 								</XButton>
 								<XButton
 									v-cy="'modalPrimary'"
@@ -72,7 +72,7 @@
 									:shadow="false"
 									@click="$emit('submit')"
 								>
-									{{ $t('misc.doit') }}
+									{{ submitLabel || $t('misc.doit') }}
 								</XButton>
 							</div>
 						</slot>
@@ -98,12 +98,16 @@ const props = withDefaults(defineProps<{
 	wide?: boolean,
 	variant?: 'default' | 'hint-modal' | 'scrolling' | 'top' | 'fullscreen' | 'sheet',
 	title?: string,
+	cancelLabel?: string,
+	submitLabel?: string,
 }>(), {
 	enabled: true,
 	overflow: false,
 	wide: false,
 	variant: 'default',
 	title: '',
+	cancelLabel: '',
+	submitLabel: '',
 })
 
 defineEmits(['close', 'submit'])
@@ -626,6 +630,20 @@ $modal-width: 1024px;
 	justify-content: center;
 	padding: 0 1rem;
 	min-block-size: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+}
+
+.default .modal-content:has(.modal-header),
+.top .modal-content:has(.modal-header) {
+	min-block-size: 0;
+	padding: 1.5rem;
+	border-radius: 12px;
+	background: var(--white);
+	color: var(--text);
+	box-shadow: var(--shadow-lg);
+
+	.modal-header {
+		color: var(--text-strong);
+	}
 }
 
 .modal-content :deep(.card .card-header-icon.close) {

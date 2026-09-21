@@ -13,11 +13,11 @@
 			:placeholder="placeholder"
 			aria-autocomplete="list"
 			:aria-controls="`${inputId}-results`"
-			@focus="focused = true"
+			@focus="openPicker"
 			@blur="closeLater"
 		>
 		<div
-			v-if="focused && query.trim()"
+			v-if="focused"
 			:id="`${inputId}-results`"
 			class="team-member-results"
 			role="listbox"
@@ -43,11 +43,11 @@
 				v-if="!loading && !availableCandidates.length"
 				class="team-member-state"
 			>
-				{{ searchError || '没有找到可添加的账户' }}
+				{{ searchError || (query.trim() ? '没有找到可添加的账户' : '还没有已添加的协作人员，请输入姓名或 Windows 用户名继续查找。') }}
 			</p>
 		</div>
 		<p class="help">
-			输入用户名、显示名称或“电脑名\\用户名”，候选者会自动出现。
+			点击输入框会先列出已经添加的协作人员；也可以输入用户名、显示名称或“电脑名\\用户名”继续查找。
 		</p>
 	</div>
 </template>
@@ -163,6 +163,11 @@ function choose(candidate: TaskTraceTeamMemberCandidate) {
 	query.value = ''
 	candidates.value = []
 	focused.value = false
+}
+
+function openPicker() {
+	focused.value = true
+	void teamStore.refresh().catch(() => undefined)
 }
 
 function closeLater() {

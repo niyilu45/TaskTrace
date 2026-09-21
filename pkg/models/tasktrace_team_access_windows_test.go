@@ -36,6 +36,7 @@ func TestTaskTraceTeamAccessNeedsElevation(t *testing.T) {
 func TestTaskTraceTeamPowerShellScriptsParse(t *testing.T) {
 	for name, script := range map[string]string{
 		"search":          taskTraceTeamSearchScript,
+		"list":            taskTraceTeamListAccessScript,
 		"grant":           taskTraceTeamGrantAccessScript,
 		"elevated grant":  taskTraceTeamGrantElevatedScript(),
 		"remove":          taskTraceTeamRemoveAccessScript,
@@ -48,4 +49,13 @@ func TestTaskTraceTeamPowerShellScriptsParse(t *testing.T) {
 			assert.NoError(t, err, string(output))
 		})
 	}
+}
+
+func TestTaskTraceTeamSystemAccountPattern(t *testing.T) {
+	script := `$ErrorActionPreference='Stop'
+$pattern=$env:TASKTRACE_TEAM_PATTERN
+if('BUILTIN\Administrators' -notmatch $pattern){throw 'system account was not matched'}
+if('DOMAIN\alice' -match $pattern){throw 'collaboration account was matched'}`
+	output, err := taskTraceTeamPowerShell(script, "TASKTRACE_TEAM_PATTERN="+taskTraceTeamSystemAccountPattern)
+	assert.NoError(t, err, string(output))
 }
