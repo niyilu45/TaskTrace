@@ -14,6 +14,8 @@ using System.Windows.Forms;
 internal sealed class ProgressHtmlEditor : UserControl {
     readonly WebBrowser browser = new WebBrowser { Dock = DockStyle.Fill, AllowWebBrowserDrop = false, IsWebBrowserContextMenuEnabled = false, WebBrowserShortcutsEnabled = true, ScriptErrorsSuppressed = true };
     string pendingHtml = "";
+    string observedHtml = "";
+    int changeVersion;
     bool ready, changing, readOnly;
     public event EventHandler HtmlChanged;
 
@@ -32,7 +34,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
     void AttachChangeEvents() {
         var editor = browser.Document.GetElementById("progress-editor");
         if(editor == null) return;
-        EventHandler changed = delegate { if(!changing && HtmlChanged != null) HtmlChanged(this, EventArgs.Empty); };
+        EventHandler changed = delegate { NotifyChanged(); };
         editor.AttachEventHandler("oninput", changed);
         editor.AttachEventHandler("onkeyup", changed);
         editor.AttachEventHandler("oncut", changed);
@@ -45,7 +47,17 @@ internal sealed class ProgressHtmlEditor : UserControl {
         if(editor == null) return;
         changing = true;
         editor.InnerHtml = pendingHtml ?? "";
+        observedHtml = editor.InnerHtml ?? "";
         changing = false;
+    }
+
+    void NotifyChanged() {
+        if(changing || !ready || browser.Document == null)return;
+        var editor=browser.Document.GetElementById("progress-editor");
+        string current=editor==null?pendingHtml??"":editor.InnerHtml??"";
+        if(String.Equals(current,observedHtml,StringComparison.Ordinal))return;
+        observedHtml=current;changeVersion++;
+        if(HtmlChanged != null)HtmlChanged(this,EventArgs.Empty);
     }
 
     public string Html {
@@ -58,11 +70,12 @@ internal sealed class ProgressHtmlEditor : UserControl {
     }
 
     public int ImageCount { get { return Regex.Matches(Html ?? "", @"<img\b", RegexOptions.IgnoreCase).Count; } }
+    public int ChangeVersion { get { return changeVersion; } }
 
     public void InsertImage(byte[] bytes) {
         if(bytes == null || bytes.Length == 0 || !ready || browser.Document == null) return;
         browser.Document.InvokeScript("insertTaskTraceImage", new object[] { "data:image/png;base64," + Convert.ToBase64String(bytes) });
-        if(HtmlChanged != null) HtmlChanged(this, EventArgs.Empty);
+        NotifyChanged();
     }
 
     public void SetReadOnly(bool value) {
