@@ -27,7 +27,7 @@ vi.mock('@/helpers/tasktraceDraftCache', () => ({
 }))
 vi.mock('@/helpers/sharedOutstanding', () => ({readTaskHistory: vi.fn(async () => []), sharedOutstanding: vi.fn(), changeOutstanding: vi.fn()}))
 vi.mock('./AutoSaveSettings.vue', () => ({default: {template: '<span />'}}))
-vi.mock('./SharedOutstanding.vue', () => ({default: {template: '<span />'}}))
+vi.mock('./SharedOutstanding.vue', () => ({default: {template: '<section class="shared-outstanding-stub" />'}}))
 vi.mock('./ReadonlyRichText.vue', () => ({default: {template: '<span />'}}))
 
 let wrapper: VueWrapper
@@ -102,6 +102,8 @@ describe('daily progress Undo drafts', () => {
 		await flushPromises()
 		const memberEditors = wrapper.findAll('.member-progress-editor')
 		expect(memberEditors).toHaveLength(2)
+		expect(wrapper.get('.daily-progress-editors').findAll('.member-progress-editor')).toHaveLength(2)
+		expect(wrapper.html().indexOf('member-progress-list')).toBeLessThan(wrapper.html().indexOf('shared-outstanding-stub'))
 		const alice = memberEditors.find(editor => editor.text().includes('alice'))!
 		expect(alice.get<HTMLTextAreaElement>('textarea').element.value).toContain('alice final')
 
@@ -119,6 +121,28 @@ describe('daily progress Undo drafts', () => {
 		expect(await exposed.switchDate('2026-09-21')).toBe(true)
 		await flushPromises()
 		expect(wrapper.findAll('.member-progress-editor')).toHaveLength(0)
+	})
+
+	it('refreshes collaborator editors after team comments are synchronized', async () => {
+		vi.mocked(readTaskHistory).mockResolvedValue([])
+		vi.mocked(sharedOutstanding).mockReturnValue({id: 1, items: []})
+		wrapper = mount(DailyProgress, {props: {taskId: 81}})
+		await flushPromises()
+		const exposed = wrapper.vm as unknown as {switchDate: (date: string) => Promise<boolean>, refreshHistory: () => Promise<boolean>}
+		expect(await exposed.switchDate('2026-09-20')).toBe(true)
+		expect(wrapper.findAll('.member-progress-editor')).toHaveLength(0)
+
+		vi.mocked(readTaskHistory).mockResolvedValue([{
+			id: 21,
+			created: '2026-09-20T09:00:00Z',
+			comment: '<h3>每日进展 · 2026-09-20</h3><p>alice synced</p>' + serializeTeamCommentMarker({id: 'alice-synced', author: 'alice'}),
+		}])
+		expect(await exposed.refreshHistory()).toBe(true)
+		await flushPromises()
+
+		const editor = wrapper.get('.member-progress-editor')
+		expect(editor.text()).toContain('alice')
+		expect(editor.get<HTMLTextAreaElement>('textarea').element.value).toContain('alice synced')
 	})
 
 	it('caches changed progress without submitting it and clears the cache after explicit save', async () => {

@@ -382,6 +382,11 @@ function rememberComments() {
 	void revealSourceComment()
 }
 
+async function refreshDailyProgressHistory() {
+	await nextTick()
+	await dailyProgress.value?.refreshHistory()
+}
+
 const showDeleteModal = ref(false)
 const commentToDelete = reactive(new TaskCommentModel())
 
@@ -502,12 +507,14 @@ async function loadComments(taskId: ITask['id'], force = false) {
 		if (props.initialComments.length < configStore.maxItemsPerPage) {
 			comments.value = props.initialComments
 			rememberComments()
+			await refreshDailyProgressHistory()
 			return
 		}
 	}
 
 	comments.value = await taskCommentService.getAll({taskId}, {order_by: commentSortOrder.value}, currentPage.value)
 	rememberComments()
+	await refreshDailyProgressHistory()
 }
 
 async function changePage(page: number) {

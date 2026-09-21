@@ -37,17 +37,28 @@ function mergedAttribute(comment: string, name: string) {
 }
 
 export function sortProgressNotes(notes: TaskComment[]) {
+	const entries = notes.map(raw => ({raw, parsed: parseProgressNote(raw)}))
+	const byId = new Map(entries.filter(entry => !!entry.raw.id).map(entry => [entry.raw.id!, entry]))
+	const byTeamId = new Map(entries.filter(entry => !!entry.parsed.teamId).map(entry => [entry.parsed.teamId, entry]))
 	const absorbed = new Set<number>()
 	const absorbedTeam = new Set<string>()
-	for (const note of notes) {
-		for (const id of mergedAttribute(note.comment || '', 'data-tasktrace-merged')) { if (Number(id) > 0 && Number(id) !== note.id) absorbed.add(Number(id)) }
-		for (const id of mergedAttribute(note.comment || '', 'data-tasktrace-team-merged')) absorbedTeam.add(id)
+	for (const source of entries) {
+		if (!source.parsed.daily) continue
+		const lineage = `${source.parsed.date}\u0000${source.parsed.author.trim().toLowerCase()}`
+		for (const value of mergedAttribute(source.raw.comment || '', 'data-tasktrace-merged')) {
+			const id = Number(value)
+			const target = byId.get(id)
+			if (id > 0 && id !== source.raw.id && target?.parsed.daily && `${target.parsed.date}\u0000${target.parsed.author.trim().toLowerCase()}` === lineage) absorbed.add(id)
+		}
+		for (const id of mergedAttribute(source.raw.comment || '', 'data-tasktrace-team-merged')) {
+			const target = byTeamId.get(id)
+			if (id !== source.parsed.teamId && target?.parsed.daily && `${target.parsed.date}\u0000${target.parsed.author.trim().toLowerCase()}` === lineage) absorbedTeam.add(id)
+		}
 	}
-	return notes.filter(note => {
-		if (absorbed.has(note.id || 0)) return false
-		const marker = readTeamCommentMarker(note.comment || '')
-		return !marker || !absorbedTeam.has(marker.id)
-	}).filter(note => new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')?.textContent !== 'TaskTrace 遗留事项清单').map(parseProgressNote).sort((a, b) => (b.date === '日期未知' ? '' : b.date).localeCompare(a.date === '日期未知' ? '' : a.date) || b.created - a.created || (b.id || 0) - (a.id || 0))
+	return entries.filter(entry => !absorbed.has(entry.raw.id || 0) && (!entry.parsed.teamId || !absorbedTeam.has(entry.parsed.teamId)))
+		.filter(entry => new DOMParser().parseFromString(entry.raw.comment || '', 'text/html').querySelector('h3')?.textContent !== 'TaskTrace 遗留事项清单')
+		.map(entry => entry.parsed)
+		.sort((a, b) => (b.date === '日期未知' ? '' : b.date).localeCompare(a.date === '日期未知' ? '' : a.date) || b.created - a.created || (b.id || 0) - (a.id || 0))
 }
 
 export function finalProgressNotes(notes: TaskComment[]) {

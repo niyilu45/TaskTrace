@@ -49,6 +49,20 @@ it('hides revisions absorbed by stable team ids even when local database ids dif
 	expect(mergedDay([first, final], '2026-09-20', 'alice').mergedTeamIds).toEqual(['shared-first'])
 })
 
+it('does not hide another member when imported numeric merged ids collide', () => {
+	const alice = {id: 41, created: '2026-09-20T08:00:00Z', comment: daily('2026-09-20', 'alice remains') + serializeTeamCommentMarker({id: 'alice-final', author: 'alice'})}
+	const bob = {id: 99, created: '2026-09-20T09:00:00Z', comment: '<h3 data-tasktrace-merged="41">每日进展 · 2026-09-20</h3><p>bob final</p>' + serializeTeamCommentMarker({id: 'bob-final', author: 'bob'})}
+
+	expect(finalProgressNotes([alice, bob]).map(note => [note.author, note.id])).toEqual([['bob', 99], ['alice', 41]])
+})
+
+it('does not hide another date when imported numeric merged ids collide', () => {
+	const earlier = {id: 41, created: '2026-09-19T08:00:00Z', comment: daily('2026-09-19', 'earlier remains') + serializeTeamCommentMarker({id: 'alice-earlier', author: 'alice'})}
+	const later = {id: 99, created: '2026-09-20T09:00:00Z', comment: '<h3 data-tasktrace-merged="41">每日进展 · 2026-09-20</h3><p>later final</p>' + serializeTeamCommentMarker({id: 'alice-later', author: 'alice'})}
+
+	expect(sortProgressNotes([earlier, later]).map(note => note.id)).toEqual([99, 41])
+})
+
 it('merges same-day content and images while hiding absorbed source records', () => {
 	const original = [{id: 1, comment: daily('2026-09-20', 'first')}, {id: 2, comment: daily('2026-09-20', 'second') + '<img src="/api/v1/tasks/1/attachments/9">'}]
 	const merged = mergedDay(original, '2026-09-20')

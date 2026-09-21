@@ -21,37 +21,59 @@
 			:disabled="saving || referenceLoading"
 			@update:modelValue="switchDate"
 		/>
-		<div class="daily-progress__heading-row">
-			<div>
-				<label :for="`progress-text-${taskId}`">我的进展</label>
-				<p>我的编辑框始终保留。图片直接插入正文，选中后可按退格或 Delete 删除。</p>
-			</div>
-			<button
-				class="button is-primary"
-				type="button"
-				:disabled="saving || referenceLoading || restoring || sharedBusy || !canSave"
-				@click="save"
-			>
-				{{ saving ? '正在保存…' : '保存进展' }}
-			</button>
-		</div>
-		<div
-			:id="`progress-text-${taskId}`"
-			class="daily-progress__editor"
-			tabindex="-1"
+		<section
+			class="daily-progress-editors"
+			aria-label="当天各成员进展"
 		>
-			<Editor
-				v-model="progress"
-				:always-editing="true"
-				:allow-base64-images="true"
-				:upload-callback="stageProgressImages"
-				placeholder="今天完成了什么？可直接粘贴图片。"
-				@save="save"
-			/>
-		</div>
-		<p class="progress-image-count">
-			正文内有 {{ imageCount }} 张图片。自动保存只缓存到 .cache；点击“保存进展”后才会正式提交。
-		</p>
+			<div class="daily-progress__heading-row">
+				<div>
+					<label :for="`progress-text-${taskId}`">我的进展</label>
+					<p>我的编辑框始终保留。图片直接插入正文，选中后可按退格或 Delete 删除。</p>
+				</div>
+				<button
+					class="button is-primary"
+					type="button"
+					:disabled="saving || referenceLoading || restoring || sharedBusy || !canSave"
+					@click="save"
+				>
+					{{ saving ? '正在保存…' : '保存进展' }}
+				</button>
+			</div>
+			<div
+				:id="`progress-text-${taskId}`"
+				class="daily-progress__editor"
+				tabindex="-1"
+			>
+				<Editor
+					v-model="progress"
+					:always-editing="true"
+					:allow-base64-images="true"
+					:upload-callback="stageProgressImages"
+					placeholder="今天完成了什么？可直接粘贴图片。"
+					@save="save"
+				/>
+			</div>
+			<p class="progress-image-count">
+				正文内有 {{ imageCount }} 张图片。自动保存只缓存到 .cache；点击“保存进展”后才会正式提交。
+			</p>
+
+			<section
+				v-if="otherAuthorsForDate.length"
+				class="member-progress-list"
+				aria-label="其他成员当天进展"
+			>
+				<h4>其他成员在当天提交的进展</h4>
+				<DailyProgressMemberEditor
+					v-for="author in otherAuthorsForDate"
+					:key="`${date}:${author.toLowerCase()}`"
+					:task-id="taskId"
+					:date="date"
+					:author="author"
+					:history="referenceHistory"
+					@saved="memberSaved"
+				/>
+			</section>
+		</section>
 
 		<div class="reference-picker">
 			<label>引用历史进展</label>
@@ -183,23 +205,6 @@
 			@busy="sharedBusy = $event"
 		/>
 
-		<section
-			v-if="otherAuthorsForDate.length"
-			class="member-progress-list"
-			aria-label="其他成员当天进展"
-		>
-			<h4>其他成员在当天提交的进展</h4>
-			<DailyProgressMemberEditor
-				v-for="author in otherAuthorsForDate"
-				:key="`${date}:${author.toLowerCase()}`"
-				:task-id="taskId"
-				:date="date"
-				:author="author"
-				:history="referenceHistory"
-				@saved="memberSaved"
-			/>
-		</section>
-
 		<div class="daily-progress-actions">
 			<span role="status">{{ message || 'Ctrl + Enter 快速保存，历史记录保留在下方。' }}</span>
 		</div>
@@ -253,6 +258,7 @@ const restoring = ref(true)
 const message = ref('')
 const lastSaved = ref('')
 let version = 0
+let historyRefreshVersion = 0
 
 const imageCount = computed(() => countProgressImages(progress.value))
 const canSave = computed(() => !!autoCommentId.value || references.value.length > 0 || imageCount.value > 0 || !isEditorContentEmpty(progress.value))
@@ -382,6 +388,19 @@ async function memberSaved() {
 	}
 }
 
+async function refreshHistory() {
+	const request = ++historyRefreshVersion
+	const taskId = props.taskId
+	try {
+		const history = await readTaskHistory(taskId)
+		if (request !== historyRefreshVersion || taskId !== props.taskId) return false
+		referenceHistory.value = history
+		return true
+	} catch {
+		return false
+	}
+}
+
 watch(() => props.taskId, async () => {
 	if (isLocalBuild && !teamStore.loaded) {
 		try { await teamStore.refresh() } catch { /* Personal progress remains available while collaboration status is unavailable. */ }
@@ -504,12 +523,13 @@ async function save() {
 	}
 }
 
-defineExpose({switchDate})
+defineExpose({switchDate, refreshHistory})
 useAutoSave(async () => {
 	if (!restoring.value && !sharedBusy.value) await cacheChangedDrafts()
 })
 onBeforeUnmount(() => {
 	++version
+	++historyRefreshVersion
 	stash()
 	if (autoSaveSettings.enabled) void cacheChangedDrafts().catch(() => {})
 })
@@ -542,6 +562,12 @@ onBeforeUnmount(() => {
 }
 
 .daily-progress__editor {
+	min-inline-size: 0;
+}
+
+.daily-progress-editors {
+	display: grid;
+	gap: .65rem;
 	min-inline-size: 0;
 }
 
