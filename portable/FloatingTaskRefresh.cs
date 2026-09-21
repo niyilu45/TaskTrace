@@ -200,7 +200,10 @@ internal sealed partial class FloatingWindow {
         if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
         if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;
-        if(singleLine.Checked)roots=FlattenTaskNodes(roots,all,parents,sharedLists);
+        if(singleLine.Checked)roots=FlattenTaskNodes(roots,all,parents,sharedLists).OrderBy(node=>{
+            var leaf=node.Tag as OutstandingLeaf;
+            return leaf==null?PriorityNumber(all[(long)node.Tag]):leaf.Priority;
+        }).ToList();
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
         var visibleRoots=roots.ToArray();

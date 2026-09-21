@@ -497,11 +497,13 @@ internal sealed partial class FloatingWindow : Form {
         SetBusy(true); timer.Stop();
         try {
             var history = await ReadHistory(id);
-            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(580,780),MinimumSize=new Size(440,660),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
-                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，选中后可按退格或 Delete 删除"};
+                var collaboratorGroup=new GroupBox {Text="其他协作人员当天进展",Dock=DockStyle.Fill,Visible=false,Padding=new Padding(8)};
+                var collaboratorProgress=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=SystemColors.Window,AccessibleName="其他协作人员在所选日期的进展"};collaboratorGroup.Controls.Add(collaboratorProgress);
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
                 sharedButton.Click+=delegate {ShowOutstanding(id,true);};
                 var historyButton=new Button {Text="查看历史进展",Dock=DockStyle.Fill,AccessibleName="查看所有历史进展"};
@@ -521,7 +523,7 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 图片直接嵌入正文，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                layout.Controls.Add(day);layout.Controls.Add(new Label {Text="当天进展与更正 · 图片直接嵌入正文，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"});layout.Controls.Add(progress);layout.Controls.Add(collaboratorGroup);layout.Controls.Add(referenceGroup);layout.Controls.Add(navigationRow);layout.Controls.Add(actionRow);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false;
                 Action renderImages=delegate { };
@@ -537,7 +539,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
                     int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
                     toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
-                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[3].Height=referenceList.Visible?230:82;
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[4].Height=referenceList.Visible?230:82;
                     referenceLayout.RowStyles[2].Height=referenceActions.Visible?34:0;
                     referenceGroup.Text="引用历史进展";
                 };
@@ -547,6 +549,9 @@ internal sealed partial class FloatingWindow : Form {
                     var allRecords=DailyHistory(history).Where(note=>DayOf(note)==selectedDay).OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
                     collaborativeProgress=history.Any(note=>ReadFloatingTeamMarker((string)note["comment"])!=null);
                     var records=(collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker==null || String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}):allRecords).ToList();
+                    var otherRecords=collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker!=null && !String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}).ToList():new List<Dictionary<string,object>>();
+                    collaboratorProgress.Text=String.Join("\r\n\r\n",otherRecords.Select(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);string value=Plain(ProgressBody((string)note["comment"],id));return (String.IsNullOrWhiteSpace(marker.author)?"协作成员":marker.author)+"："+(String.IsNullOrWhiteSpace(value)?"（包含图片或引用，请在历史进展中查看）":value);}));
+                    collaboratorGroup.Visible=otherRecords.Count>0;layout.RowStyles[3].Height=otherRecords.Count>0?112:0;
                     commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));
                     mergedIds=records.Select(note=>Convert.ToInt64(note["id"])).Concat(records.SelectMany(note=>MergedIds((string)note["comment"]))).Where(value=>value!=commentId).Distinct().ToList();
                     currentTeamId=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).LastOrDefault()??"";

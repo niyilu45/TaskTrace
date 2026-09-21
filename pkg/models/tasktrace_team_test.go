@@ -188,3 +188,15 @@ func TestTaskTraceTeamOutstandingItemsMergeIndependently(t *testing.T) {
 	require.Empty(t, options)
 	require.Equal(t, "Bob 新增", value)
 }
+
+func TestTaskTraceTeamOutstandingPriorityStaysLocal(t *testing.T) {
+	local := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one" data-done="false" data-priority="2">本机内容</li><li data-id="two" data-priority="7">第二条</li></ul>`
+	merged := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">协作者修改</li><li data-id="three">协作者新增</li></ul>`
+
+	priorities := taskTraceTeamOutstandingPriorities(local)
+	rebuilt := taskTraceTeamApplyOutstandingPriorities(merged, priorities)
+
+	require.Contains(t, rebuilt, `<li data-id="one" data-priority="2">协作者修改</li>`)
+	require.NotContains(t, rebuilt, `data-id="three" data-priority=`)
+	require.Equal(t, map[string]string{"one": "2", "two": "7"}, priorities)
+}

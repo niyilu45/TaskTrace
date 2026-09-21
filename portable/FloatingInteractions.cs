@@ -364,7 +364,7 @@ internal sealed partial class FloatingWindow {
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
     async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
     async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
-        if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;SetBusy(true);timer.Stop();editingOutstanding=true;
+        if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;SetBusy(true);timer.Stop();editingOutstanding=true;
         try {
             var shared=ReadShared(await ReadHistory(id));
             using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(580,570),MinimumSize=new Size(500,480),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false,KeyPreview=true})){
@@ -378,8 +378,8 @@ internal sealed partial class FloatingWindow {
                 priorityRow.Controls.Add(new Label{Text="优先级（0 最高，9 最低）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项优先级说明"},0,0);priorityRow.Controls.Add(priority,1,0);
                 var previews=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false};
                 var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill};
-                var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
-                buttons.Controls.AddRange(new Control[]{save,fresh,reminder,files,gallery,remove,clearImages,recover});
+                var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
+                buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority;bool writing=false,loading=false,removeExistingImages=false;
@@ -404,6 +404,7 @@ internal sealed partial class FloatingWindow {
                 list.SelectedIndexChanged+=delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}edit(selected);};
                 if(!String.IsNullOrEmpty(selectedItemId)){var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(selected!=null)list.SelectedItem=selected;}
                 fresh.Click+=delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;edit(null);input.Focus();};
+                editParent.Click+=delegate{if(writing || !mayDiscard())return;editParentRequested=true;dialog.Close();};
                 recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalText="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
@@ -454,11 +455,12 @@ internal sealed partial class FloatingWindow {
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
-                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing || (!verify && !mayDiscard()))e.Cancel=true;};
+                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing || (!editParentRequested && !verify && !mayDiscard()))e.Cancel=true;};
                 try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
         }catch(Exception e){if(verify)throw;Error(e);}finally{editingOutstanding=false;if(!nested){SetBusy(false);timer.Start();}}
+        if(editParentRequested && !closing)await EditProgress(id,TaskTitle(id));
     }
 
     sealed class GalleryImage {public string Source,Caption;public byte[] Bytes;}

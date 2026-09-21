@@ -148,7 +148,11 @@ internal sealed partial class FloatingWindow {
             string own=String.Join("",ordered.Select(note=>ProgressBody((string)note["comment"],taskId)));
             var references=ordered.SelectMany(note=>SplitProgressReferences((string)note["comment"],taskId).References).GroupBy(item=>item.Id).Select(items=>items.First()).ToList();
             string referenceHtml=String.Join("",references.Select(item=>item.Html));string displayHtml=own+referenceHtml;
-            string text=Plain(own);int imageCount=Regex.Matches(displayHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
+            bool hasTeamAuthors=ordered.Any(note=>ReadFloatingTeamMarker((string)note["comment"])!=null);
+            string text=String.Join("\r\n\r\n",ordered.Select(note=>{
+                string value=Plain(ProgressBody((string)note["comment"],taskId));var marker=ReadFloatingTeamMarker((string)note["comment"]);
+                return hasTeamAuthors && marker!=null && !String.IsNullOrWhiteSpace(marker.author)?marker.author+"："+(String.IsNullOrWhiteSpace(value)?"（仅包含图片或引用）":value):value;
+            }).Where(value=>!String.IsNullOrWhiteSpace(value)));int imageCount=Regex.Matches(displayHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
             if(imageCount>0)text+=(text.Length==0?"":"\r\n")+"（含 "+imageCount+" 张图片）";
             if(references.Count>0)text+=(text.Length==0?"":"\r\n\r\n")+"引用历史进展：\r\n"+String.Join("\r\n",references.Select(item=>item.Date+"："+Plain(item.Html).Replace("\r\n"," ").Replace("\n"," ")));
             return new ProgressHistoryRow{Date=group.Key,Html=displayHtml,Text=group.Key+"："+(String.IsNullOrWhiteSpace(text)?"（仅包含无法直接显示的内容）":text),ImageCount=imageCount};

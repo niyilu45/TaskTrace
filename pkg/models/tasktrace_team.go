@@ -238,6 +238,7 @@ type taskTraceTeamLink struct {
 
 var taskTraceTeamMarker = regexp.MustCompile(`<!--tasktrace-team:([A-Za-z0-9_-]+)-->`)
 var taskTraceTeamOutstandingItem = regexp.MustCompile(`(?s)<li[^>]*data-id="([^"]+)"[^>]*>(.*?)</li>`)
+var taskTraceTeamOutstandingPriority = regexp.MustCompile(`(?i)\sdata-priority="([0-9])"`)
 
 func taskTraceTeamRoot() string {
 	if root := strings.TrimSpace(os.Getenv("TASKTRACE_TEAM_ROOT")); root != "" {
@@ -578,6 +579,47 @@ func taskTraceTeamOutstandingHTML(items map[string]string, order []string) strin
 	}
 	body.WriteString("</ul>")
 	return body.String()
+}
+
+// Outstanding priorities are a personal display preference. They deliberately do
+// not participate in the shared field value above, but must survive rebuilding a
+// collaborative outstanding list on this device.
+func taskTraceTeamOutstandingPriorities(body string) map[string]string {
+	priorities := map[string]string{}
+	for _, match := range taskTraceTeamOutstandingItem.FindAllStringSubmatchIndex(body, -1) {
+		if len(match) < 6 {
+			continue
+		}
+		id := body[match[2]:match[3]]
+		opening := body[match[0]:match[4]]
+		priority := taskTraceTeamOutstandingPriority.FindStringSubmatch(opening)
+		if len(priority) == 2 {
+			priorities[id] = priority[1]
+		}
+	}
+	return priorities
+}
+
+func taskTraceTeamApplyOutstandingPriorities(body string, priorities map[string]string) string {
+	if len(priorities) == 0 {
+		return body
+	}
+	return taskTraceTeamOutstandingItem.ReplaceAllStringFunc(body, func(item string) string {
+		match := taskTraceTeamOutstandingItem.FindStringSubmatch(item)
+		if len(match) != 3 {
+			return item
+		}
+		priority, ok := priorities[match[1]]
+		if !ok {
+			return item
+		}
+		openingEnd := strings.IndexByte(item, '>')
+		if openingEnd < 0 {
+			return item
+		}
+		opening := taskTraceTeamOutstandingPriority.ReplaceAllString(item[:openingEnd], "")
+		return opening + ` data-priority="` + priority + `"` + item[openingEnd:]
+	})
 }
 
 func taskTraceTeamCommentID(shareID, nodeID string, comment *TaskComment, actor string) string {
@@ -1447,6 +1489,9 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		outstanding = taskTraceTeamOutstandingHTML(outstandingItems, outstandingOrder)
+		if localTask, ok := taskTraceTeamTaskMap(local)[node]; ok {
+			outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, taskTraceTeamOutstandingPriorities(localTask.Outstanding))
+		}
 		latest := rows[0].task
 		for _, row := range rows[1:] {
 			if row.task.Updated.After(latest.Updated) {
