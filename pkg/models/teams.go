@@ -19,6 +19,7 @@ package models
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"code.vikunja.io/api/pkg/config"
@@ -204,9 +205,12 @@ func (t *Team) CreateNewTeam(s *xorm.Session, a web.Auth, firstUserShouldBeAdmin
 		return err
 	}
 
-	// Check if we have a name
+	t.Name = strings.TrimSpace(t.Name)
 	if t.Name == "" {
 		return ErrTeamNameCannotBeEmpty{}
+	}
+	if err = ensureTeamNameUnique(s, t.Name, 0); err != nil {
+		return err
 	}
 
 	t.ID = 0
@@ -388,7 +392,7 @@ func (t *Team) Delete(s *xorm.Session, a web.Auth) (err error) {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /teams/{id} [post]
 func (t *Team) Update(s *xorm.Session, _ web.Auth) (err error) {
-	// Check if we have a name
+	t.Name = strings.TrimSpace(t.Name)
 	if t.Name == "" {
 		return ErrTeamNameCannotBeEmpty{}
 	}
@@ -397,6 +401,9 @@ func (t *Team) Update(s *xorm.Session, _ web.Auth) (err error) {
 	_, err = GetTeamByID(s, t.ID)
 	if err != nil {
 		return
+	}
+	if err = ensureTeamNameUnique(s, t.Name, t.ID); err != nil {
+		return err
 	}
 
 	_, err = s.ID(t.ID).UseBool("is_public").Update(t)
@@ -411,6 +418,21 @@ func (t *Team) Update(s *xorm.Session, _ web.Auth) (err error) {
 	}
 
 	return
+}
+
+func ensureTeamNameUnique(s *xorm.Session, name string, exceptID int64) error {
+	query := s.Where(db.ILIKE("name", name))
+	if exceptID > 0 {
+		query = query.And("id != ?", exceptID)
+	}
+	exists, err := query.Exist(&Team{})
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrTeamNameAlreadyExists{Name: name}
+	}
+	return nil
 }
 
 func cleanupTaskMembersAfterTeamRemoval(s *xorm.Session, teamID int64, memberID int64) (err error) {

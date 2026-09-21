@@ -1713,6 +1713,30 @@ func (err ErrCannotRemoveUserFromExternalTeam) HTTPError() web.HTTPError {
 	}
 }
 
+// ErrTeamNameAlreadyExists represents an error where another team already uses the requested name.
+type ErrTeamNameAlreadyExists struct {
+	Name string
+}
+
+func IsErrTeamNameAlreadyExists(err error) bool {
+	_, ok := err.(ErrTeamNameAlreadyExists)
+	return ok
+}
+
+func (err ErrTeamNameAlreadyExists) Error() string {
+	return fmt.Sprintf("Team name already exists [Name: %s]", err.Name)
+}
+
+const ErrCodeTeamNameAlreadyExists = 6011
+
+func (err ErrTeamNameAlreadyExists) HTTPError() web.HTTPError {
+	return web.HTTPError{
+		HTTPCode: http.StatusConflict,
+		Code:     ErrCodeTeamNameAlreadyExists,
+		Message:  "A team with this name already exists.",
+	}
+}
+
 // ====================
 // User <-> Project errors
 // ====================

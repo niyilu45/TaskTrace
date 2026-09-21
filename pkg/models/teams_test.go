@@ -63,6 +63,16 @@ func TestTeam_Create(t *testing.T) {
 		require.Error(t, err)
 		assert.True(t, IsErrTeamNameCannotBeEmpty(err))
 	})
+	t.Run("duplicate name ignores case and surrounding spaces", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		team := &Team{Name: "  TESTTEAM1  "}
+		err := team.Create(s, doer)
+		require.Error(t, err)
+		assert.True(t, IsErrTeamNameAlreadyExists(err))
+	})
 	t.Run("public", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
 		s := db.NewSession()
@@ -286,6 +296,19 @@ func TestTeam_Update(t *testing.T) {
 		err := team.Update(s, u)
 		require.Error(t, err)
 		assert.True(t, IsErrTeamDoesNotExist(err))
+	})
+	t.Run("duplicate name", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		s := db.NewSession()
+		defer s.Close()
+
+		team := &Team{
+			ID:   1,
+			Name: " TESTTEAM2 ",
+		}
+		err := team.Update(s, u)
+		require.Error(t, err)
+		assert.True(t, IsErrTeamNameAlreadyExists(err))
 	})
 }
 

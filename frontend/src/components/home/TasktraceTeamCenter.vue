@@ -2,26 +2,135 @@
 	<div
 		v-if="isLocalBuild"
 		class="team-center"
+		:class="{'team-center--page': !activityHost, 'team-center--activity-host': activityHost}"
 	>
-		<BaseButton
-			class="team-import-button"
-			aria-label="管理团队成员"
-			title="管理团队成员"
-			@click="openTeams"
-		>
-			<Icon icon="users" />
-			<span class="team-import-text">团队</span>
-		</BaseButton>
-		<BaseButton
-			class="team-import-button"
-			aria-label="导入团队任务链接"
-			title="导入团队任务链接"
-			@click="showImport = true"
-		>
-			<Icon icon="users" />
-			<span class="team-import-text">导入任务链接</span>
-		</BaseButton>
+		<template v-if="!activityHost">
+			<div class="team-page-actions">
+				<XButton
+					variant="secondary"
+					icon="link"
+					@click="showImport = true"
+				>
+					导入任务链接
+				</XButton>
+			</div>
+
+			<section class="team-management-section">
+				<div class="team-management-heading">
+					<div>
+						<h3>未分配人员</h3>
+						<p class="has-text-grey">
+							这些账户有 teamData 读写权限，但还不属于任何协作团队。
+						</p>
+					</div>
+					<XButton
+						variant="secondary"
+						@click="addingMember = !addingMember"
+					>
+						{{ addingMember ? '取消添加' : '添加协作成员' }}
+					</XButton>
+				</div>
+				<TeamMemberPicker
+					v-if="addingMember"
+					input-id="team-unassigned-member-search"
+					:excluded="knownMembers"
+					@select="grantMember"
+				/>
+				<div
+					v-if="teamStore.status.unassigned_members?.length"
+					class="team-unassigned-list"
+				>
+					<div
+						v-for="member in teamStore.status.unassigned_members"
+						:key="member"
+						class="team-unassigned-row"
+					>
+						<span>{{ member }}</span>
+						<XButton
+							variant="secondary"
+							:loading="teamStore.loading"
+							@click="removeMember(member)"
+						>
+							删除权限
+						</XButton>
+					</div>
+				</div>
+				<p
+					v-else
+					class="team-empty-state"
+				>
+					当前没有未分配人员。
+				</p>
+			</section>
+
+			<section class="team-management-section">
+				<h3>协作任务团队</h3>
+				<div
+					v-for="binding in teamStore.status.bindings"
+					:key="binding.share_id"
+					class="team-binding-card"
+				>
+					<div>
+						<strong>{{ binding.root_task_title || `任务 #${binding.root_task_id}` }}</strong>
+						<p>{{ binding.members?.join('、') }}</p>
+					</div>
+					<XButton
+						v-if="binding.member_link"
+						variant="secondary"
+						@click="copyTeamMembers(binding.member_link)"
+					>
+						分享成员
+					</XButton>
+				</div>
+				<p
+					v-if="!teamStore.status.bindings?.length"
+					class="team-empty-state"
+				>
+					还没有协作任务团队。分享一个任务后会在这里显示。
+				</p>
+			</section>
+
+			<section class="team-management-section">
+				<label
+					class="label"
+					for="team-member-link"
+				>导入团队成员链接</label>
+				<textarea
+					id="team-member-link"
+					v-model="memberLink"
+					class="textarea"
+					rows="3"
+					placeholder="粘贴以 tasktrace-team-members:// 开头的链接"
+				/>
+				<XButton
+					variant="primary"
+					:loading="teamStore.loading"
+					@click="importTeamMembers"
+				>
+					导入成员并设置权限
+				</XButton>
+				<div
+					v-if="memberImportResult"
+					class="team-import-result"
+				>
+					<p v-if="memberImportResult.added?.length">
+						已添加：{{ memberImportResult.added.join('、') }}
+					</p>
+					<p v-if="memberImportResult.skipped_self?.length">
+						已跳过当前用户：{{ memberImportResult.skipped_self.join('、') }}
+					</p>
+					<p
+						v-for="failure in memberImportResult.failed"
+						:key="failure.username"
+						class="has-text-danger"
+					>
+						{{ failure.username }} 导入失败：{{ failure.reason }}
+					</p>
+				</div>
+			</section>
+		</template>
 		<Modal
+			v-if="!activityHost"
 			:enabled="showImport"
 			@close="closeImport"
 			@submit="importTask"
@@ -78,130 +187,7 @@
 		</Modal>
 
 		<Modal
-			:enabled="showTeams"
-			@close="closeTeams"
-		>
-			<template #header>
-				团队成员管理
-			</template>
-			<template #text>
-				<section class="team-management-section">
-					<div class="team-management-heading">
-						<div>
-							<h3>未分配人员</h3>
-							<p class="has-text-grey">
-								这些账户有 teamData 读写权限，但还不属于任何协作团队。
-							</p>
-						</div>
-						<XButton
-							variant="secondary"
-							@click="addingMember = !addingMember"
-						>
-							{{ addingMember ? '取消添加' : '添加协作成员' }}
-						</XButton>
-					</div>
-					<TeamMemberPicker
-						v-if="addingMember"
-						input-id="team-unassigned-member-search"
-						:excluded="knownMembers"
-						@select="grantMember"
-					/>
-					<div
-						v-if="teamStore.status.unassigned_members?.length"
-						class="team-unassigned-list"
-					>
-						<div
-							v-for="member in teamStore.status.unassigned_members"
-							:key="member"
-							class="team-unassigned-row"
-						>
-							<span>{{ member }}</span>
-							<XButton
-								variant="secondary"
-								:loading="teamStore.loading"
-								@click="removeMember(member)"
-							>
-								删除权限
-							</XButton>
-						</div>
-					</div>
-					<p
-						v-else
-						class="team-empty-state"
-					>
-						当前没有未分配人员。
-					</p>
-				</section>
-
-				<section class="team-management-section">
-					<h3>已有团队</h3>
-					<div
-						v-for="binding in teamStore.status.bindings"
-						:key="binding.share_id"
-						class="team-binding-card"
-					>
-						<div>
-							<strong>{{ binding.root_task_title || `任务 #${binding.root_task_id}` }}</strong>
-							<p>{{ binding.members?.join('、') }}</p>
-						</div>
-						<XButton
-							v-if="binding.member_link"
-							variant="secondary"
-							@click="copyTeamMembers(binding.member_link)"
-						>
-							分享成员
-						</XButton>
-					</div>
-					<p
-						v-if="!teamStore.status.bindings?.length"
-						class="team-empty-state"
-					>
-						还没有协作团队。分享一个任务后会在这里显示。
-					</p>
-				</section>
-
-				<section class="team-management-section">
-					<label
-						class="label"
-						for="team-member-link"
-					>导入团队成员链接</label>
-					<textarea
-						id="team-member-link"
-						v-model="memberLink"
-						class="textarea"
-						rows="3"
-						placeholder="粘贴以 tasktrace-team-members:// 开头的链接"
-					/>
-					<XButton
-						variant="primary"
-						:loading="teamStore.loading"
-						@click="importTeamMembers"
-					>
-						导入成员并设置权限
-					</XButton>
-					<div
-						v-if="memberImportResult"
-						class="team-import-result"
-					>
-						<p v-if="memberImportResult.added?.length">
-							已添加：{{ memberImportResult.added.join('、') }}
-						</p>
-						<p v-if="memberImportResult.skipped_self?.length">
-							已跳过当前用户：{{ memberImportResult.skipped_self.join('、') }}
-						</p>
-						<p
-							v-for="failure in memberImportResult.failed"
-							:key="failure.username"
-							class="has-text-danger"
-						>
-							{{ failure.username }} 导入失败：{{ failure.reason }}
-						</p>
-					</div>
-				</section>
-			</template>
-		</Modal>
-
-		<Modal
+			v-if="activityHost"
 			:enabled="showActivity"
 			@close="showActivity = false"
 		>
@@ -339,10 +325,17 @@ import {error, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import type {TaskTraceTeamMemberCandidate, TaskTraceTeamMemberImportResult, TaskTraceTeamNotification} from '@/client/generated'
 
+const props = withDefaults(defineProps<{
+	activityHost?: boolean
+}>(), {
+	activityHost: false,
+})
+
+const activityHost = computed(() => props.activityHost)
+
 const teamStore = useTasktraceTeamStore()
 const router = useRouter()
 const showImport = ref(false)
-const showTeams = ref(false)
 const showActivity = ref(false)
 const link = ref('')
 const repositoryOverride = ref('')
@@ -381,10 +374,12 @@ async function poll() {
 }
 
 onMounted(async () => {
-	window.addEventListener('focus', poll)
-	window.addEventListener('tasktrace-team-activity-open', openActivity)
 	try { await teamStore.refresh() } catch { /* Offline team repositories retry on the next poll. */ }
-	timer = setInterval(poll, 15_000)
+	if (activityHost.value) {
+		window.addEventListener('focus', poll)
+		window.addEventListener('tasktrace-team-activity-open', openActivity)
+		timer = setInterval(poll, 15_000)
+	}
 })
 
 onBeforeUnmount(() => {
@@ -395,18 +390,6 @@ onBeforeUnmount(() => {
 
 function openActivity() {
 	showActivity.value = true
-}
-
-function openTeams() {
-	showTeams.value = true
-	teamStore.refresh().catch(cause => error(cause))
-}
-
-function closeTeams() {
-	showTeams.value = false
-	addingMember.value = false
-	memberLink.value = ''
-	memberImportResult.value = null
 }
 
 async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
@@ -520,20 +503,17 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 
 <style scoped lang="scss">
 .team-center {
+	display: block;
+}
+
+.team-center--activity-host {
+	display: contents;
+}
+
+.team-page-actions {
 	display: flex;
-	align-items: stretch;
-}
-
-.team-import-button {
-	position: relative;
-	padding-inline: .75rem;
-	color: var(--grey-500);
-}
-
-.team-import-text {
-	margin-inline-start: .4rem;
-	font-size: .85rem;
-	font-weight: 600;
+	justify-content: flex-end;
+	margin-block-end: .75rem;
 }
 
 .team-profile {
@@ -548,8 +528,12 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 }
 
 .team-management-section {
-	padding-block: .5rem 1.25rem;
+	padding-block: 1.25rem;
 	border-block-end: 1px solid var(--grey-200);
+}
+
+.team-management-section:first-of-type {
+	padding-block-start: 0;
 }
 
 .team-management-section:last-child {
@@ -717,14 +701,6 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 }
 
 @media screen and (max-width: $tablet) {
-	.team-import-text {
-		display: none;
-	}
-
-	.team-import-button {
-		padding-inline: .5rem;
-	}
-
 	.team-management-heading,
 	.team-binding-card {
 		align-items: flex-start;

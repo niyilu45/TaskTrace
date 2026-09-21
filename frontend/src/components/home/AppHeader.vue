@@ -64,7 +64,10 @@
 
 		<div class="navbar-end">
 			<TasktraceUndo v-if="isLocalBuild" />
-			<TasktraceTeamCenter v-if="isLocalBuild" />
+			<TasktraceTeamCenter
+				v-if="isLocalBuild"
+				activity-host
+			/>
 			<TimerBadge />
 			<OpenQuickActions />
 			<Notifications />

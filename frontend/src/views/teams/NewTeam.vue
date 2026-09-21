@@ -2,7 +2,7 @@
 	<CreateEdit
 		v-model:loading="loadingModel"
 		:title="title"
-		:primary-disabled="team.name === ''"
+		:primary-disabled="team.name.trim() === '' || duplicateName"
 		@create="createTeam()"
 	>
 		<FormField
@@ -14,7 +14,8 @@
 			:loading="teamService.loading"
 			:placeholder="$t('team.attributes.namePlaceholder')"
 			type="text"
-			:error="showError && team.name === '' ? $t('team.attributes.nameRequired') : null"
+			:error="nameError"
+			@update:modelValue="duplicateName = false"
 			@keyup.enter="createTeam"
 		/>
 		<FormField
@@ -59,6 +60,7 @@ const router = useRouter()
 const teamService = shallowReactive(new TeamService())
 const team = reactive(new TeamModel())
 const showError = ref(false)
+const duplicateName = ref(false)
 const isSubmitting = ref(false)
 
 const loadingModel = computed({
@@ -70,7 +72,20 @@ const loadingModel = computed({
 
 const configStore = useConfigStore()
 
+const nameError = computed(() => {
+	if (showError.value && team.name.trim() === '') return t('team.attributes.nameRequired')
+	if (duplicateName.value) return t('team.attributes.nameDuplicate')
+	return null
+})
+
+async function teamNameExists(name: string) {
+	const normalized = name.toLocaleLowerCase()
+	const matches = await teamService.getAll(new TeamModel(), {s: name})
+	return matches.some(candidate => candidate.name.trim().toLocaleLowerCase() === normalized)
+}
+
 async function createTeam() {
+	team.name = team.name.trim()
 	if (team.name === '') {
 		showError.value = true
 		return
@@ -84,12 +99,20 @@ async function createTeam() {
 	isSubmitting.value = true
 
 	try {
+		duplicateName.value = await teamNameExists(team.name)
+		if (duplicateName.value) return
 		const response = await teamService.create(team)
 		router.push({
 			name: 'teams.edit',
 			params: { id: response.id },
 		})
 		success({message: t('team.create.success') })
+	} catch (cause) {
+		if ((cause as {response?: {data?: {code?: number}}})?.response?.data?.code === 6011) {
+			duplicateName.value = true
+			return
+		}
+		throw cause
 	} finally {
 		isSubmitting.value = false
 	}
