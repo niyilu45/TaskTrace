@@ -115,7 +115,17 @@
 				</div>
 			</li>
 		</ol>
+		<button
+			v-if="!showComposer"
+			type="button"
+			class="button outstanding-add-button"
+			:disabled="blocked"
+			@click="selectItem('')"
+		>
+			新增遗留事项
+		</button>
 		<div
+			v-if="showComposer"
 			class="outstanding-composer"
 			:aria-busy="busy"
 		>
@@ -284,6 +294,7 @@ import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
+import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
@@ -296,6 +307,7 @@ const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
 const items = ref<OutstandingItem[]>([])
 const drafts = reactive(new Map<string, Draft>())
 const activeId = ref('')
+const showComposer = ref(false)
 const textInput = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
 const busy = ref(false)
@@ -325,7 +337,7 @@ const canSave = computed(() => draft.value.images.length > 0 || !!draft.value.te
 const noteImageCount = computed(() => countProgressImages(draft.value.note))
 let loadVersion = 0
 let mounted = true
-useTasktraceUndoGuard(() => busy.value || [...drafts.values()].some(value => draftSignature(value) !== value.original), '请先保存或清空遗留事项的输入和待保存图片。')
+useTasktraceUndoGuard(() => busy.value || [...drafts].some(([key, value]) => draftChanged(key, value)), '请先保存或清空遗留事项的输入和待保存图片。')
 
 async function load() {
 	const taskId = props.taskId
@@ -336,7 +348,7 @@ async function load() {
 		const history = await readTaskHistory(taskId)
 		if (version === loadVersion && mounted) {
 			items.value = sharedOutstanding(history).items
-			if (!drafts.has(`${taskId}:${activeId.value}`)) await restoreDraft(activeId.value)
+			if (showComposer.value && !drafts.has(`${taskId}:${activeId.value}`)) await restoreDraft(activeId.value)
 		}
 	} catch {
 		if (version === loadVersion && mounted) error.value = '读取失败，请重试。输入和待保存图片已保留。'
@@ -346,10 +358,11 @@ async function load() {
 }
 
 async function selectItem(id: string) {
-	if (!drafts.has(`${props.taskId}:${id}`)) await restoreDraft(id)
-	activeId.value = id
 	error.value = ''
 	message.value = ''
+	if (!drafts.has(`${props.taskId}:${id}`)) await restoreDraft(id)
+	activeId.value = id
+	showComposer.value = true
 	await nextTick()
 	textInput.value?.focus()
 }
@@ -376,6 +389,7 @@ async function draftFromItem(item: OutstandingItem): Promise<Draft> {
 function cacheKey(id: string) { return id || 'new' }
 
 async function restoreDraft(id: string) {
+	const key = `${props.taskId}:${id}`
 	const item = id ? items.value.find(candidate => candidate.id === id) : undefined
 	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: ''}
 	base.original = draftSignature(base)
@@ -395,19 +409,46 @@ async function restoreDraft(id: string) {
 			base.images = pictures
 			base.itemId = cached.itemId || base.itemId
 			base.priority = Math.max(0, Math.min(9, Number.isFinite(cached.priority) ? Number(cached.priority) : base.priority))
-			message.value = '已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。'
+			const signature = draftSignature(base)
+			cachedSignatures.set(key, signature)
+			if (!id && !draftHasContent(base)) {
+				base.priority = TASKTRACE_DEFAULT_PRIORITY
+				base.itemId = crypto.randomUUID()
+				base.original = draftSignature(base)
+				cachedSignatures.delete(key)
+				void deleteTaskTraceDraft('outstanding', props.taskId, cacheKey(id)).catch(() => {})
+			} else if (signature !== base.original) {
+				message.value = '已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。'
+			}
 		}
 	} catch { error.value = '草稿缓存读取失败，已载入正式保存的内容。' }
-	drafts.set(`${props.taskId}:${id}`, base)
+	drafts.set(key, base)
 }
 
 function draftSignature(value: Pick<Draft, 'text' | 'note' | 'images' | 'priority'>) {
 	return JSON.stringify([value.text, value.note, value.priority, value.images.map(image => [image.preview, image.attachmentId])])
 }
 
+function draftHasContent(value: Pick<Draft, 'text' | 'note' | 'images'>) {
+	return !!value.text.trim() || value.images.length > 0 || !isEditorContentEmpty(value.note)
+}
+
+function draftChanged(key: string, value: Draft) {
+	const itemId = key.slice(key.indexOf(':') + 1)
+	if (!itemId && !draftHasContent(value)) return false
+	return draftSignature(value) !== value.original
+}
+
 async function cacheDraft(key: string, value: Draft) {
 	const signature = draftSignature(value)
-	if (signature === value.original || cachedSignatures.get(key) === signature) return
+	if (!draftChanged(key, value)) {
+		if (cachedSignatures.has(key)) {
+			await deleteTaskTraceDraft('outstanding', props.taskId, cacheKey(key.split(':').slice(1).join(':')))
+			cachedSignatures.delete(key)
+		}
+		return
+	}
+	if (cachedSignatures.get(key) === signature) return
 	const images = await Promise.all(value.images.map(async picture => picture.attachmentId
 		? {attachmentId: picture.attachmentId}
 		: {data: picture.file ? await fileAsDataUrl(picture.file) : picture.preview, name: picture.file?.name, type: picture.file?.type}))
@@ -578,6 +619,7 @@ async function save() {
 		if (taskId !== props.taskId || !mounted) return
 		items.value = result
 		activeId.value = ''
+		showComposer.value = false
 		message.value = targetId ? '遗留事项修改已保存。' : '遗留事项已保存。'
 		emit('saved')
 	} catch (cause) {
@@ -602,7 +644,10 @@ async function remove(id: string) {
 		void deleteTaskTraceDraft('outstanding', taskId, cacheKey(id)).catch(() => {})
 		if (taskId !== props.taskId || !mounted) return
 		items.value = result
-		if (activeId.value === id) activeId.value = ''
+		if (activeId.value === id) {
+			activeId.value = ''
+			showComposer.value = false
+		}
 		emit('saved')
 	} catch {
 		if (taskId === props.taskId && mounted) error.value = '移除失败，请重试。'
@@ -614,13 +659,14 @@ async function remove(id: string) {
 watch(() => props.taskId, () => {
 	for (const id of completionTimers.keys()) clearCompletionTimer(id)
 	activeId.value = ''
+	showComposer.value = false
 	items.value = []
 	showCompleted.value = false
 	message.value = ''
 	void load()
 }, {immediate: true})
-watch(draft, value => {
-	if (draftSignature(value) !== value.original) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击保存后才会正式提交。'
+watch(() => showComposer.value ? draft.value : undefined, value => {
+	if (value && draftChanged(`${props.taskId}:${activeId.value}`, value)) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击保存后才会正式提交。'
 }, {deep: true})
 useAutoSave(cacheChangedDrafts)
 onBeforeUnmount(() => {

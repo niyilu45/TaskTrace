@@ -2,6 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount, type VueWrapper} from '@vue/test-utils'
 import {taskAttachmentsUpload, taskCommentsCreate, taskCommentsList, taskCommentsUpdate} from '@/client/generated'
 import SharedOutstanding from './SharedOutstanding.vue'
+import {readTaskTraceDraft, deleteTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 
 vi.mock('@/client/generated', () => ({
 	taskAttachmentsUpload: vi.fn(),
@@ -10,6 +11,7 @@ vi.mock('@/client/generated', () => ({
 	taskCommentsUpdate: vi.fn(),
 }))
 vi.mock('@/helpers/autoSave', () => ({autoSaveSettings: {enabled: false}, useAutoSave: () => {}}))
+vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: true}))
 vi.mock('@/helpers/attachments', () => ({fetchAttachmentBlobUrl: vi.fn(async ({id}: {id: number}) => `blob:attachment-${id}`)}))
 vi.mock('@/helpers/tasktraceDraftCache', () => ({
 	readTaskTraceDraft: vi.fn(async () => null),
@@ -45,6 +47,10 @@ async function click(label: string) {
 	expect(button, `Missing button: ${label}`).toBeDefined()
 	await button!.trigger('click')
 	await flushPromises()
+}
+
+async function startNew() {
+	await click('新增遗留事项')
 }
 
 async function paste(...names: string[]) {
@@ -91,6 +97,7 @@ describe('outstanding item images', () => {
 		let finishUpload!: (result: never) => void
 		upload.mockImplementationOnce(() => new Promise<never>(resolve => { finishUpload = resolve }))
 		await open()
+		await startNew()
 		await paste('pending.png')
 		await click('添加遗留事项')
 		expect(wrapper.emitted('busy')).toEqual([[true]])
@@ -105,6 +112,7 @@ describe('outstanding item images', () => {
 		let finishUpload!: (result: never) => void
 		upload.mockImplementationOnce(() => new Promise<never>(resolve => { finishUpload = resolve }))
 		await open()
+		await startNew()
 		await paste('pending.png')
 		await click('添加遗留事项')
 		expect(wrapper.emitted('busy')).toEqual([[true]])
@@ -118,6 +126,7 @@ describe('outstanding item images', () => {
 		const parentPaste = vi.fn()
 		root.addEventListener('paste', parentPaste)
 		await open()
+		await startNew()
 		const event = await paste('screenshot.png')
 		expect(event.defaultPrevented).toBe(true)
 		expect(parentPaste).not.toHaveBeenCalled()
@@ -132,6 +141,7 @@ describe('outstanding item images', () => {
 
 	it('retains a failed draft and retries only images which were not uploaded', async () => {
 		await open()
+		await startNew()
 		await wrapper.get('textarea').setValue('Keep this note')
 		await paste('one.png', 'two.png')
 		upload.mockResolvedValueOnce({data: {success: [{id: 11}]}} as never).mockRejectedValueOnce(new Error('Network unavailable')).mockResolvedValueOnce({data: {success: [{id: 12}]}} as never)
@@ -145,7 +155,7 @@ describe('outstanding item images', () => {
 		expect(history[0].comment).toContain('Keep this note')
 		expect(history[0].comment).toContain('attachments/11')
 		expect(history[0].comment).toContain('attachments/12')
-		expect(wrapper.get('textarea').element.value).toBe('')
+		expect(wrapper.find('.outstanding-composer').exists()).toBe(false)
 	})
 
 	it('edits text and images without losing other items or duplicating an uncertain save', async () => {
@@ -173,6 +183,7 @@ describe('outstanding item images', () => {
 	it('preserves separate drafts when switching between new and existing items', async () => {
 		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
 		await open()
+		await startNew()
 		await wrapper.get('textarea').setValue('New outstanding draft')
 		await paste('new.png')
 		await click('编辑')
@@ -224,10 +235,36 @@ describe('outstanding item images', () => {
 		const parentPaste = vi.fn()
 		root.addEventListener('paste', parentPaste)
 		await open(true)
-		await paste('disabled.png')
+		const event = new Event('paste', {bubbles: true, cancelable: true})
+		Object.defineProperty(event, 'clipboardData', {value: {items: [{kind: 'file', type: 'image/png', getAsFile: () => new File(['png'], 'disabled.png', {type: 'image/png'})}]}})
+		wrapper.get('section').element.dispatchEvent(event)
+		await flushPromises()
 		expect(parentPaste).not.toHaveBeenCalled()
 		expect(wrapper.findAll('.outstanding-images img')).toHaveLength(0)
 		expect(upload).not.toHaveBeenCalled()
+	})
+
+	it('keeps the editor hidden until add or edit is requested', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
+		await open()
+		expect(wrapper.find('.outstanding-composer').exists()).toBe(false)
+		await startNew()
+		expect(wrapper.find('.outstanding-composer').exists()).toBe(true)
+		await wrapper.get('textarea').setValue('New item')
+		await click('添加遗留事项')
+		expect(wrapper.find('.outstanding-composer').exists()).toBe(false)
+		await click('编辑')
+		expect(wrapper.find('.outstanding-composer').exists()).toBe(true)
+	})
+
+	it('discards an empty cached new item instead of reporting an unsaved change', async () => {
+		vi.mocked(readTaskTraceDraft).mockImplementation(async () => ({text: '', note: '<p></p>', images: [], itemId: 'stale', priority: 9}))
+		await open()
+		await startNew()
+		expect(readTaskTraceDraft).toHaveBeenCalledWith('outstanding', 42, 'new')
+		expect(wrapper.find('[aria-live="polite"]').exists()).toBe(false)
+		expect(wrapper.get<HTMLSelectElement>('select').element.value).toBe('7')
+		expect(deleteTaskTraceDraft).toHaveBeenCalledWith('outstanding', 42, 'new')
 	})
 
 	it('hides completed items until requested and keeps their original numbers', async () => {

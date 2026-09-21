@@ -39,4 +39,13 @@ describe('new task Undo protection', () => {
 		await flushPromises()
 		expect(undoBlockReason.value).toBe('')
 	})
+
+	it('does not treat whitespace-only input as an unsaved task draft', async () => {
+		wrapper = mount(AddTask, {global: {mocks: {$t: (key: string) => key}, directives: {focus: () => {}}, stubs: {Icon: true, Expandable: true, XButton: {template: '<button><slot /></button>'}}}})
+		await wrapper.get('textarea').setValue('   \n\t')
+		expect(undoBlockReason.value).toBe('')
+		expect(wrapper.get('button').attributes('disabled')).toBeDefined()
+		await wrapper.get('button').trigger('click')
+		expect(taskStore.createNewTasksBulk).not.toHaveBeenCalled()
+	})
 })

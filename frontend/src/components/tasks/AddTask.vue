@@ -20,7 +20,7 @@
 					v-model="newTaskTitle"
 					v-focus
 					class="add-task-textarea input"
-					:class="{'textarea-empty': newTaskTitle === ''}"
+					:class="{'textarea-empty': newTaskTitle.trim() === ''}"
 					:placeholder="$t('project.list.addPlaceholder')"
 					rows="1"
 					@keydown="resetEmptyTitleError"
@@ -34,7 +34,7 @@
 			<p class="control">
 				<XButton
 					class="add-task-button"
-					:disabled="newTaskTitle === '' || loading || undefined"
+					:disabled="newTaskTitle.trim() === '' || loading || undefined"
 					icon="plus"
 					:loading="loading"
 					:aria-label="$t('project.list.add')"
@@ -113,17 +113,17 @@ const taskAddHovered = useElementHover(taskAdd)
 const errorMessage = ref('')
 
 function resetEmptyTitleError() {
-	if (!newTaskTitle.value) {
+	if (!newTaskTitle.value.trim()) {
 		errorMessage.value = ''
 	}
 }
 
 const adding = ref(false)
 const loading = computed(() => adding.value || taskStore.isLoading)
-useTasktraceUndoGuard(() => !!newTaskTitle.value || loading.value, '请先添加或清空新任务草稿，再撤销。')
+useTasktraceUndoGuard(() => !!newTaskTitle.value.trim() || loading.value, '请先添加或清空新任务草稿，再撤销。')
 
 async function addTask() {
-	if (newTaskTitle.value === '') {
+	if (newTaskTitle.value.trim() === '') {
 		errorMessage.value = t('project.create.addTitleRequired')
 		return
 	}
