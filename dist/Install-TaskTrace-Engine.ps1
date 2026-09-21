@@ -309,9 +309,23 @@ try {
         Add-DependencyIssue ('未找到 .NET Framework C# 编译器：' + $compiler) '在“启用或关闭 Windows 功能”中启用 .NET Framework 4.8，或安装 .NET Framework 4.8 Developer Pack。'
     } else { Write-InstallLine ('C# 编译器：' + $compiler) }
 
-    foreach ($name in @('TaskTrace-server', 'TaskTrace-floating')) {
-        if (Get-Process -Name $name -ErrorAction SilentlyContinue) {
-            Add-DependencyIssue ('检测到 ' + $name + ' 正在运行，无法安全覆盖程序文件。') '请从 TaskTrace 系统托盘菜单选择“退出 TaskTrace”，然后重新运行安装工具。'
+    # Dependency inspection does not write package files. A full build only
+    # conflicts with an instance launched from the package directory which is
+    # about to be replaced; TaskTrace copies in other folders may keep running.
+    if (!$CheckOnly) {
+        $outputPrefix = [IO.Path]::GetFullPath($outputDirectory).TrimEnd('\') + '\'
+        $runningPackageProcesses = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($name in @('TaskTrace', 'TaskTrace-server', 'TaskTrace-floating')) {
+            foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+                try { $runningPath = $running.MainModule.FileName } catch { $runningPath = $null }
+                if ($runningPath -and $runningPath.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                    $runningPackageProcesses.Add($name)
+                    break
+                }
+            }
+        }
+        if ($runningPackageProcesses.Count -gt 0) {
+            Add-DependencyIssue ('检测到本次输出目录中的 TaskTrace 正在运行（' + ($runningPackageProcesses -join '、') + '），无法安全覆盖程序文件。') '请从该 TaskTrace 的系统托盘菜单选择“退出 TaskTrace”，然后重新运行安装工具。'
         }
     }
 

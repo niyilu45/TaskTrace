@@ -1,4 +1,4 @@
-param([switch]$SkipFrontend, [switch]$SkipArchive, [string]$PackageDirectory = 'dist/TaskTrace-local', [string]$Version = 'v0.1.0-beta.11')
+﻿param([switch]$SkipFrontend, [switch]$SkipArchive, [string]$PackageDirectory = 'dist/TaskTrace-local', [string]$Version = 'v0.1.0-beta.11')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
