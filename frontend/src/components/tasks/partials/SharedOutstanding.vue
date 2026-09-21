@@ -203,6 +203,24 @@
 					</button>
 				</figure>
 			</div>
+			<div class="outstanding-note-editor">
+				<label :for="`outstanding-note-${taskId}`">备注（仅在编辑窗口显示）</label>
+				<p>备注不会出现在悬浮窗事项列表中。可直接粘贴图片，图片会嵌入备注正文。</p>
+				<div :id="`outstanding-note-${taskId}`">
+					<Editor
+						v-model="draft.note"
+						:always-editing="true"
+						:allow-base64-images="true"
+						:is-edit-enabled="!blocked"
+						:upload-callback="stageProgressImages"
+						placeholder="补充背景、处理说明或截图…"
+						@save="save"
+					/>
+				</div>
+				<p class="outstanding-hint">
+					备注内有 {{ noteImageCount }} 张图片。自动保存只缓存到 .cache，点击保存后才会正式提交。
+				</p>
+			</div>
 			<div class="outstanding-actions">
 				<input
 					ref="fileInput"
@@ -265,11 +283,13 @@ import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
+import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
+import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
-type Draft = {text: string, images: ImageDraft[], itemId: string, priority: number, original: string}
-type CachedDraft = {text: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string, priority?: number}
+type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, priority: number, original: string}
+type CachedDraft = {text: string, note?: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string, priority?: number}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
 const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
 const items = ref<OutstandingItem[]>([])
@@ -294,13 +314,14 @@ const completedItems = computed(() => numberedItems.value.filter(entry => entry.
 const draft = computed(() => {
 	const key = `${props.taskId}:${activeId.value}`
 	if (!drafts.has(key)) {
-		const fresh = {text: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
+		const fresh = {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
 		fresh.original = draftSignature(fresh)
 		drafts.set(key, fresh)
 	}
 	return drafts.get(key)!
 })
 const canSave = computed(() => draft.value.images.length > 0 || !!draft.value.text.trim())
+const noteImageCount = computed(() => countProgressImages(draft.value.note))
 let loadVersion = 0
 let mounted = true
 useTasktraceUndoGuard(() => busy.value || [...drafts.values()].some(value => draftSignature(value) !== value.original), '请先保存或清空遗留事项的输入和待保存图片。')
@@ -346,7 +367,7 @@ async function draftFromItem(item: OutstandingItem): Promise<Draft> {
 	doc.querySelectorAll('img').forEach(image => image.remove())
 	doc.querySelectorAll('br').forEach(line => line.replaceWith('\n'))
 	const blocks = Array.from(doc.body.querySelectorAll('p, div, li')).map(block => block.textContent?.trim() || '').filter(Boolean)
-	const result = {text: blocks.length ? blocks.join('\n') : doc.body.textContent?.trim() || '', images, itemId: item.id, priority: item.priority ?? 9, original: ''}
+	const result = {text: blocks.length ? blocks.join('\n') : doc.body.textContent?.trim() || '', note: item.note || '', images, itemId: item.id, priority: item.priority ?? 9, original: ''}
 	result.original = draftSignature(result)
 	return result
 }
@@ -355,7 +376,7 @@ function cacheKey(id: string) { return id || 'new' }
 
 async function restoreDraft(id: string) {
 	const item = id ? items.value.find(candidate => candidate.id === id) : undefined
-	const base = item ? await draftFromItem(item) : {text: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
+	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: 9, original: ''}
 	base.original = draftSignature(base)
 	try {
 		const cached = await readTaskTraceDraft<CachedDraft>('outstanding', props.taskId, cacheKey(id))
@@ -369,6 +390,7 @@ async function restoreDraft(id: string) {
 				}
 			}
 			base.text = typeof cached.text === 'string' ? cached.text : base.text
+			base.note = typeof cached.note === 'string' ? cached.note : base.note
 			base.images = pictures
 			base.itemId = cached.itemId || base.itemId
 			base.priority = Math.max(0, Math.min(9, Number.isFinite(cached.priority) ? Number(cached.priority) : base.priority))
@@ -378,8 +400,8 @@ async function restoreDraft(id: string) {
 	drafts.set(`${props.taskId}:${id}`, base)
 }
 
-function draftSignature(value: Pick<Draft, 'text' | 'images' | 'priority'>) {
-	return JSON.stringify([value.text, value.priority, value.images.map(image => [image.preview, image.attachmentId])])
+function draftSignature(value: Pick<Draft, 'text' | 'note' | 'images' | 'priority'>) {
+	return JSON.stringify([value.text, value.note, value.priority, value.images.map(image => [image.preview, image.attachmentId])])
 }
 
 async function cacheDraft(key: string, value: Draft) {
@@ -388,7 +410,7 @@ async function cacheDraft(key: string, value: Draft) {
 	const images = await Promise.all(value.images.map(async picture => picture.attachmentId
 		? {attachmentId: picture.attachmentId}
 		: {data: picture.file ? await fileAsDataUrl(picture.file) : picture.preview, name: picture.file?.name, type: picture.file?.type}))
-	await writeTaskTraceDraft('outstanding', props.taskId, cacheKey(key.split(':').slice(1).join(':')), {text: value.text, images, itemId: value.itemId, priority: value.priority})
+	await writeTaskTraceDraft('outstanding', props.taskId, cacheKey(key.split(':').slice(1).join(':')), {text: value.text, note: value.note, images, itemId: value.itemId, priority: value.priority})
 	cachedSignatures.set(key, signature)
 	if (key === `${props.taskId}:${activeId.value}`) message.value = '草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。'
 }
@@ -405,9 +427,10 @@ function recoverDraft() {
 	const pending = drafts.get(newKey)
 	if (pending) {
 		pending.text = [pending.text, recovered.text].filter(Boolean).join('\n')
+		pending.note = [pending.note, recovered.note].filter(Boolean).join('<hr>')
 		pending.images.push(...recovered.images)
 	} else {
-		recovered.original = draftSignature({text: '', images: [], priority: 9})
+		recovered.original = draftSignature({text: '', note: '', images: [], priority: 9})
 		drafts.set(newKey, recovered)
 	}
 	drafts.delete(key)
@@ -426,6 +449,7 @@ function addImages(files: File[]) {
 }
 
 function pasteImages(event: ClipboardEvent) {
+	if (event.target instanceof Element && event.target.closest('.outstanding-note-editor')) return
 	const files = Array.from(event.clipboardData?.items || [])
 		.filter(item => item.kind === 'file' && item.type.startsWith('image/'))
 		.map(item => item.getAsFile()).filter((file): file is File => !!file)
@@ -530,6 +554,7 @@ async function save() {
 	error.value = ''
 	message.value = ''
 	try {
+		const note = await persistProgressImages(savedDraft.note, taskId)
 		for (const picture of savedDraft.images) {
 			if (picture.attachmentId) continue
 			if (!picture.file) continue
@@ -543,8 +568,8 @@ async function save() {
 			if (targetId && !current) throw new Error('Outstanding item no longer exists')
 			const images = savedDraft.images.map(picture => picture.attachmentId ? `/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}` : picture.preview)
 			const html = `${textHtml(savedDraft.text)}${images.map(imageHtml).join('')}`
-			if (current) return existing.map(item => item.id === targetId ? {...item, html, priority: savedDraft.priority} : item)
-			const added = {id: savedDraft.itemId, html, done: false, priority: savedDraft.priority}
+			if (current) return existing.map(item => item.id === targetId ? {...item, html, note, priority: savedDraft.priority} : item)
+			const added = {id: savedDraft.itemId, html, note, done: false, priority: savedDraft.priority}
 			return existing.some(item => item.id === added.id) ? existing.map(item => item.id === added.id ? added : item) : [...existing, added]
 		})
 		clearDraft(key)
@@ -703,6 +728,14 @@ onBeforeUnmount(() => {
 	gap: .65rem;
 
 	label { font-weight: 600; }
+}
+
+.outstanding-note-editor {
+	display: grid;
+	gap: .4rem;
+	padding-block-start: .25rem;
+
+	p { margin: 0; }
 }
 
 .outstanding-actions {

@@ -200,3 +200,20 @@ func TestTaskTraceTeamOutstandingPriorityStaysLocal(t *testing.T) {
 	require.NotContains(t, rebuilt, `data-id="three" data-priority=`)
 	require.Equal(t, map[string]string{"one": "2", "two": "7"}, priorities)
 }
+
+func TestTaskTraceTeamOutstandingRichNoteSurvivesParsingAndPriorityRestore(t *testing.T) {
+	local := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one" data-priority="3"><p>事项正文</p><aside data-tasktrace-outstanding-note="true" hidden><p>备注正文</p><ul><li>备注列表</li></ul><p><img src="/api/v1/tasks/42/attachments/8"></p></aside></li><li data-id="two">第二条</li></ul>`
+	items, order := taskTraceTeamOutstandingItems(local)
+
+	require.Equal(t, []string{"one", "two"}, order)
+	require.Contains(t, items["one"], "备注正文")
+	require.Contains(t, items["one"], "备注列表")
+	require.Contains(t, items["one"], "attachments/8")
+	require.Equal(t, "第二条", items["two"])
+
+	rebuilt := taskTraceTeamOutstandingHTML(items, order)
+	rebuilt = taskTraceTeamApplyOutstandingPriorities(rebuilt, taskTraceTeamOutstandingPriorities(local))
+	require.Contains(t, rebuilt, `data-id="one" data-priority="3"`)
+	require.Contains(t, rebuilt, `data-tasktrace-outstanding-note="true"`)
+	require.Contains(t, rebuilt, "备注列表")
+}

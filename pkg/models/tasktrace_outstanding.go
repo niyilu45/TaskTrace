@@ -147,6 +147,18 @@ func taskTraceFirstHeading(doc *html.Node) *html.Node {
 	return heading
 }
 
+func taskTraceOutstandingListNode(heading *html.Node) *html.Node {
+	for node := heading.NextSibling; node != nil; node = node.NextSibling {
+		if node.Type == html.ElementNode {
+			if node.Data == "ul" {
+				return node
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 var taskTraceDailyHeading = regexp.MustCompile(`^每日进展\s*[·:：]\s*(\d{4}-\d{2}-\d{2})$`)
 var taskTraceLineBreak = regexp.MustCompile(`(?i)<br\s*/?>(?:\r?\n)?`)
 
@@ -180,16 +192,20 @@ func taskTraceParseOutstanding(comments []*TaskComment) (*taskTraceOutstandingLi
 		if taskTraceText(heading) == taskTraceOutstandingHeading {
 			result.comment = comment
 			result.original = comment.Comment
-			taskTraceWalk(doc, func(n *html.Node) {
-				if n.Type != html.ElementNode || n.Data != "li" || n.Parent == nil || n.Parent.Data != "ul" {
-					return
+			list := taskTraceOutstandingListNode(heading)
+			if list == nil {
+				return result, nil
+			}
+			for item := list.FirstChild; item != nil; item = item.NextSibling {
+				if item.Type != html.ElementNode || item.Data != "li" {
+					continue
 				}
-				id := taskTraceAttribute(n, "data-id")
+				id := taskTraceAttribute(item, "data-id")
 				if id == "" {
 					id = fmt.Sprintf("item-%d", len(result.items))
 				}
-				result.items = append(result.items, taskTraceOutstandingItem{id, taskTraceInnerHTML(n), taskTraceOutstandingMetadata(n)})
-			})
+				result.items = append(result.items, taskTraceOutstandingItem{id, taskTraceInnerHTML(item), taskTraceOutstandingMetadata(item)})
+			}
 			return result, nil
 		}
 		for _, idText := range strings.Split(taskTraceAttribute(heading, "data-tasktrace-merged"), ",") {

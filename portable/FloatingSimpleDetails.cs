@@ -218,7 +218,7 @@ internal sealed partial class FloatingWindow {
     TreeNode CreateOutstandingNode(long taskId,PendingItem item,int index,string path="") {
         int number=item.Number>0?item.Number:index+1;
         string current=number+". [P"+item.Priority+"] "+OutstandingText(item.Html);
-        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,CurrentTextLength=current.Length};
+        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,CurrentTextLength=current.Length};
         var leaf=new TreeNode(current+path){Tag=state,Checked=item.Done,
             ForeColor=item.Done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
             ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};

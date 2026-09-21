@@ -213,11 +213,14 @@ func TestTaskTraceOutstandingImages(t *testing.T) {
 		require.NoError(t, s.Commit())
 		s.Close()
 		image := fmt.Sprintf(`<img src="/api/v1/tasks/1/attachments/%d"/>`, original.ID)
-		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"move", "image " + image + image, ""}, taskTraceOutstandingItem{"keep", image, ""})
+		note := `<aside data-tasktrace-outstanding-note="true" hidden><p>备注图片</p><ul><li>备注列表</li></ul>` + image + `</aside>`
+		taskTraceSeedList(t, 1, taskTraceOutstandingItem{"move", "image " + image + image + note, ""}, taskTraceOutstandingItem{"keep", image, ""})
 		require.NoError(t, taskTraceMove(t, &TaskTraceOutstandingMove{TaskID: 1, TargetTaskID: 2, ItemID: "move"}))
 		target := taskTraceReadList(t, 2)
 		assert.Contains(t, target.items[0].content, "/api/v1/tasks/2/attachments/")
 		assert.NotContains(t, target.items[0].content, "/api/v1/tasks/1/attachments/")
+		assert.Contains(t, target.items[0].content, "备注图片")
+		assert.Contains(t, target.items[0].content, "备注列表")
 		assert.Contains(t, taskTraceReadList(t, 1).items[0].content, fmt.Sprintf("/api/v1/tasks/1/attachments/%d", original.ID))
 		s = db.NewSession()
 		var copies []*TaskAttachment

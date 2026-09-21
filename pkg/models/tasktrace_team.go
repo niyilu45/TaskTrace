@@ -26,6 +26,7 @@ import (
 	"code.vikunja.io/api/pkg/web"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/html"
 	"xorm.io/xorm"
 )
 
@@ -240,8 +241,6 @@ type taskTraceTeamLink struct {
 }
 
 var taskTraceTeamMarker = regexp.MustCompile(`<!--tasktrace-team:([A-Za-z0-9_-]+)-->`)
-var taskTraceTeamOutstandingItem = regexp.MustCompile(`(?s)<li[^>]*data-id="([^"]+)"[^>]*>(.*?)</li>`)
-var taskTraceTeamOutstandingPriority = regexp.MustCompile(`(?i)\sdata-priority="([0-9])"`)
 
 func taskTraceTeamRoot() string {
 	if root := strings.TrimSpace(os.Getenv("TASKTRACE_TEAM_ROOT")); root != "" {
@@ -539,17 +538,46 @@ func taskTraceTeamIsOutstanding(body string) bool {
 	return strings.Contains(body, "<h3>TaskTrace 遗留事项清单</h3>")
 }
 
+func taskTraceTeamOutstandingNodes(body string) (*html.Node, []*html.Node) {
+	doc, err := html.Parse(strings.NewReader(body))
+	if err != nil {
+		return nil, nil
+	}
+	nodes := []*html.Node{}
+	taskTraceWalk(doc, func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "li" && taskTraceAttribute(node, "data-id") != "" {
+			nodes = append(nodes, node)
+		}
+	})
+	return doc, nodes
+}
+
+func taskTraceTeamRenderDocument(doc *html.Node) string {
+	if doc == nil {
+		return ""
+	}
+	var body *html.Node
+	taskTraceWalk(doc, func(node *html.Node) {
+		if body == nil && node.Type == html.ElementNode && node.Data == "body" {
+			body = node
+		}
+	})
+	if body == nil {
+		return ""
+	}
+	return taskTraceInnerHTML(body)
+}
+
 func taskTraceTeamOutstandingItems(body string) (map[string]string, []string) {
 	items := map[string]string{}
 	order := []string{}
-	for _, match := range taskTraceTeamOutstandingItem.FindAllStringSubmatch(body, -1) {
-		if len(match) != 3 || match[1] == "" {
-			continue
+	_, nodes := taskTraceTeamOutstandingNodes(body)
+	for _, node := range nodes {
+		id := taskTraceAttribute(node, "data-id")
+		if _, exists := items[id]; !exists {
+			order = append(order, id)
 		}
-		if _, exists := items[match[1]]; !exists {
-			order = append(order, match[1])
-		}
-		items[match[1]] = match[2]
+		items[id] = taskTraceInnerHTML(node)
 	}
 	return items, order
 }
@@ -589,15 +617,11 @@ func taskTraceTeamOutstandingHTML(items map[string]string, order []string) strin
 // collaborative outstanding list on this device.
 func taskTraceTeamOutstandingPriorities(body string) map[string]string {
 	priorities := map[string]string{}
-	for _, match := range taskTraceTeamOutstandingItem.FindAllStringSubmatchIndex(body, -1) {
-		if len(match) < 6 {
-			continue
-		}
-		id := body[match[2]:match[3]]
-		opening := body[match[0]:match[4]]
-		priority := taskTraceTeamOutstandingPriority.FindStringSubmatch(opening)
-		if len(priority) == 2 {
-			priorities[id] = priority[1]
+	_, nodes := taskTraceTeamOutstandingNodes(body)
+	for _, node := range nodes {
+		id := taskTraceAttribute(node, "data-id")
+		if value := taskTraceAttribute(node, "data-priority"); len(value) == 1 && value[0] >= '0' && value[0] <= '9' {
+			priorities[id] = value
 		}
 	}
 	return priorities
@@ -607,22 +631,24 @@ func taskTraceTeamApplyOutstandingPriorities(body string, priorities map[string]
 	if len(priorities) == 0 {
 		return body
 	}
-	return taskTraceTeamOutstandingItem.ReplaceAllStringFunc(body, func(item string) string {
-		match := taskTraceTeamOutstandingItem.FindStringSubmatch(item)
-		if len(match) != 3 {
-			return item
-		}
-		priority, ok := priorities[match[1]]
+	doc, nodes := taskTraceTeamOutstandingNodes(body)
+	for _, node := range nodes {
+		priority, ok := priorities[taskTraceAttribute(node, "data-id")]
 		if !ok {
-			return item
+			continue
 		}
-		openingEnd := strings.IndexByte(item, '>')
-		if openingEnd < 0 {
-			return item
+		updated := false
+		for index := range node.Attr {
+			if node.Attr[index].Key == "data-priority" {
+				node.Attr[index].Val = priority
+				updated = true
+			}
 		}
-		opening := taskTraceTeamOutstandingPriority.ReplaceAllString(item[:openingEnd], "")
-		return opening + ` data-priority="` + priority + `"` + item[openingEnd:]
-	})
+		if !updated {
+			node.Attr = append(node.Attr, html.Attribute{Key: "data-priority", Val: priority})
+		}
+	}
+	return taskTraceTeamRenderDocument(doc)
 }
 
 func taskTraceTeamCommentID(shareID, nodeID string, comment *TaskComment, actor string) string {

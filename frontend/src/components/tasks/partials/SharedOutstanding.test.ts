@@ -18,6 +18,11 @@ vi.mock('@/helpers/tasktraceDraftCache', () => ({
 	fileAsDataUrl: vi.fn(),
 	dataUrlAsFile: vi.fn(),
 }))
+vi.mock('@/components/input/AsyncEditor', () => ({default: {
+	props: ['modelValue'],
+	emits: ['update:modelValue', 'save'],
+	template: '<textarea class="mock-note-editor" :value="modelValue" @input="$emit(`update:modelValue`, $event.target.value)" @keydown.ctrl.enter.prevent="$emit(`save`)" />',
+}}))
 vi.mock('./ReadonlyRichText.vue', () => ({default: {props: ['html'], template: '<div class="rendered-outstanding" v-html="html" />'}}))
 
 let wrapper: VueWrapper
@@ -178,6 +183,23 @@ describe('outstanding item images', () => {
 		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('blob:new.png')
 		await click('编辑')
 		expect(wrapper.get('.outstanding-images img').attributes('src')).toBe('blob:existing.png')
+	})
+
+	it('edits a private rich note without showing it in the outstanding list', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p><aside data-tasktrace-outstanding-note="true" hidden><p>Existing note</p></aside></li>')}]
+		await open()
+		expect(wrapper.get('.rendered-outstanding').text()).toBe('Visible item')
+		expect(wrapper.text()).not.toContain('Existing note')
+		await click('编辑')
+		const note = wrapper.get('.mock-note-editor')
+		expect((note.element as HTMLTextAreaElement).value).toContain('Existing note')
+		await note.setValue('<p>Updated note</p><p><img src="/api/v1/tasks/42/attachments/9"></p>')
+		await click('保存修改')
+		expect(history[0].comment).toContain('data-tasktrace-outstanding-note="true"')
+		expect(history[0].comment).toContain('Updated note')
+		expect(history[0].comment).toContain('attachments/9')
+		expect(wrapper.get('.rendered-outstanding').text()).toBe('Visible item')
+		expect(wrapper.text()).not.toContain('Updated note')
 	})
 
 	it('does not re-create an item that was moved or removed while its images were being added', async () => {

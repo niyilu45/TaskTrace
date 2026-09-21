@@ -7,9 +7,28 @@ export const sharedHeading = 'TaskTrace 遗留事项清单'
 export type OutstandingItem = {
 	id: string
 	html: string
+	note?: string
 	done?: boolean
 	priority?: number
 	completedAt?: string
+	reminderAt?: string
+}
+
+const outstandingNoteSelector = 'aside[data-tasktrace-outstanding-note]'
+
+function outstandingContent(li: Element) {
+	const clone = li.cloneNode(true) as Element
+	const note = clone.querySelector(outstandingNoteSelector)
+	const noteHtml = note?.innerHTML || ''
+	note?.remove()
+	return {
+		html: deduplicateHtmlImages(clone.innerHTML),
+		...(noteHtml ? {note: deduplicateHtmlImages(noteHtml)} : {}),
+	}
+}
+
+function serializeOutstandingNote(note?: string) {
+	return note?.trim() ? `<aside data-tasktrace-outstanding-note="true" hidden>${note}</aside>` : ''
 }
 
 function priority(value: string | null | undefined) {
@@ -25,15 +44,21 @@ export function sharedOutstanding(history: TaskComment[]) {
 	const record = [...history].sort((a, b) => (b.id || 0) - (a.id || 0)).find(note => new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')?.textContent === sharedHeading)
 	if (record) {
 		const doc = new DOMParser().parseFromString(record.comment || '', 'text/html')
+		const list = doc.querySelector('h3 + ul')
+		const entries = list ? Array.from(list.children).filter(child => child.tagName === 'LI') : []
 		return {
 			id: record.id,
-			items: Array.from(doc.querySelectorAll('ul > li')).map((li, index) => ({
-				id: li.getAttribute('data-id') || `item-${index}`,
-				html: deduplicateHtmlImages(li.innerHTML),
-				done: li.getAttribute('data-done') === 'true',
-				priority: priority(li.getAttribute('data-priority')),
-				completedAt: li.getAttribute('data-completed-at') || undefined,
-			})),
+			items: entries.map((li, index) => {
+				const content = outstandingContent(li)
+				return {
+					id: li.getAttribute('data-id') || `item-${index}`,
+					...content,
+					done: li.getAttribute('data-done') === 'true',
+					priority: priority(li.getAttribute('data-priority')),
+					completedAt: li.getAttribute('data-completed-at') || undefined,
+					reminderAt: li.getAttribute('data-reminder') || undefined,
+				}
+			}),
 		}
 	}
 	const latest = sortProgressNotes(history).find(note => note.daily)
@@ -67,7 +92,8 @@ export async function changeOutstanding(taskId: number, change: (items: Outstand
 	const items = change(current.items)
 	const comment = `<h3>${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
-		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? 9))}"${completedAt}>${item.html}</li>`
+		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
+		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? 9))}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
 	}).join('')}</ul>`
 	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}, headers})
 	else await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers})
