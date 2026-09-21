@@ -56,7 +56,75 @@
 				>
 					编辑权限
 				</XButton>
+				<XButton
+					v-if="binding.can_manage_permissions"
+					variant="secondary"
+					@click="openMemberEditor"
+				>
+					编辑成员
+				</XButton>
 			</div>
+			<form
+				v-if="editingMembers"
+				class="team-member-editor"
+				@submit.prevent="saveMembers"
+			>
+				<p class="label">
+					共享人员名单
+				</p>
+				<label
+					v-for="member in rosterCandidates"
+					:key="member.toLowerCase()"
+					class="checkbox team-member"
+				>
+					<input
+						v-model="selectedMembers"
+						type="checkbox"
+						:value="member"
+					>
+					{{ member }}
+				</label>
+				<TeamMemberPicker
+					:input-id="`team-members-edit-${taskId}`"
+					label="查找并添加新成员"
+					:excluded="[teamStore.status.username || '', ...selectedMembers]"
+					@select="addMember"
+				/>
+				<div
+					v-if="selectedMembers.length"
+					class="team-selected-members"
+				>
+					<button
+						v-for="member in selectedMembers"
+						:key="member"
+						type="button"
+						class="team-member-chip team-member-chip--remove"
+						:title="`从当前协作任务移除 ${member}`"
+						@click="removeSelected(member)"
+					>
+						{{ member }} ×
+					</button>
+				</div>
+				<div class="team-member-editor__actions">
+					<XButton
+						type="button"
+						variant="secondary"
+						@click="editingMembers = false"
+					>
+						取消
+					</XButton>
+					<XButton
+						type="submit"
+						variant="primary"
+						:loading="teamStore.loading"
+					>
+						保存成员
+					</XButton>
+				</div>
+				<p class="help">
+					成员保存后，受理人、权限设置和概览筛选会使用同一份人员名单。受理人需先取消分配后才能移出。
+				</p>
+			</form>
 			<div class="field">
 				<label
 					class="label"
@@ -216,9 +284,11 @@ const selectedMembers = ref<string[]>([])
 const memberLink = ref('')
 const showPermissions = ref(false)
 const openingPermissions = ref(false)
+const editingMembers = ref(false)
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
-const candidateMembers = computed(() => (teamStore.status.repository?.candidates ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
+const candidateMembers = computed(() => teamStore.memberRoster.filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
+const rosterCandidates = computed(() => teamStore.memberRoster.filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase()))
 
 function avatarFor(username: string) {
 	return teamStore.status.profiles?.find(profile => profile.username?.toLowerCase() === username.toLowerCase())?.avatar || ''
@@ -289,6 +359,25 @@ async function copyMemberLink() {
 	success({message: '团队成员链接已复制。'})
 }
 
+function openMemberEditor() {
+	selectedMembers.value = (binding.value?.members ?? []).filter(member => member.toLowerCase() !== teamStore.status.username?.toLowerCase())
+	editingMembers.value = true
+}
+
+async function saveMembers() {
+	if (!binding.value?.root_task_id || !selectedMembers.value.length) {
+		error({message: '请至少保留一位其他协作成员。'})
+		return
+	}
+	try {
+		await teamStore.share(binding.value.root_task_id, selectedMembers.value)
+		editingMembers.value = false
+		success({message: '协作人员名单已更新。'})
+	} catch (cause) {
+		error(cause)
+	}
+}
+
 async function openPermissions() {
 	if (openingPermissions.value) return
 	openingPermissions.value = true
@@ -349,6 +438,22 @@ async function setNotify(notify: boolean) {
 	flex-wrap: wrap;
 	gap: .4rem;
 	margin-block-start: .5rem;
+}
+
+.team-member-editor {
+	inline-size: 100%;
+	margin-block: .75rem;
+	padding: .75rem;
+	border: 1px solid var(--grey-200);
+	border-radius: .5rem;
+	background: var(--grey-50);
+}
+
+.team-member-editor__actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: .5rem;
+	margin-block-start: .75rem;
 }
 
 .team-member-avatar {

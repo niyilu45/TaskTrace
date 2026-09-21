@@ -13,7 +13,7 @@ function addProgressPerson(result: Map<string, string>, username?: string) {
 // created_by field may instead be the account that imported the shared task.
 export function progressTaskPeople(
 	task: ProgressTask,
-	binding?: Pick<TaskTraceTeamBindingStatus, 'owner' | 'permission_targets'>,
+	binding?: Pick<TaskTraceTeamBindingStatus, 'owner' | 'members' | 'permission_targets'>,
 	currentUsername = '',
 ) {
 	const people = new Map<string, string>()
@@ -21,8 +21,9 @@ export function progressTaskPeople(
 		addProgressPerson(people, binding.owner)
 		const target = binding.permission_targets?.find(item => item.kind === 'task' && item.task_id === task.id)
 		for (const permission of target?.permissions ?? []) {
-			if (permission.owner || permission.assignee) addProgressPerson(people, permission.username)
+			if (permission.read || permission.write || permission.owner || permission.assignee) addProgressPerson(people, permission.username)
 		}
+		if (!target?.permissions?.length) for (const member of binding.members ?? []) addProgressPerson(people, member)
 	} else {
 		addProgressPerson(people, task.created_by?.username)
 		for (const assignee of task.assignees ?? []) addProgressPerson(people, assignee.username)

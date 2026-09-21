@@ -84,10 +84,22 @@ function memberKey(value = '') {
 	return value.trim().split('\\').pop()?.split('@')[0]?.toLowerCase() || ''
 }
 
-const availableCandidates = computed(() => candidates.value.filter(candidate => {
-	const key = memberKey(candidate.account_name || candidate.username)
-	return key && !props.excluded.some(member => memberKey(member) === key)
-}))
+const availableCandidates = computed(() => {
+	const keyword = query.value.trim().toLocaleLowerCase()
+	const combined: TaskTraceTeamMemberCandidate[] = [
+		...teamStore.memberRoster
+			.filter(member => !keyword || member.toLocaleLowerCase().includes(keyword))
+			.map(member => ({username: memberKey(member), account_name: member, display_name: member})),
+		...candidates.value,
+	]
+	const seen = new Set<string>()
+	return combined.filter(candidate => {
+		const key = memberKey(candidate.account_name || candidate.username)
+		if (!key || seen.has(key) || props.excluded.some(member => memberKey(member) === key)) return false
+		seen.add(key)
+		return true
+	})
+})
 
 watch(query, value => {
 	if (searchTimer) clearTimeout(searchTimer)
@@ -108,18 +120,18 @@ watch(query, value => {
 		const timeout = setTimeout(() => {
 			timedOut = true
 			controller.abort()
-		}, 10_000)
+		}, 30_000)
 		loading.value = true
 		searchError.value = ''
 		try {
 			const result = await teamStore.searchMembers(keyword, controller.signal)
 			if (revision === searchRevision) candidates.value = result
-		} catch {
+		} catch (cause) {
 			if (revision === searchRevision) {
 				candidates.value = []
 				searchError.value = timedOut
 					? '查找 Windows 账户超时，请检查域网络或输入更完整的用户名后重试。'
-					: '无法查询 Windows 账户，请检查本机或域网络后重试。'
+					: cause instanceof Error && cause.message ? cause.message : '无法查询 Windows 账户，请检查本机或域网络后重试。'
 			}
 		} finally {
 			clearTimeout(timeout)

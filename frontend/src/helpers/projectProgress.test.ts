@@ -44,7 +44,7 @@ describe('project progress people', () => {
 		const item = {...task(1), created_by: {username: 'Alice'}, assignees: [{username: 'alice'}, {username: 'Bob'}]}
 		expect(progressTaskPeople(item)).toEqual(['Alice', 'Bob'])
 	})
-	it('uses the original owner and remote assignees for collaborative tasks', () => {
+	it('uses every readable member from the shared collaboration roster', () => {
 		const item = {...task(1), created_by: {username: 'local-importer'}, assignees: [{username: 'local-importer'}]}
 		const binding = {
 			owner: 'Owner',
@@ -58,7 +58,10 @@ describe('project progress people', () => {
 				],
 			}],
 		}
-		expect(progressTaskPeople(item, binding)).toEqual(['Owner', 'Assignee'])
+		expect(progressTaskPeople(item, binding)).toEqual(['Owner', 'Assignee', 'Reader'])
+	})
+	it('falls back to the binding roster while legacy permission metadata is unavailable', () => {
+		expect(progressTaskPeople(task(1), {owner: 'Owner', members: ['Owner', 'Member']})).toEqual(['Owner', 'Member'])
 	})
 	it('attributes legacy tasks without people metadata to the current user', () => {
 		expect(progressTaskPeople(task(1), undefined, 'CurrentUser')).toEqual(['CurrentUser'])

@@ -1059,7 +1059,7 @@ function setActiveFields() {
 	// task.endDate = task.endDate || null
 
 	// Set all active fields based on values in the model
-	activeFields.assignees = task.value.assignees.length > 0
+	activeFields.assignees = task.value.assignees.length > 0 || Boolean(teamStore.bindingForTask(task.value.id))
 	activeFields.attachments = (task.value.attachments ?? []).some(attachment => !isProgressImageAttachment(attachment))
 	activeFields.timeTracking = (task.value.timeEntriesCount ?? 0) > 0
 	activeFields.dueDate = task.value.dueDate !== null
@@ -1072,6 +1072,8 @@ function setActiveFields() {
 	activeFields.repeatAfter = task.value.repeatAfter?.amount > 0 || task.value.repeatMode !== TASK_REPEAT_MODES.REPEAT_MODE_DEFAULT
 	activeFields.startDate = task.value.startDate !== null
 }
+
+watch(() => teamStore.bindingForTask(task.value.id)?.share_id, () => setActiveFields())
 
 const activeFieldElements: { [id in FieldType]: HTMLElement | null } = reactive({
 	assignees: null,

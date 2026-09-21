@@ -2986,6 +2986,10 @@ export type TaskTraceTeamPermissionsRequest = {
      */
     outstanding_id?: string;
     /**
+     * When supplied for a task, replaces the collaboration members assigned to complete it.
+     */
+    assignees?: Array<string> | null;
+    /**
      * The complete set of editable member read and write choices.
      */
     permissions?: Array<TaskTraceTeamPermissionUpdate> | null;
@@ -5241,6 +5245,10 @@ export type TaskTraceTeamPermissionsRequestWritable = {
      * The outstanding-item id to update. Leave empty to update the task itself.
      */
     outstanding_id?: string;
+    /**
+     * When supplied for a task, replaces the collaboration members assigned to complete it.
+     */
+    assignees?: Array<string> | null;
     /**
      * The complete set of editable member read and write choices.
      */

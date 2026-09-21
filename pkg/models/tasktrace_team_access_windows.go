@@ -44,8 +44,12 @@ try {
     Add-Type -AssemblyName System.DirectoryServices
     $ldap=$Keyword.Replace('\','\5c').Replace('*','\2a').Replace('(','\28').Replace(')','\29').Replace([string][char]0,'\00')
     $searcher=New-Object DirectoryServices.DirectorySearcher
+	$rootDse=[ADSI]'LDAP://RootDSE'
+	$searcher.SearchRoot=[ADSI]('LDAP://'+[string]$rootDse.defaultNamingContext)
     $searcher.PageSize=25
     $searcher.SizeLimit=25
+	$searcher.ClientTimeout=[TimeSpan]::FromSeconds(15)
+	$searcher.ServerTimeLimit=[TimeSpan]::FromSeconds(15)
     $searcher.Filter="(&(objectCategory=person)(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2))(|(sAMAccountName=*$ldap*)(displayName=*$ldap*)))"
     foreach($property in @('sAMAccountName','displayName','objectSid')){[void]$searcher.PropertiesToLoad.Add($property)}
     $found=$searcher.FindAll()
@@ -149,7 +153,7 @@ func taskTraceTeamPowerShell(script string, environment ...string) ([]byte, erro
 }
 
 func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string) ([]TaskTraceTeamMemberCandidate, error) {
-	output, err := taskTraceTeamPowerShellContext(ctx, 8*time.Second, taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query)
+	output, err := taskTraceTeamPowerShellContext(ctx, 25*time.Second, taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query)
 	if err != nil {
 		return nil, err
 	}

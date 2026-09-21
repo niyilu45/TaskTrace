@@ -189,7 +189,7 @@
 			v-if="personFilterActive"
 			class="browse-hint"
 		>
-			仅显示所属人或受理人包含所选人员的事项，并保留其父任务作为层级上下文；未命中的同级任务不会显示。
+			仅显示对所选协作人员可见的事项，并保留其父任务作为层级上下文；未命中的同级任务不会显示。
 		</p>
 		<p
 			:id="`progress-range-hint-${projectId}`"
@@ -465,6 +465,7 @@ const peopleOptions = computed(() => {
 		people.set(key, {key, username: value, name: names.get(key) || value, avatar, initials: value.slice(0, 2).toLocaleUpperCase() || '?'})
 	}
 	add(currentUsername.value)
+	for (const username of teamStore.memberRoster) add(username)
 	for (const task of tasks.value) {
 		for (const username of progressTaskPeople(task, teamStore.bindingForTask(task.id), currentUsername.value)) add(username)
 	}

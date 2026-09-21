@@ -70,4 +70,24 @@ describe('TaskTrace team bindings', () => {
 
 		expect(store.canWriteTask(42)).toBe(true)
 	})
+
+	it('shares one deduplicated member roster across bindings, permissions, profiles and folder access', () => {
+		const store = useTasktraceTeamStore()
+		store.status = {
+			enabled: true,
+			username: 'Current',
+			bindings: [{
+				share_id: 'shared', root_task_id: 42, task_ids: [42], owner: 'Owner', members: ['owner', 'Member'],
+				permission_targets: [{kind: 'task', task_id: 42, permissions: [{username: 'Reader', read: true}]}],
+			}],
+			profiles: [{username: 'ProfileOnly'}],
+			repository: {candidates: ['FolderUser']},
+			unassigned_members: ['Unassigned'],
+			conflicts: [], notifications: [],
+		}
+
+		expect(store.memberRoster.map(member => member.toLocaleLowerCase()).sort()).toEqual([
+			'current', 'folderuser', 'member', 'owner', 'profileonly', 'reader', 'unassigned',
+		].sort())
+	})
 })

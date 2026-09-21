@@ -276,7 +276,7 @@ async function save() {
 		const refreshedBinding = teamStore.bindingForTask(props.taskId)
 		const refreshedTarget = refreshedBinding?.permission_targets?.find(item => targetKey(item) === activeKey.value)
 		loadTarget(refreshedTarget)
-		success({message: '协作权限已保存。'})
+		success({message: target.kind === 'task' ? '协作权限已保存，并已同步到子任务和遗留事项。' : '协作权限已保存。'})
 	} catch (cause) {
 		error(cause)
 	} finally {

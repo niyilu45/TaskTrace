@@ -43,6 +43,25 @@ func TestTaskTraceTeamPermissionsDefaultMembersToReadOnly(t *testing.T) {
 	require.False(t, byUser["member"].Write)
 }
 
+func TestTaskTraceTeamPermissionUpdatesKeepOwnerAndAssigneeWritable(t *testing.T) {
+	existing := taskTraceTeamNormalizePermissions(
+		[]string{"owner", "assignee", "member"},
+		"owner",
+		[]string{"assignee"},
+		nil,
+	)
+	updated := taskTraceTeamApplyPermissionUpdates(existing, map[string]TaskTraceTeamPermissionUpdate{
+		"owner":    {Username: "owner"},
+		"assignee": {Username: "assignee"},
+		"member":   {Username: "member", Write: true},
+	})
+	byUser := taskTraceTeamPermissionMap(updated)
+	require.True(t, byUser["owner"].Write)
+	require.True(t, byUser["assignee"].Write)
+	require.True(t, byUser["member"].Read)
+	require.True(t, byUser["member"].Write)
+}
+
 func TestTaskTraceTeamPermissionsChildAndOutstandingInheritIndependently(t *testing.T) {
 	manifest := TaskTraceTeamManifest{
 		Owner:   "owner",

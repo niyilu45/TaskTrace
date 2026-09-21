@@ -663,6 +663,8 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 			binding.NodeTasks[uuid.NewString()] = taskID
 		}
 	}
+	var manifest TaskTraceTeamManifest
+	manifestAvailable := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest) == nil
 	acks := map[string]string{}
 	for key, value := range binding.ResolutionAcks {
 		acks[key] = value
@@ -697,6 +699,12 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 				}
 			}
 			sort.Slice(assignees, func(i, j int) bool { return strings.ToLower(assignees[i]) < strings.ToLower(assignees[j]) })
+		}
+		if manifestAvailable {
+			if permissions := manifest.Permissions[taskTraceTeamPermissionKey(node, "")]; len(permissions) > 0 {
+				owner = taskTraceTeamPermissionOwner(permissions, owner)
+				assignees = taskTraceTeamPermissionAssignees(permissions)
+			}
 		}
 		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Owner: owner, Assignees: assignees, Done: task.Done, Status: task.Status, Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
 		for _, comment := range comments {
@@ -1525,6 +1533,60 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	return nil
 }
 
+func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTraceTeamState, binding *TaskTraceTeamBinding, requested []string, actor string) (*TaskTraceTeamStatus, error) {
+	resolvedMembers := make([]string, 0, len(requested))
+	for _, member := range requested {
+		if taskTraceTeamMembersEqual(member, actor) {
+			continue
+		}
+		resolved := ""
+		for _, existing := range binding.Members {
+			if taskTraceTeamMembersEqual(existing, member) {
+				resolved = existing
+				break
+			}
+		}
+		if resolved == "" {
+			var err error
+			resolved, err = taskTraceTeamGrantWindowsAccess(binding.Repository, member)
+			if err != nil {
+				return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, err)
+			}
+		}
+		resolvedMembers = append(resolvedMembers, resolved)
+	}
+	members := taskTraceTeamNormalizeMembers(resolvedMembers, actor)
+	if len(members) < 2 {
+		return nil, errors.New("at least one other team member is required")
+	}
+	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
+	var manifest TaskTraceTeamManifest
+	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+		return nil, err
+	}
+	for _, permissions := range manifest.Permissions {
+		for _, permission := range permissions {
+			if permission.Assignee && !taskTraceTeamContainsMember(members, permission.Username) {
+				return nil, fmt.Errorf("请先取消 %s 的受理人身份，再从协作成员中移除", permission.Username)
+			}
+		}
+	}
+	manifest.Members = members
+	for key, permissions := range manifest.Permissions {
+		manifest.Permissions[key] = taskTraceTeamNormalizePermissions(members, taskTraceTeamPermissionOwner(permissions, manifest.Owner), taskTraceTeamPermissionAssignees(permissions), permissions)
+	}
+	manifest.Updated = time.Now().UTC()
+	if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+		return nil, err
+	}
+	binding.Members = members
+	if err := taskTraceTeamSaveState(state); err != nil {
+		return nil, err
+	}
+	status, err := taskTraceTeamStatusLocked(s, a, state)
+	return &status, err
+}
+
 func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareRequest) (*TaskTraceTeamStatus, error) {
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
@@ -1542,6 +1604,20 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		}
 		return nil, ErrGenericForbidden{}
 	}
+	state, err := taskTraceTeamLoadState()
+	if err != nil {
+		return nil, err
+	}
+	for index := range state.Bindings {
+		existing := &state.Bindings[index]
+		if existing.RootTaskID != request.TaskID {
+			continue
+		}
+		if !strings.EqualFold(existing.Owner, u.Username) {
+			return nil, ErrGenericForbidden{}
+		}
+		return taskTraceTeamUpdateMembersLocked(s, a, state, existing, request.Members, u.Username)
+	}
 	root := taskTraceTeamRoot()
 	grantedMembers := make([]string, 0, len(request.Members))
 	for _, member := range request.Members {
@@ -1557,15 +1633,6 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	members := taskTraceTeamNormalizeMembers(grantedMembers, u.Username)
 	if len(members) < 2 {
 		return nil, errors.New("at least one other team member is required")
-	}
-	state, err := taskTraceTeamLoadState()
-	if err != nil {
-		return nil, err
-	}
-	for _, existing := range state.Bindings {
-		if existing.RootTaskID == request.TaskID {
-			return nil, errors.New("this task is already shared")
-		}
 	}
 	secret, err := taskTraceTeamRandomSecret()
 	if err != nil {

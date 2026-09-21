@@ -22,22 +22,25 @@
 				</span>
 				{{ $t('task.comment.title') }}
 			</span>
-			<BaseButton
+			<span
 				v-if="comments.length > 0"
 				class="comment-sort-button"
-				@click="toggleSortOrder"
-			>
-				<Icon :icon="commentSortOrder === 'asc' ? 'arrow-down-short-wide' : 'arrow-up-short-wide'" />
-				{{ commentSortOrder === 'asc' ? $t('task.comment.sortOldestFirst') : $t('task.comment.sortNewestFirst') }}
-			</BaseButton>
+			>最新评论在前</span>
 			<label
 				v-if="commentAuthors.length > 1"
 				class="comment-author-filter"
 			>
 				<span>筛选用户</span>
-				<select v-model="selectedAuthor" class="input">
+				<select
+					v-model="selectedAuthor"
+					class="input"
+				>
 					<option value="">全部用户</option>
-					<option v-for="author in commentAuthors" :key="author" :value="author">{{ author }}</option>
+					<option
+						v-for="author in commentAuthors"
+						:key="author"
+						:value="author"
+					>{{ author }}</option>
 				</select>
 			</label>
 		</h2>
@@ -286,7 +289,6 @@ import {parseProgressNote, progressBacklinks} from '@/helpers/progressNotes'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import ProgressBacklinks from './ProgressBacklinks.vue'
 
-import BaseButton from '@/components/base/BaseButton.vue'
 import CustomTransition from '@/components/misc/CustomTransition.vue'
 import Editor from '@/components/input/AsyncEditor'
 import PaginationEmit from '@/components/misc/PaginationEmit.vue'
@@ -361,8 +363,7 @@ const {t} = useI18n({useScope: 'global'})
 const configStore = useConfigStore()
 const authStore = useAuthStore()
 
-const localSortOrder = ref<'asc' | 'desc' | null>(null)
-const commentSortOrder = computed(() => localSortOrder.value ?? authStore.settings.frontendSettings.commentSortOrder ?? 'asc')
+const commentSortOrder = ref<'asc' | 'desc'>('desc')
 
 const comments = ref<ITaskComment[]>([])
 const selectedAuthor = ref('')
@@ -480,7 +481,6 @@ async function attachmentUpload(files: File[] | FileList): Promise<string[]> {
 const taskCommentService = shallowReactive(new TaskCommentService())
 
 async function dailyProgressSaved() {
-	localSortOrder.value = 'desc'
 	currentPage.value = 1
 	await loadComments(props.taskId, true)
 }
@@ -514,31 +514,6 @@ async function changePage(page: number) {
 	commentsRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' })
 	currentPage.value = page
 	await loadComments(props.taskId)
-}
-
-async function toggleSortOrder() {
-	const newOrder = commentSortOrder.value === 'asc' ? 'desc' : 'asc'
-	if (!authStore.isLinkShareAuth) {
-		await authStore.saveUserSettings({
-			settings: {
-				...authStore.settings,
-				frontendSettings: {
-					...authStore.settings.frontendSettings,
-					commentSortOrder: newOrder,
-					quickAddDefaultReminders: [...(authStore.settings.frontendSettings.quickAddDefaultReminders ?? [])],
-				},
-			},
-			showMessage: false,
-		})
-	} else {
-		localSortOrder.value = newOrder
-	}
-	if (taskCommentService.totalPages > 1) {
-		currentPage.value = 1
-		await loadComments(props.taskId)
-	} else {
-		comments.value.reverse()
-	}
 }
 
 watch(

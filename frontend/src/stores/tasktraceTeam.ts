@@ -131,9 +131,38 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return binding.owner?.toLowerCase() === status.value.username?.toLowerCase()
 	}
 
+	async function configureAssignees(shareId: string, taskId: number, assignees: string[]) {
+		return run(() => tasktraceTeamPermissionsConfigure({body: {
+			share_id: shareId,
+			task_id: taskId,
+			assignees,
+		}}))
+	}
+
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)
 	const notificationCount = computed(() => status.value.notifications?.length ?? 0)
 	const activityCount = computed(() => conflictCount.value + notificationCount.value)
+	const memberRoster = computed(() => {
+		const members = new Map<string, string>()
+		const add = (value?: string | null) => {
+			const username = value?.trim()
+			if (!username) return
+			const key = username.toLocaleLowerCase()
+			if (!members.has(key)) members.set(key, username)
+		}
+		add(status.value.username)
+		for (const binding of status.value.bindings ?? []) {
+			add(binding.owner)
+			for (const member of binding.members ?? []) add(member)
+			for (const target of binding.permission_targets ?? []) {
+				for (const permission of target.permissions ?? []) add(permission.username)
+			}
+		}
+		for (const profile of status.value.profiles ?? []) add(profile.username)
+		for (const member of status.value.repository?.candidates ?? []) add(member)
+		for (const member of status.value.unassigned_members ?? []) add(member)
+		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, refresh, sync, share, importLink, configure, configurePermissions, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask}
 })
