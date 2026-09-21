@@ -48,8 +48,9 @@
 						<span>{{ member }}</span>
 						<XButton
 							variant="secondary"
-							:loading="teamStore.loading"
-							@click="removeMember(member)"
+							:loading="removingMember === member"
+							:disabled="!!removingMember"
+							@click="requestRemoveMember(member)"
 						>
 							删除权限
 						</XButton>
@@ -60,6 +61,13 @@
 					class="team-empty-state"
 				>
 					当前没有未分配人员。
+				</p>
+				<p
+					v-if="memberActionError"
+					class="team-member-error has-text-danger"
+					role="alert"
+				>
+					{{ memberActionError }}
 				</p>
 			</section>
 
@@ -129,6 +137,28 @@
 				</div>
 			</section>
 		</template>
+		<Modal
+			v-if="pendingRemoval"
+			:enabled="true"
+			@close="cancelRemoveMember"
+			@submit="confirmRemoveMember"
+		>
+			<template #header>
+				删除协作人员权限
+			</template>
+			<template #text>
+				<p>确定删除 <strong>{{ pendingRemoval }}</strong> 的 teamData 共享读写权限吗？</p>
+				<p class="has-text-grey">
+					如果 Windows 要求管理员权限，确认后会弹出一次用户账户控制窗口。
+				</p>
+				<p
+					v-if="removingMember"
+					role="status"
+				>
+					正在删除权限…
+				</p>
+			</template>
+		</Modal>
 		<Modal
 			v-if="!activityHost"
 			:enabled="showImport"
@@ -344,6 +374,9 @@ const resolutions = reactive<Record<string, string>>({})
 const addingMember = ref(false)
 const memberLink = ref('')
 const memberImportResult = ref<TaskTraceTeamMemberImportResult | null>(null)
+const pendingRemoval = ref('')
+const removingMember = ref('')
+const memberActionError = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 
 const knownMembers = computed(() => [
@@ -392,13 +425,29 @@ function openActivity() {
 	showActivity.value = true
 }
 
+function needsAdministratorAuthorization(cause: unknown) {
+	const value = cause as {status?: number, response?: {status?: number}, reason?: {response?: {status?: number}}}
+	const status = value?.reason?.response?.status ?? value?.response?.status ?? value?.status
+	const message = getErrorText(cause).toLowerCase()
+	return status === 403 || [
+		'windows administrator authorization required',
+		'需要 windows 管理员授权',
+		'access is denied',
+		'access denied',
+		'拒绝访问',
+		'系统错误 5',
+	].some(marker => message.includes(marker))
+}
+
 async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	const accountName = candidate.account_name || candidate.username
 	if (!accountName) return
+	memberActionError.value = ''
 	try {
 		await teamStore.grantMember(accountName)
 	} catch (cause) {
-		if (!getErrorText(cause).includes('需要 Windows 管理员授权')) {
+		if (!needsAdministratorAuthorization(cause)) {
+			memberActionError.value = getErrorText(cause)
 			error(cause)
 			return
 		}
@@ -407,6 +456,7 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 		try {
 			await teamStore.grantMember(accountName, true)
 		} catch (elevatedCause) {
+			memberActionError.value = getErrorText(elevatedCause)
 			error(elevatedCause)
 			return
 		}
@@ -415,13 +465,41 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	success({message: `已为 ${accountName} 设置 teamData 读写权限。`})
 }
 
-async function removeMember(member: string) {
-	if (!window.confirm(`确定删除 ${member} 的 teamData 共享读写权限吗？`)) return
+function requestRemoveMember(member: string) {
+	memberActionError.value = ''
+	pendingRemoval.value = member
+}
+
+function cancelRemoveMember() {
+	if (removingMember.value) return
+	pendingRemoval.value = ''
+}
+
+async function confirmRemoveMember() {
+	const member = pendingRemoval.value
+	if (!member || removingMember.value) return
+	removingMember.value = member
+	memberActionError.value = ''
 	try {
-		await teamStore.removeMember(member)
+		try {
+			await teamStore.removeMember(member)
+		} catch (cause) {
+			if (!needsAdministratorAuthorization(cause)) throw cause
+			const confirmed = window.confirm(`删除 ${member} 的 teamData 权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；本次操作完成后 TaskTrace 仍以普通权限运行。`)
+			if (!confirmed) return
+			await teamStore.removeMember(member, true)
+		}
+		await teamStore.refresh()
+		if (teamStore.status.unassigned_members?.some(value => value.toLowerCase() === member.toLowerCase())) {
+			throw new Error(`Windows 仍报告 ${member} 拥有 teamData 权限，请重试或检查文件夹共享设置。`)
+		}
+		pendingRemoval.value = ''
 		success({message: `已删除 ${member} 的 teamData 权限。`})
 	} catch (cause) {
+		memberActionError.value = getErrorText(cause)
 		error(cause)
+	} finally {
+		removingMember.value = ''
 	}
 }
 
@@ -606,6 +684,11 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 
 .team-import-result p {
 	margin: .15rem 0;
+}
+
+.team-member-error {
+	margin-block: .75rem 0;
+	overflow-wrap: anywhere;
 }
 
 .team-profile p {

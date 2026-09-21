@@ -35,9 +35,11 @@ func TestTaskTraceTeamAccessNeedsElevation(t *testing.T) {
 
 func TestTaskTraceTeamPowerShellScriptsParse(t *testing.T) {
 	for name, script := range map[string]string{
-		"search":         taskTraceTeamSearchScript,
-		"grant":          taskTraceTeamGrantAccessScript,
-		"elevated grant": taskTraceTeamGrantElevatedScript(),
+		"search":          taskTraceTeamSearchScript,
+		"grant":           taskTraceTeamGrantAccessScript,
+		"elevated grant":  taskTraceTeamGrantElevatedScript(),
+		"remove":          taskTraceTeamRemoveAccessScript,
+		"elevated remove": taskTraceTeamRemoveElevatedScript(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command("powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[ScriptBlock]::Create($env:TASKTRACE_SCRIPT) | Out-Null")

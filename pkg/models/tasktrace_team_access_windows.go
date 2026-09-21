@@ -131,8 +131,11 @@ $ErrorActionPreference='Stop'
 $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\')
 $sid=([Security.Principal.NTAccount]::new($Member)).Translate([Security.Principal.SecurityIdentifier])
 $canonical=$sid.Translate([Security.Principal.NTAccount]).Value
-$share=Get-SmbShare -ErrorAction SilentlyContinue | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $rootPath)} | Select-Object -First 1
-if($null -ne $share){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue}
+$share=Get-SmbShare -ErrorAction Stop | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $rootPath)} | Select-Object -First 1
+if($null -ne $share){
+  $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow'})
+  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop}
+}
 $acl=Get-Acl -LiteralPath $rootPath -ErrorAction Stop
 $acl.PurgeAccessRules($sid)
 Set-Acl -LiteralPath $rootPath -AclObject $acl -ErrorAction Stop`
@@ -260,7 +263,24 @@ try {
 $result | ConvertTo-Json -Compress | Set-Content -LiteralPath $args[1] -Encoding UTF8`
 }
 
-func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error) {
+func taskTraceTeamRemoveElevatedScript() string {
+	return `$ErrorActionPreference='Stop'
+$result=[ordered]@{ok=$false;value='';error=''}
+try {
+  $request=Get-Content -LiteralPath $args[0] -Raw -Encoding UTF8 | ConvertFrom-Json
+  $env:TASKTRACE_TEAM_ROOT=[string]$request.root
+  $env:TASKTRACE_TEAM_MEMBER=[string]$request.member
+  & {
+` + taskTraceTeamRemoveAccessScript + `
+  }
+  $result.ok=$true
+} catch {
+  $result.error=($_ | Out-String).Trim()
+}
+$result | ConvertTo-Json -Compress | Set-Content -LiteralPath $args[1] -Encoding UTF8`
+}
+
+func taskTraceTeamRunWindowsAccessElevated(root, member, scriptName, wrapper string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "tasktrace-team-access-")
 	if err != nil {
 		return "", fmt.Errorf("创建管理员授权请求失败：%w", err)
@@ -269,12 +289,11 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 
 	inputPath := filepath.Join(tempDir, "request.json")
 	outputPath := filepath.Join(tempDir, "result.json")
-	scriptPath := filepath.Join(tempDir, "grant-team-access.ps1")
+	scriptPath := filepath.Join(tempDir, scriptName)
 	payload, _ := json.Marshal(map[string]string{"root": root, "member": member})
 	if err := os.WriteFile(inputPath, payload, 0600); err != nil {
 		return "", fmt.Errorf("写入管理员授权请求失败：%w", err)
 	}
-	wrapper := taskTraceTeamGrantElevatedScript()
 	if err := os.WriteFile(scriptPath, append([]byte{0xef, 0xbb, 0xbf}, []byte(wrapper)...), 0600); err != nil {
 		return "", fmt.Errorf("写入管理员授权脚本失败：%w", err)
 	}
@@ -305,13 +324,7 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 				}
 				return "", errors.New(result.Error)
 			}
-			var value struct {
-				AccountName string `json:"account_name"`
-			}
-			if err := json.Unmarshal([]byte(result.Value), &value); err != nil || value.AccountName == "" {
-				return "", errors.New("Windows 未返回已授权的账户")
-			}
-			return value.AccountName, nil
+			return result.Value, nil
 		}
 		if !errors.Is(readErr, os.ErrNotExist) {
 			return "", fmt.Errorf("读取管理员授权结果失败：%w", readErr)
@@ -321,7 +334,32 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 	return "", errors.New("Windows 管理员授权超时，请重试")
 }
 
-func taskTraceTeamRemoveWindowsAccess(root, member string) error {
+func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error) {
+	result, err := taskTraceTeamRunWindowsAccessElevated(root, member, "grant-team-access.ps1", taskTraceTeamGrantElevatedScript())
+	if err != nil {
+		return "", err
+	}
+	var value struct {
+		AccountName string `json:"account_name"`
+	}
+	if err := json.Unmarshal([]byte(result), &value); err != nil || value.AccountName == "" {
+		return "", errors.New("Windows 未返回已授权的账户")
+	}
+	return value.AccountName, nil
+}
+
+func taskTraceTeamRemoveWindowsAccessWithElevation(root, member string, elevate bool) error {
+	if elevate {
+		_, err := taskTraceTeamRunWindowsAccessElevated(root, member, "remove-team-access.ps1", taskTraceTeamRemoveElevatedScript())
+		return err
+	}
 	_, err := taskTraceTeamPowerShell(taskTraceTeamRemoveAccessScript, "TASKTRACE_TEAM_ROOT="+root, "TASKTRACE_TEAM_MEMBER="+member)
+	if taskTraceTeamAccessNeedsElevation(err) {
+		return fmt.Errorf("%w：Windows 拒绝了共享权限修改（系统错误 5）", errTaskTraceTeamAdminRequired)
+	}
 	return err
+}
+
+func taskTraceTeamRemoveWindowsAccess(root, member string) error {
+	return taskTraceTeamRemoveWindowsAccessWithElevation(root, member, false)
 }

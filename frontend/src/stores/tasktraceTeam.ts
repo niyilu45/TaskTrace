@@ -102,8 +102,11 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		}))
 	}
 
-	async function removeMember(accountName: string) {
-		return run(() => tasktraceTeamMembersAccessDelete({path: {member: accountName}}))
+	async function removeMember(accountName: string, elevate = false) {
+		return run(() => tasktraceTeamMembersAccessDelete({
+			path: {member: accountName},
+			headers: elevate ? {'X-TaskTrace-Elevate': 'true'} : undefined,
+		}))
 	}
 
 	async function importMembers(link: string): Promise<TaskTraceTeamMemberImportResult> {

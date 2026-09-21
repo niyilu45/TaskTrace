@@ -32,3 +32,7 @@ func IsTaskTraceTeamAdminRequired(error) bool {
 func taskTraceTeamRemoveWindowsAccess(string, string) error {
 	return errors.New("Windows folder permissions are only available on Windows")
 }
+
+func taskTraceTeamRemoveWindowsAccessWithElevation(string, string, bool) error {
+	return errors.New("Windows folder permissions are only available on Windows")
+}

@@ -273,15 +273,19 @@ func taskTraceTeamMembersAccessCreate(ctx context.Context, in *struct {
 }
 
 func taskTraceTeamMembersAccessDelete(ctx context.Context, in *struct {
-	Member string `path:"member" doc:"The Windows account whose unassigned access should be removed."`
+	Member  string `path:"member" doc:"The Windows account whose unassigned access should be removed."`
+	Elevate bool   `header:"X-TaskTrace-Elevate" doc:"Retry this permission change with a one-time Windows administrator prompt."`
 }) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamWriteSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	status, err := models.TaskTraceTeamRemoveMemberAccess(s, a, in.Member)
+	status, err := models.TaskTraceTeamRemoveMemberAccess(s, a, in.Member, in.Elevate)
 	if err != nil {
+		if models.IsTaskTraceTeamAdminRequired(err) {
+			return nil, huma.Error403Forbidden("Windows administrator authorization required", err)
+		}
 		return nil, huma.Error422UnprocessableEntity("remove teamData access", err)
 	}
 	if err := s.Commit(); err != nil {
