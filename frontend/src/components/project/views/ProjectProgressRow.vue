@@ -41,7 +41,7 @@
 			/>
 			<small>{{ taskStatusLabel(task.status, task.done) }}<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
-		<td>
+		<td class="description-cell">
 			<ReadonlyRichText
 				v-if="task.description"
 				:html="task.description"
@@ -247,6 +247,9 @@ onBeforeUnmount(() => { disposed = true })
   overflow-wrap: anywhere;
   font-size: .875rem;
   text-align: start;
+	min-inline-size: 0;
+	max-inline-size: 100%;
+	overflow: hidden;
  }
  td:last-child { border-inline-end: 0;
  }
@@ -258,6 +261,10 @@ onBeforeUnmount(() => { disposed = true })
   color: var(--grey-600);
   font-weight: 400;
  }
+}
+.description-cell :deep(.readonly-rich-text) {
+	min-inline-size: 0;
+	max-inline-size: 100%;
 }
 .task-name { display: flex;
  align-items: baseline;

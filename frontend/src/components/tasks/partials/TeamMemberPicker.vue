@@ -26,7 +26,7 @@
 				v-if="loading"
 				class="team-member-state"
 			>
-				正在查找 Windows 账户…
+				{{ availableCandidates.length ? '已显示快速匹配，正在继续查找域账户…' : '正在查找 Windows 账户…' }}
 			</p>
 			<button
 				v-for="candidate in availableCandidates"
@@ -84,6 +84,15 @@ function memberKey(value = '') {
 	return value.trim().split('\\').pop()?.split('@')[0]?.toLowerCase() || ''
 }
 
+function mergeCandidates(...groups: TaskTraceTeamMemberCandidate[][]) {
+	const merged = new Map<string, TaskTraceTeamMemberCandidate>()
+	for (const candidate of groups.flat()) {
+		const key = (candidate.account_name || candidate.username || '').trim().toLocaleLowerCase()
+		if (key && !merged.has(key)) merged.set(key, candidate)
+	}
+	return [...merged.values()]
+}
+
 const availableCandidates = computed(() => {
 	const keyword = query.value.trim().toLocaleLowerCase()
 	const combined: TaskTraceTeamMemberCandidate[] = [
@@ -123,13 +132,16 @@ watch(query, value => {
 		}, 30_000)
 		loading.value = true
 		searchError.value = ''
+		let quickResult: TaskTraceTeamMemberCandidate[] = []
 		try {
+			quickResult = await teamStore.searchMembers(keyword, controller.signal, true)
+			if (revision === searchRevision) candidates.value = quickResult
 			const result = await teamStore.searchMembers(keyword, controller.signal)
-			if (revision === searchRevision) candidates.value = result
+			if (revision === searchRevision) candidates.value = mergeCandidates(quickResult, result)
 		} catch (cause) {
 			if (revision === searchRevision) {
-				candidates.value = []
-				searchError.value = timedOut
+				candidates.value = quickResult
+				searchError.value = quickResult.length ? '' : timedOut
 					? '查找 Windows 账户超时，请检查域网络或输入更完整的用户名后重试。'
 					: cause instanceof Error && cause.message ? cause.message : '无法查询 Windows 账户，请检查本机或域网络后重试。'
 			}

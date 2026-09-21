@@ -236,13 +236,14 @@ func taskTraceTeamNotificationsRead(ctx context.Context, in *struct {
 
 func taskTraceTeamMembersSearch(ctx context.Context, in *struct {
 	Query string `query:"q" doc:"A partial Windows username, account name, or display name."`
+	Quick bool   `header:"X-TaskTrace-Quick" doc:"Return direct and local matches without waiting for domain search."`
 }) (*singleBody[models.TaskTraceTeamMemberSearchResult], error) {
 	s, _, err := taskTraceTeamReadSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	result, err := models.TaskTraceTeamSearchMembers(ctx, in.Query)
+	result, err := models.TaskTraceTeamSearchMembers(ctx, in.Query, in.Quick)
 	if err != nil {
 		return nil, huma.Error422UnprocessableEntity("search Windows accounts", err)
 	}
@@ -250,15 +251,19 @@ func taskTraceTeamMembersSearch(ctx context.Context, in *struct {
 }
 
 func taskTraceTeamMembersAccessCreate(ctx context.Context, in *struct {
-	Body models.TaskTraceTeamMemberAccessRequest
+	Body    models.TaskTraceTeamMemberAccessRequest
+	Elevate bool `header:"X-TaskTrace-Elevate" doc:"Retry this permission change with a one-time Windows administrator prompt."`
 }) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamWriteSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	status, err := models.TaskTraceTeamGrantMemberAccess(s, a, in.Body)
+	status, err := models.TaskTraceTeamGrantMemberAccess(s, a, in.Body, in.Elevate)
 	if err != nil {
+		if models.IsTaskTraceTeamAdminRequired(err) {
+			return nil, huma.Error403Forbidden("Windows administrator authorization required", err)
+		}
 		return nil, huma.Error422UnprocessableEntity("grant teamData access", err)
 	}
 	if err := s.Commit(); err != nil {

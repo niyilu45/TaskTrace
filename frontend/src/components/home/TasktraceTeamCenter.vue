@@ -321,7 +321,7 @@ import XButton from '@/components/input/Button.vue'
 import type {IProject} from '@/modelTypes/IProject'
 import {formatDisplayDate} from '@/helpers/time/formatDate'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import {error, success} from '@/message'
+import {error, getErrorText, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import type {TaskTraceTeamMemberCandidate, TaskTraceTeamMemberImportResult, TaskTraceTeamNotification} from '@/client/generated'
 
@@ -397,11 +397,22 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	if (!accountName) return
 	try {
 		await teamStore.grantMember(accountName)
-		addingMember.value = false
-		success({message: `已为 ${accountName} 设置 teamData 读写权限。`})
 	} catch (cause) {
-		error(cause)
+		if (!getErrorText(cause).includes('需要 Windows 管理员授权')) {
+			error(cause)
+			return
+		}
+		const confirmed = window.confirm(`为 ${accountName} 设置 teamData 共享读写权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；本次操作完成后 TaskTrace 仍以普通权限运行。`)
+		if (!confirmed) return
+		try {
+			await teamStore.grantMember(accountName, true)
+		} catch (elevatedCause) {
+			error(elevatedCause)
+			return
+		}
 	}
+	addingMember.value = false
+	success({message: `已为 ${accountName} 设置 teamData 读写权限。`})
 }
 
 async function removeMember(member: string) {

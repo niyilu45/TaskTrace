@@ -899,8 +899,12 @@ onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
  min-inline-size: 0;
  max-inline-size: 100%;
 }
-.task-description { padding: .5rem .8rem;
- }
+.task-description {
+	min-inline-size: 0;
+	max-inline-size: 100%;
+	overflow: hidden;
+	padding: .5rem .8rem;
+}
 .task-own-progress {
  padding-block: .5rem;
  font-size: .8125rem;

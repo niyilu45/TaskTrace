@@ -75,7 +75,24 @@ onBeforeUnmount(() => version++)
 
 <style scoped lang="scss">
 .readonly-rich-text {
+	min-inline-size: 0;
+	max-inline-size: 100%;
 	overflow-wrap: anywhere;
+	word-break: break-word;
+	:deep(a) {
+		overflow-wrap: anywhere;
+		word-break: break-all;
+	}
+	:deep(pre) {
+		max-inline-size: 100%;
+		overflow-x: auto;
+		white-space: pre-wrap;
+	}
+	:deep(table) {
+		display: block;
+		max-inline-size: 100%;
+		overflow-x: auto;
+	}
 	:deep(blockquote[data-tasktrace-reference="1"]) {
 		margin: .65rem 0;
 		padding: .4rem .75rem;
@@ -99,6 +116,7 @@ onBeforeUnmount(() => version++)
 		}
 	}
 	:deep(img) {
+		display: block;
 		max-inline-size: 100%;
 		max-block-size: 24rem;
 		object-fit: contain;

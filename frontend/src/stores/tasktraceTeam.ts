@@ -86,13 +86,20 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return run(() => tasktraceTeamNotificationsRead({body: {ids}}))
 	}
 
-	async function searchMembers(query: string, signal?: AbortSignal): Promise<TaskTraceTeamMemberCandidate[]> {
-		const result = await tasktraceTeamMembersSearch({query: {q: query}, signal})
+	async function searchMembers(query: string, signal?: AbortSignal, quick = false): Promise<TaskTraceTeamMemberCandidate[]> {
+		const result = await tasktraceTeamMembersSearch({
+			query: {q: query},
+			signal,
+			headers: quick ? {'X-TaskTrace-Quick': 'true'} : undefined,
+		})
 		return result.data.candidates ?? []
 	}
 
-	async function grantMember(accountName: string) {
-		return run(() => tasktraceTeamMembersAccessCreate({body: {account_name: accountName}}))
+	async function grantMember(accountName: string, elevate = false) {
+		return run(() => tasktraceTeamMembersAccessCreate({
+			body: {account_name: accountName},
+			headers: elevate ? {'X-TaskTrace-Elevate': 'true'} : undefined,
+		}))
 	}
 
 	async function removeMember(accountName: string) {

@@ -11,10 +11,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
+
+var errTaskTraceTeamAdminRequired = errors.New("设置 teamData 共享读写权限需要 Windows 管理员授权")
 
 const taskTraceTeamSearchScript = `$Keyword=$env:TASKTRACE_TEAM_KEYWORD
 $ErrorActionPreference='Stop'
@@ -27,7 +32,8 @@ function Add-Candidate([string]$Username,[string]$AccountName,[string]$DisplayNa
 }
 try {
   $resolved=([Security.Principal.NTAccount]::new($Keyword)).Translate([Security.Principal.SecurityIdentifier]).Translate([Security.Principal.NTAccount]).Value
-  $short=($resolved -split '\')[-1]
+  $separator=$resolved.LastIndexOf([char]92)
+  $short=if($separator -ge 0){$resolved.Substring($separator+1)}else{$resolved}
   Add-Candidate $short $resolved ''
 } catch {}
 $domainFailure=''
@@ -38,11 +44,15 @@ try {
     }
   }
 } catch {}
+if($env:TASKTRACE_TEAM_QUICK -eq '1'){
+  ConvertTo-Json -InputObject ([object[]]@($result | Sort-Object account_name | Select-Object -First 25)) -Compress
+  exit 0
+}
 try {
   $computer=Get-CimInstance -ClassName Win32_ComputerSystem -Property PartOfDomain -ErrorAction Stop
   if($computer.PartOfDomain) {
     Add-Type -AssemblyName System.DirectoryServices
-    $ldap=$Keyword.Replace('\','\5c').Replace('*','\2a').Replace('(','\28').Replace(')','\29').Replace([string][char]0,'\00')
+    $ldap=$Keyword.Replace([string][char]92,([char]92+'5c')).Replace('*',([char]92+'2a')).Replace('(',([char]92+'28')).Replace(')',([char]92+'29')).Replace([string][char]0,([char]92+'00'))
     $searcher=New-Object DirectoryServices.DirectorySearcher
 	$rootDse=[ADSI]'LDAP://RootDSE'
 	$searcher.SearchRoot=[ADSI]('LDAP://'+[string]$rootDse.defaultNamingContext)
@@ -111,7 +121,9 @@ try {
   if($shareAdded){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue}
   throw
 }
-[ordered]@{account_name=$canonical;username=($canonical -split '\')[-1]} | ConvertTo-Json -Compress`
+$separator=$canonical.LastIndexOf([char]92)
+$username=if($separator -ge 0){$canonical.Substring($separator+1)}else{$canonical}
+[ordered]@{account_name=$canonical;username=$username} | ConvertTo-Json -Compress`
 
 const taskTraceTeamRemoveAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $Member=$env:TASKTRACE_TEAM_MEMBER
@@ -152,8 +164,14 @@ func taskTraceTeamPowerShell(script string, environment ...string) ([]byte, erro
 	return taskTraceTeamPowerShellContext(context.Background(), 30*time.Second, script, environment...)
 }
 
-func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string) ([]TaskTraceTeamMemberCandidate, error) {
-	output, err := taskTraceTeamPowerShellContext(ctx, 25*time.Second, taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query)
+func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string, quick bool) ([]TaskTraceTeamMemberCandidate, error) {
+	timeout := 25 * time.Second
+	quickValue := "0"
+	if quick {
+		timeout = 8 * time.Second
+		quickValue = "1"
+	}
+	output, err := taskTraceTeamPowerShellContext(ctx, timeout, taskTraceTeamSearchScript, "TASKTRACE_TEAM_KEYWORD="+query, "TASKTRACE_TEAM_QUICK="+quickValue)
 	if err != nil {
 		return nil, err
 	}
@@ -184,8 +202,35 @@ func taskTraceTeamListWindowsAccess(root string) ([]string, error) {
 }
 
 func taskTraceTeamGrantWindowsAccess(root, member string) (string, error) {
+	return taskTraceTeamGrantWindowsAccessWithElevation(root, member, false)
+}
+
+func taskTraceTeamAccessNeedsElevation(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"access is denied", "access denied", "拒绝访问", "windows system error 5", "system error 5", "unauthorizedaccessexception", "0x80070005"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsTaskTraceTeamAdminRequired(err error) bool {
+	return errors.Is(err, errTaskTraceTeamAdminRequired)
+}
+
+func taskTraceTeamGrantWindowsAccessWithElevation(root, member string, elevate bool) (string, error) {
+	if elevate {
+		return taskTraceTeamGrantWindowsAccessElevated(root, member)
+	}
 	output, err := taskTraceTeamPowerShell(taskTraceTeamGrantAccessScript, "TASKTRACE_TEAM_ROOT="+root, "TASKTRACE_TEAM_MEMBER="+member)
 	if err != nil {
+		if taskTraceTeamAccessNeedsElevation(err) {
+			return "", fmt.Errorf("%w：Windows 拒绝了共享权限修改（系统错误 5）", errTaskTraceTeamAdminRequired)
+		}
 		return "", err
 	}
 	var value struct {
@@ -195,6 +240,85 @@ func taskTraceTeamGrantWindowsAccess(root, member string) (string, error) {
 		return "", fmt.Errorf("Windows did not return the granted account")
 	}
 	return value.AccountName, nil
+}
+
+func taskTraceTeamGrantElevatedScript() string {
+	return `$ErrorActionPreference='Stop'
+$result=[ordered]@{ok=$false;value='';error=''}
+try {
+  $request=Get-Content -LiteralPath $args[0] -Raw -Encoding UTF8 | ConvertFrom-Json
+  $env:TASKTRACE_TEAM_ROOT=[string]$request.root
+  $env:TASKTRACE_TEAM_MEMBER=[string]$request.member
+  $value=& {
+` + taskTraceTeamGrantAccessScript + `
+  }
+  $result.ok=$true
+  $result.value=[string]$value
+} catch {
+  $result.error=($_ | Out-String).Trim()
+}
+$result | ConvertTo-Json -Compress | Set-Content -LiteralPath $args[1] -Encoding UTF8`
+}
+
+func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error) {
+	tempDir, err := os.MkdirTemp("", "tasktrace-team-access-")
+	if err != nil {
+		return "", fmt.Errorf("创建管理员授权请求失败：%w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	inputPath := filepath.Join(tempDir, "request.json")
+	outputPath := filepath.Join(tempDir, "result.json")
+	scriptPath := filepath.Join(tempDir, "grant-team-access.ps1")
+	payload, _ := json.Marshal(map[string]string{"root": root, "member": member})
+	if err := os.WriteFile(inputPath, payload, 0600); err != nil {
+		return "", fmt.Errorf("写入管理员授权请求失败：%w", err)
+	}
+	wrapper := taskTraceTeamGrantElevatedScript()
+	if err := os.WriteFile(scriptPath, append([]byte{0xef, 0xbb, 0xbf}, []byte(wrapper)...), 0600); err != nil {
+		return "", fmt.Errorf("写入管理员授权脚本失败：%w", err)
+	}
+	verb, file := windows.StringToUTF16Ptr("runas"), windows.StringToUTF16Ptr("powershell.exe")
+	arguments := strings.Join([]string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windows.EscapeArg(scriptPath), windows.EscapeArg(inputPath), windows.EscapeArg(outputPath)}, " ")
+	if err := windows.ShellExecute(0, verb, file, windows.StringToUTF16Ptr(arguments), nil, 0); err != nil {
+		if errors.Is(err, windows.ERROR_CANCELLED) {
+			return "", errors.New("已取消 Windows 管理员授权，未修改 teamData 权限")
+		}
+		return "", fmt.Errorf("启动 Windows 管理员授权失败：%w", err)
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		contents, readErr := os.ReadFile(outputPath)
+		if readErr == nil {
+			var result struct {
+				OK    bool   `json:"ok"`
+				Value string `json:"value"`
+				Error string `json:"error"`
+			}
+			contents = []byte(strings.TrimPrefix(string(contents), "\ufeff"))
+			if err := json.Unmarshal(contents, &result); err != nil {
+				return "", fmt.Errorf("读取管理员授权结果失败：%w", err)
+			}
+			if !result.OK {
+				if result.Error == "" {
+					result.Error = "Windows 未返回权限修改结果"
+				}
+				return "", errors.New(result.Error)
+			}
+			var value struct {
+				AccountName string `json:"account_name"`
+			}
+			if err := json.Unmarshal([]byte(result.Value), &value); err != nil || value.AccountName == "" {
+				return "", errors.New("Windows 未返回已授权的账户")
+			}
+			return value.AccountName, nil
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			return "", fmt.Errorf("读取管理员授权结果失败：%w", readErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return "", errors.New("Windows 管理员授权超时，请重试")
 }
 
 func taskTraceTeamRemoveWindowsAccess(root, member string) error {

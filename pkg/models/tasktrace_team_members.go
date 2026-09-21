@@ -94,12 +94,12 @@ func taskTraceTeamDecodeMembersLink(link string) ([]string, error) {
 	return parsed.Members, nil
 }
 
-func TaskTraceTeamSearchMembers(ctx context.Context, query string) (TaskTraceTeamMemberSearchResult, error) {
+func TaskTraceTeamSearchMembers(ctx context.Context, query string, quick bool) (TaskTraceTeamMemberSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if len([]rune(query)) < 1 {
 		return TaskTraceTeamMemberSearchResult{Candidates: []TaskTraceTeamMemberCandidate{}}, nil
 	}
-	candidates, err := taskTraceTeamSearchWindowsMembers(ctx, query)
+	candidates, err := taskTraceTeamSearchWindowsMembers(ctx, query, quick)
 	if err != nil {
 		return TaskTraceTeamMemberSearchResult{}, err
 	}
@@ -129,7 +129,7 @@ func taskTraceTeamUnassignedMembers(state taskTraceTeamState, candidates []strin
 	return result
 }
 
-func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberAccessRequest) (*TaskTraceTeamStatus, error) {
+func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberAccessRequest, elevate bool) (*TaskTraceTeamStatus, error) {
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)
@@ -139,7 +139,7 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 	if taskTraceTeamMembersEqual(request.AccountName, u.Username) {
 		return nil, errors.New("当前用户已经拥有 teamData 权限")
 	}
-	if _, err := taskTraceTeamGrantWindowsAccess(taskTraceTeamRoot(), request.AccountName); err != nil {
+	if _, err := taskTraceTeamGrantWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, elevate); err != nil {
 		return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", request.AccountName, err)
 	}
 	state, err := taskTraceTeamLoadState()
