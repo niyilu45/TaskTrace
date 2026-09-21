@@ -1,11 +1,12 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 
-import {tasktraceTeamMembersSearch, tasktraceTeamStatus} from '@/client/generated'
+import {tasktraceTeamMembersAccessCreate, tasktraceTeamMembersSearch, tasktraceTeamStatus} from '@/client/generated'
 import {useTasktraceTeamStore} from './tasktraceTeam'
 
 vi.mock('@/client/generated', async (importOriginal) => ({
 	...(await importOriginal<typeof import('@/client/generated')>()),
+	tasktraceTeamMembersAccessCreate: vi.fn(),
 	tasktraceTeamMembersSearch: vi.fn(),
 	tasktraceTeamStatus: vi.fn(),
 }))
@@ -117,5 +118,29 @@ describe('TaskTrace team bindings', () => {
 		expect(store.displayNameFor('654321')).toBe('张三')
 		expect(store.identityTitleFor('654321')).toContain('zhangsan@example.com')
 		expect(vi.mocked(tasktraceTeamMembersSearch).mock.calls.some(([request]) => request?.query?.q === '654321')).toBe(false)
+	})
+
+	it('persists a resolved identity for an existing teamData member', async () => {
+		const unresolvedStatus = {
+			enabled: true,
+			username: 'current',
+			repository: {candidates: ['CHINA\\654321']},
+			bindings: [],
+			profiles: [],
+			conflicts: [],
+			notifications: [],
+		}
+		const resolvedProfile = {username: '654321', account_name: 'CHINA\\654321', display_name: '张三', email: 'zhangsan@example.com'}
+		vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: unresolvedStatus} as unknown as Awaited<ReturnType<typeof tasktraceTeamStatus>>)
+		vi.mocked(tasktraceTeamMembersSearch).mockResolvedValue({data: {candidates: [resolvedProfile]}} as unknown as Awaited<ReturnType<typeof tasktraceTeamMembersSearch>>)
+		vi.mocked(tasktraceTeamMembersAccessCreate).mockResolvedValue({data: {...unresolvedStatus, profiles: [resolvedProfile]}} as unknown as Awaited<ReturnType<typeof tasktraceTeamMembersAccessCreate>>)
+
+		const store = useTasktraceTeamStore()
+		await store.refresh()
+
+		await vi.waitFor(() => expect(tasktraceTeamMembersAccessCreate).toHaveBeenCalledWith(expect.objectContaining({
+			body: expect.objectContaining({account_name: 'CHINA\\654321', display_name: '张三'}),
+		})))
+		expect(store.displayNameFor('654321')).toBe('张三')
 	})
 })

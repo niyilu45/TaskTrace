@@ -155,6 +155,31 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()]
 	}
 
+	function hasKnownTeamDataAccess(member: string) {
+		const key = teamMemberKey(member)
+		if (!key || key === teamMemberKey(status.value.username)) return false
+		return [
+			...(status.value.repository?.candidates ?? []),
+			...(status.value.unassigned_members ?? []),
+			...(status.value.bindings ?? []).flatMap(binding => [binding.owner, ...(binding.members ?? [])]),
+		].some(candidate => teamMemberKey(candidate) === key)
+	}
+
+	function memberAccessOptions(member: TaskTraceTeamMemberCandidate | string, elevate = false) {
+		const candidate = typeof member === 'string' ? memberProfile(member) : member
+		const accountName = candidate.account_name || candidate.username
+		if (!accountName) throw new Error('缺少 Windows 账户名，无法设置 teamData 权限。')
+		return {
+			body: {
+				account_name: accountName,
+				username: candidate.username,
+				display_name: candidate.display_name,
+				email: candidate.email,
+			},
+			headers: elevate ? {'X-TaskTrace-Elevate': true as const} : undefined,
+		}
+	}
+
 	async function hydrateMemberProfiles() {
 		for (const member of memberRoster.value) {
 			const key = teamMemberKey(member)
@@ -162,23 +187,20 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			const hasDirectoryIdentity = Boolean(profile?.email || (profile?.display_name && teamMemberKey(profile.display_name) !== key))
 			if (!key || hydratingProfiles.has(key) || hasDirectoryIdentity) continue
 			hydratingProfiles.add(key)
-			void searchMembers(key).catch(() => undefined).finally(() => hydratingProfiles.delete(key))
+			void searchMembers(key)
+				.then(async candidates => {
+					const candidate = candidates.find(item => teamMemberKey(item.account_name || item.username || item.email) === key)
+					if (!candidate || !hasKnownTeamDataAccess(member)) return
+					const result = await tasktraceTeamMembersAccessCreate(memberAccessOptions(candidate))
+					apply(result.data)
+				})
+				.catch(() => undefined)
+				.finally(() => hydratingProfiles.delete(key))
 		}
 	}
 
 	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false) {
-		const candidate = typeof member === 'string' ? memberProfile(member) : member
-		const accountName = candidate.account_name || candidate.username
-		if (!accountName) throw new Error('缺少 Windows 账户名，无法设置 teamData 权限。')
-		return run(() => tasktraceTeamMembersAccessCreate({
-			body: {
-				account_name: accountName,
-				username: candidate.username,
-				display_name: candidate.display_name,
-				email: candidate.email,
-			},
-			headers: elevate ? {'X-TaskTrace-Elevate': true} : undefined,
-		}))
+		return run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(member, elevate)))
 	}
 
 	async function removeMember(accountName: string, elevate = false) {
