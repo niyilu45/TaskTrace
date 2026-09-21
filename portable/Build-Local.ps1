@@ -51,14 +51,24 @@ try {
         $env:CGO_ENABLED = '1'
         $env:CC = 'gcc'
         $ldflags = '-s -w -linkmode external -extldflags "-static" -X code.vikunja.io/api/pkg/version.Version=' + $Version
-        & go build -tags 'osusergo,timetzdata' -ldflags $ldflags -o (Join-Path $packageRoot 'TaskTrace-server.exe') .
+        $serverBinary = Join-Path $packageRoot 'TaskTrace-server.exe'
+        $strippedServerBinary = Join-Path $packageRoot '.TaskTrace-server.stripped.exe'
+        & go build -tags 'osusergo,timetzdata' -ldflags $ldflags -o $serverBinary .
         Assert-Exit 'Windows server build'
         # Older MinGW versions leave Go's external-link sections in a layout
         # which Windows may reject with error 193. Binutils strip rewrites the
         # PE section table while retaining the statically linked SQLite code.
-        & strip --strip-all (Join-Path $packageRoot 'TaskTrace-server.exe')
-        Assert-Exit 'Windows server PE cleanup'
-        & (Join-Path $packageRoot 'TaskTrace-server.exe') version | Out-Null
+        # Write a separate output first because some MinGW builds cannot rename
+        # their temporary file over an existing executable on Windows.
+        try {
+            Remove-Item -LiteralPath $strippedServerBinary -Force -ErrorAction SilentlyContinue
+            & strip --strip-all -o $strippedServerBinary $serverBinary
+            Assert-Exit 'Windows server PE cleanup'
+            Copy-Item -LiteralPath $strippedServerBinary -Destination $serverBinary -Force
+        } finally {
+            Remove-Item -LiteralPath $strippedServerBinary -Force -ErrorAction SilentlyContinue
+        }
+        & $serverBinary version | Out-Null
         Assert-Exit 'Windows server executable check'
     } finally { $env:CGO_ENABLED = $oldCGO; $env:CC = $oldCC }
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
