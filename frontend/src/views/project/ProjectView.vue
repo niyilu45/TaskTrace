@@ -42,29 +42,19 @@ const currentView = computed(() => {
 
 const projectService = shallowReactive(new ProjectService())
 const isLoadingProject = computed(() => projectService.loading)
-const loadedProjectId = ref(0)
 
 watch(
 	() => props.projectId,
 	// loadProject
-	async (projectIdToLoad, oldProjectIdToLoad) => {
+	async (projectIdToLoad) => {
 
-		console.debug('Loading project, $route.params =', route.params, `, loadedProjectId = ${loadedProjectId.value}, currentProject = `, currentProject.value)
+		console.debug('Loading project, $route.params =', route.params, ', currentProject = ', currentProject.value)
 
+		const loadedProject = await projectService.get({id: projectIdToLoad})
 
-		if (projectIdToLoad !== oldProjectIdToLoad) {
-			loadedProjectId.value = 0
-		}
-
-		try {
-			const loadedProject = await projectService.get({id: projectIdToLoad})
-
-			// Here, we only set the new project in the projectStore.
-			// Setting that projet as the current one in the baseStore is handled by the watcher below.
-			projectStore.setProject(loadedProject)
-		} finally {
-			loadedProjectId.value = projectIdToLoad
-		}
+		// Here, we only set the new project in the projectStore.
+		// Setting that projet as the current one in the baseStore is handled by the watcher below.
+		projectStore.setProject(loadedProject)
 	},
 	{immediate: true},
 )
@@ -162,7 +152,7 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 		</div>
 	</div>
 	<ProjectProgressOverview
-		v-if="!editing && !isLoadingProject && loadedProjectId === projectId"
+		v-if="!editing"
 		:key="projectId"
 		:project-id="projectId"
 	/>

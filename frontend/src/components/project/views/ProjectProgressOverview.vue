@@ -346,6 +346,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {useAuthStore} from '@/stores/auth'
 import Icon from '@/components/misc/Icon'
 import {captureTasktraceScrollAnchor, tasktraceScrollAnchorDelta, type TasktraceScrollAnchor} from '@/helpers/tasktraceScrollAnchor'
+import {readProjectProgressCache, writeProjectProgressCache} from '@/helpers/projectProgressCache'
 const props = defineProps<{projectId: number}>()
 const route = useRoute()
 const router = useRouter()
@@ -611,27 +612,27 @@ async function restoreViewAnchor(anchor: TasktraceScrollAnchor | null) {
 async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null} = {}) {
 	const viewAnchor = options.preserveView ? options.anchor ?? captureViewAnchor() : null
 	const version = ++requestId
-	if (isLocalBuild) {
-		try { await teamStore.refresh() } catch { /* The task list remains usable while a LAN repository is offline. */ }
-		if (version !== requestId) return
-	}
+	const projectId = props.projectId
 	progressActivityRequestId++
 	progressActivityLoading.value = false
 	loading.value = true; error.value = ''
 	if (!options.preserveView) {
-		tasks.value = []
+		tasks.value = readProjectProgressCache(projectId)
 		page.value = 1
 	}
+	if (isLocalBuild) void teamStore.refresh().catch(() => { /* The task list remains usable while a LAN repository is offline. */ })
 	try {
 		const collected: ProgressTask[] = []
 		for (let next = 1; ; next++) {
-			const result = await projectTasksList({path: {project: props.projectId}, query: {page: next, per_page: 100, sort_by: ['id'], order_by: ['asc'], expand: ['comment_count']}})
+			const result = await projectTasksList({path: {project: projectId}, query: {page: next, per_page: 100, sort_by: ['id'], order_by: ['asc'], expand: ['comment_count']}})
 			if (version !== requestId) return
 			const items = (result.data.items || []).filter((task): task is ProgressTask => typeof task.id === 'number')
 			collected.push(...items)
+			tasks.value = [...new Map(collected.map(task => [task.id, task])).values()]
+			revision.value++
 			if (next >= (result.data.total_pages || 1) || items.length === 0) break
 		}
-		tasks.value = [...new Map(collected.map(task => [task.id, task])).values()]; revision.value++
+		writeProjectProgressCache(projectId, tasks.value)
 		progressActivityRequestId++
 		progressActivityReady.value = false
 		latestProgressDates.value = {}
