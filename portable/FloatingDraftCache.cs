@@ -19,4 +19,10 @@ internal sealed partial class FloatingWindow {
     }
     bool HasDraftCache(string kind,long taskId,string key) {return File.Exists(DraftCachePath(kind,taskId,key));}
     void DeleteDraftCache(string kind,long taskId,string key) {try{string path=DraftCachePath(kind,taskId,key);if(File.Exists(path))File.Delete(path);}catch{}}
+    void DeleteDraftCaches(string kind,long taskId) {
+        try {
+            string directory=Path.GetDirectoryName(DraftCachePath(kind,taskId,"all"));
+            if(Directory.Exists(directory))Directory.Delete(directory,true);
+        } catch {}
+    }
 }

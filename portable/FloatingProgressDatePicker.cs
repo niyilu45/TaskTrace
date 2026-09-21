@@ -42,6 +42,7 @@ internal sealed class ProgressDatePicker : UserControl {
         }
     }
     internal int VisibleMarkedDatesForTest(){using(var popup=new ProgressCalendarPopup(value,marked))return popup.VisibleMarkedDates;}
+    internal bool CalendarHasTodayButtonForTest(){using(var popup=new ProgressCalendarPopup(value,marked))return popup.HasTodayButtonForTest();}
     internal void OpenCalendarForTest(){OpenCalendar();Application.DoEvents();}
     internal bool CalendarVisibleForTest(){return popup!=null && !popup.IsDisposed && popup.Visible;}
     internal void SimulateCalendarOutsideClickForTest(){if(popup!=null && !popup.IsDisposed){popup.SimulateDeactivateForTest();Application.DoEvents();}}
@@ -52,6 +53,7 @@ internal sealed class ProgressCalendarPopup : Form {
     readonly Label heading=new Label {Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font(SystemFonts.MessageBoxFont,FontStyle.Bold)};
     readonly DateTime selected;
     readonly HashSet<DateTime> marked;
+    readonly Button today=new Button {Text="回到今天",Dock=DockStyle.Fill,AccessibleName="回到今天"};
     DateTime month;
     internal event Action<DateTime> DatePicked;
     internal int VisibleMarkedDates {get;private set;}
@@ -61,13 +63,14 @@ internal sealed class ProgressCalendarPopup : Form {
         this.selected=selected.Date;marked=new HashSet<DateTime>((markedDates??Enumerable.Empty<DateTime>()).Select(date=>date.Date));month=new DateTime(selected.Year,selected.Month,1);
         AutoScaleDimensions=new SizeF(96F,96F);AutoScaleMode=AutoScaleMode.Dpi;FormBorderStyle=FormBorderStyle.FixedSingle;ControlBox=false;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Size=new Size(318,300);MinimumSize=MaximumSize=Size;KeyPreview=true;Font=SystemFonts.MessageBoxFont;
         var previous=new Button {Text="上月",Dock=DockStyle.Fill,AccessibleName="上一个月"};var next=new Button {Text="下月",Dock=DockStyle.Fill,AccessibleName="下一个月"};
-        var header=new TableLayoutPanel {Dock=DockStyle.Top,Height=42,ColumnCount=3,Padding=new Padding(8,6,8,0)};header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,62));header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,62));
-        header.Controls.Add(previous,0,0);header.Controls.Add(heading,1,0);header.Controls.Add(next,2,0);Controls.Add(grid);Controls.Add(header);
+        var header=new TableLayoutPanel {Dock=DockStyle.Top,Height=42,ColumnCount=4,Padding=new Padding(8,6,8,0)};header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,55));header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,74));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,55));
+        header.Controls.Add(previous,0,0);header.Controls.Add(heading,1,0);header.Controls.Add(today,2,0);header.Controls.Add(next,3,0);Controls.Add(grid);Controls.Add(header);
         for(int column=0;column<7;column++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/7));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute,25));for(int row=1;row<7;row++)grid.RowStyles.Add(new RowStyle(SizeType.Percent,100f/6));
-        previous.Click+=delegate{month=month.AddMonths(-1);RenderMonth();};next.Click+=delegate{month=month.AddMonths(1);RenderMonth();};
+        previous.Click+=delegate{month=month.AddMonths(-1);RenderMonth();};today.Click+=delegate{if(DatePicked!=null)DatePicked(DateTime.Today);};next.Click+=delegate{month=month.AddMonths(1);RenderMonth();};
         KeyDown+=delegate(object sender,KeyEventArgs e){if(e.KeyCode==Keys.Escape){e.Handled=true;Close();}};RenderMonth();
     }
+    internal bool HasTodayButtonForTest(){return !today.IsDisposed && today.Text=="回到今天";}
     void RenderMonth() {
         grid.SuspendLayout();grid.Controls.Clear();VisibleMarkedDates=0;heading.Text=month.ToString("yyyy 年 M 月");
         string[] weekdays={"一","二","三","四","五","六","日"};for(int column=0;column<7;column++)grid.Controls.Add(new Label {Text=weekdays[column],Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=SystemColors.GrayText},column,0);

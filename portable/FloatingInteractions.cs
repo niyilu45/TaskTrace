@@ -399,7 +399,11 @@ internal sealed partial class FloatingWindow {
                 Func<string> draftKey=delegate{return editingId??"new";};
                 Func<string> draftSnapshot=delegate{return json.Serialize(new{text=input.Text,priority=priority.SelectedIndex,pictures=pictures.Count,remove=removeExistingImages,draft=draftId});};
                 Action cacheOutstanding=delegate{if(!dirty())return;string current=draftSnapshot();if(current==lastCached)return;WriteDraftCache("outstanding",id,draftKey(),new OutstandingDraftCache{Text=input.Text,DraftId=draftId,Priority=priority.SelectedIndex,RemoveExistingImages=removeExistingImages,Pictures=new List<PastedImage>(pictures)});lastCached=current;feedback.Text="草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。";};
-                Func<bool> mayDiscard=delegate{if(!dirty())return true;if(autoSaveEnabled){try{cacheOutstanding();return true;}catch{}}return MessageBox.Show(dialog,"当前输入尚未保存，是否放弃？","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)==DialogResult.Yes;};
+                Func<bool> mayDiscard=delegate{
+                    if(!dirty()){DeleteDraftCache("outstanding",id,draftKey());return true;}
+                    if(MessageBox.Show(dialog,"当前修改尚未保存，是否放弃？\r\n\r\n放弃后再次打开会显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return false;
+                    DeleteDraftCache("outstanding",id,draftKey());return true;
+                };
                 Action<PendingItem> edit=delegate(PendingItem item){loading=true;editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;reminder.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){input.Text=cached.Text??"";draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=Math.Max(0,Math.Min(9,cached.Priority));pictures=cached.Pictures??new List<PastedImage>();removeExistingImages=cached.RemoveExistingImages;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}else lastCached="";renderPreviews();loading=false;};
                 list.SelectedIndexChanged+=delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}edit(selected);};
                 if(!String.IsNullOrEmpty(selectedItemId)){var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(selected!=null)list.SelectedItem=selected;}
@@ -410,9 +414,9 @@ internal sealed partial class FloatingWindow {
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
                 gallery.Click+=async delegate{await ShowImageGallery(id,editingId==null?null:originalHtml,dialog);};
                 reminder.Click+=async delegate{if(writing||editingId==null)return;if(dirty()){feedback.Text="请先保存当前内容，再设置提醒。";return;}string selectedId=editingId;reminder.Enabled=false;try{if(await ShowReminderEditor(id,selectedId,dialog)){shared=ReadShared(await ReadHistory(id));render();var selected=shared.Items.FirstOrDefault(item=>item.Id==selectedId);if(selected!=null){list.SelectedItem=selected;edit(selected);}feedback.Text="提醒已保存，并已同步到网页模式。";}}catch(Exception e){feedback.Text="提醒未保存："+e.Message;}finally{if(!dialog.IsDisposed)reminder.Enabled=editingId!=null;}};
-                Func<bool,Task> write=async delegate(bool deleting){
-                    if(writing)return;if(deleting && editingId==null)return;
-                    if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return;}
+                Func<bool,Task<bool>> write=async delegate(bool deleting){
+                    if(writing)return false;if(deleting && editingId==null)return false;
+                    if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return false;}
                     writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;priority.Enabled=false;
                     string savedDraftKey=draftKey();try{
                         string uploaded=deleting?"":await UploadOutstandingPictures(id,pictures);
@@ -425,8 +429,8 @@ internal sealed partial class FloatingWindow {
                             if(removeExistingImages)body=Regex.Replace(body,@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
                             if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded,Priority=priority.SelectedIndex});else{existing.Html=body+uploaded;existing.Priority=priority.SelectedIndex;}
                         }
-                        await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();
-                    }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;}
+                        await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;
+                    }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;return false;}
                     finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;priority.Enabled=true;}
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
@@ -436,7 +440,7 @@ internal sealed partial class FloatingWindow {
                     if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}renderPreviews();feedback.Text="已粘贴图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
-                var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
+                var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && !writing && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
                     try{
@@ -455,7 +459,18 @@ internal sealed partial class FloatingWindow {
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
-                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing || (!editParentRequested && !verify && !mayDiscard()))e.Cancel=true;};
+                bool closeAfterSave=false;
+                dialog.FormClosing+=async delegate(object sender,FormClosingEventArgs e){
+                    if(closeAfterSave || editParentRequested || verify)return;
+                    if(writing){e.Cancel=true;return;}
+                    if(!dirty()){DeleteDraftCache("outstanding",id,draftKey());return;}
+                    var choice=MessageBox.Show(dialog,"当前遗留事项尚未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
+                    if(choice==DialogResult.Cancel){e.Cancel=true;return;}
+                    if(choice==DialogResult.No){DeleteDraftCaches("outstanding",id);return;}
+                    e.Cancel=true;autoTimer.Stop();
+                    if(await write(false)){DeleteDraftCaches("outstanding",id);closeAfterSave=true;dialog.Close();}
+                    else {feedback.Text="遗留事项未能保存，窗口已保留，请检查后重试。";autoTimer.Start();}
+                };
                 try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
