@@ -63,13 +63,62 @@ internal sealed partial class FloatingWindow {
         return EdgeDock.Bottom;
     }
 
+    Rectangle AlignBoundsToEdge(Rectangle bounds, Rectangle area, EdgeDock edge) {
+        if(edge == EdgeDock.Left)bounds.X = area.Left;
+        else if(edge == EdgeDock.Right)bounds.X = area.Right - bounds.Width;
+        else if(edge == EdgeDock.Top)bounds.Y = area.Top;
+        else if(edge == EdgeDock.Bottom)bounds.Y = area.Bottom - bounds.Height;
+        if(edge == EdgeDock.Left || edge == EdgeDock.Right)
+            bounds.Y = Math.Max(area.Top, Math.Min(bounds.Y, area.Bottom - bounds.Height));
+        else if(edge == EdgeDock.Top || edge == EdgeDock.Bottom)
+            bounds.X = Math.Max(area.Left, Math.Min(bounds.X, area.Right - bounds.Width));
+        return bounds;
+    }
+
+    void SyncFullBoundsToSimpleEdge(Rectangle simpleBounds, Rectangle area, EdgeDock edge) {
+        if(!simpleMode || fullBounds.IsEmpty)return;
+        var bounds = fullBounds;
+        if(edge == EdgeDock.Left || edge == EdgeDock.Right)bounds.Y = simpleBounds.Y;
+        else if(edge == EdgeDock.Top || edge == EdgeDock.Bottom)bounds.X = simpleBounds.X;
+        else bounds.Location = simpleBounds.Location;
+        fullBounds = edge == EdgeDock.None ? bounds : AlignBoundsToEdge(bounds, area, edge);
+    }
+
+    void ArmEdgeHideAfterLayoutChange(EdgeDock preferredEdge, Rectangle preferredArea) {
+        if(!edgeHideEnabled || edgeSizing || closing || IsDisposed || !Visible || WindowState != FormWindowState.Normal)return;
+        var area = preferredArea.IsEmpty ? Screen.FromRectangle(Bounds).WorkingArea : preferredArea;
+        var bounds = Bounds;
+        if(preferredEdge != EdgeDock.None) {
+            bounds = AlignBoundsToEdge(bounds, area, preferredEdge);
+            if(Bounds != bounds)Bounds = bounds;
+        }
+        var edge = preferredEdge == EdgeDock.None ? TouchedEdge(bounds, area) : preferredEdge;
+        if(edge == EdgeDock.None) {
+            edgeDock = EdgeDock.None;
+            edgePointerLeftUtc = DateTime.MinValue;
+            return;
+        }
+        SyncFullBoundsToSimpleEdge(bounds, area, edge);
+        edgeRestoreBounds = bounds;
+        edgeWorkingArea = area;
+        edgeDock = edge;
+        edgeHidden = false;
+        edgePointerLeftUtc = Bounds.Contains(Cursor.Position) ? DateTime.MinValue : DateTime.UtcNow;
+        edgeHideTimer.Start();
+    }
+
+    void RearmEdgeHideAfterLayoutChange(EdgeDock preferredEdge, Rectangle preferredArea) {
+        if(!edgeHideEnabled || closing || IsDisposed)return;
+        BeginInvoke(new Action(delegate { ArmEdgeHideAfterLayoutChange(preferredEdge, preferredArea); }));
+    }
+
     void TryHideAtTouchedEdge() {
         if(!edgeHideEnabled || edgeSizing || edgeHidden || closing || IsDisposed || !Visible || WindowState != FormWindowState.Normal)return;
         var bounds = Bounds;
         var area = Screen.FromRectangle(bounds).WorkingArea;
         var edge = TouchedEdge(bounds, area);
         if(edge == EdgeDock.None) { edgeDock = EdgeDock.None; edgePointerLeftUtc = DateTime.MinValue; return; }
-        if(simpleMode)fullBounds.Location = bounds.Location;
+        SyncFullBoundsToSimpleEdge(bounds, area, edge);
         edgeRestoreBounds = bounds;
         edgeWorkingArea = area;
         edgeDock = edge;
@@ -156,6 +205,11 @@ internal sealed partial class FloatingWindow {
             Cursor.Position = new Point(trigger.Left + trigger.Width / 2, trigger.Top + trigger.Height / 2);
             PollEdgeHide();
             if(edgeHidden || Bounds != edgeRestoreBounds)throw new Exception("Edge hover restore did not recover the original bounds");
+            Bounds = new Rectangle(area.Right - Width, Bounds.Top, Width, Height);
+            var preferredEdge = TouchedEdge(Bounds, area);
+            Bounds = new Rectangle(Bounds.Left, Bounds.Top, Math.Max(160, Width / 2), Height);
+            ArmEdgeHideAfterLayoutChange(preferredEdge, area);
+            if(edgeHidden || edgeDock != EdgeDock.Right || Bounds.Right != area.Right)throw new Exception("Edge hide was not re-armed after a layout size change");
             ResetFloatingWindowPosition();
             var centered = Bounds;
             if(Math.Abs((centered.Left + centered.Width / 2) - (area.Left + area.Width / 2)) > 1 || Math.Abs((centered.Top + centered.Height / 2) - (area.Top + area.Height / 2)) > 1)throw new Exception("Reset window position did not center the floating window");
