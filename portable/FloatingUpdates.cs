@@ -20,6 +20,22 @@ internal sealed partial class FloatingWindow {
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 2000 };
     bool updateBusy;
     DateTime lastAutomaticUpdateCheck = DateTime.MinValue;
+    readonly List<UnsavedUpdateEditor> unsavedUpdateEditors = new List<UnsavedUpdateEditor>();
+
+    sealed class UnsavedUpdateEditor {
+        internal string Label;
+        internal Func<bool> IsDirty;
+        internal Func<Task<bool>> Save;
+        internal Action Discard;
+    }
+    sealed class UnsavedUpdateRegistration : IDisposable {
+        FloatingWindow owner;UnsavedUpdateEditor editor;
+        internal UnsavedUpdateRegistration(FloatingWindow owner,UnsavedUpdateEditor editor){this.owner=owner;this.editor=editor;}
+        public void Dispose(){if(owner!=null){owner.unsavedUpdateEditors.Remove(editor);owner=null;editor=null;}}
+    }
+    IDisposable RegisterUnsavedUpdateEditor(string label,Func<bool> dirty,Func<Task<bool>> save,Action discard) {
+        var editor=new UnsavedUpdateEditor{Label=label,IsDirty=dirty,Save=save,Discard=discard};unsavedUpdateEditors.Add(editor);return new UnsavedUpdateRegistration(this,editor);
+    }
 
     static HttpClient CreateUpdateHttpClient() {
         // This executable is compiled with the in-box .NET Framework compiler. On
@@ -162,7 +178,6 @@ internal sealed partial class FloatingWindow {
             IgnoreUpdateVersion(version);
             return;
         }
-        if(MessageBox.Show("更新需要关闭正在运行的 TaskTrace。\r\n\r\n是否关闭程序并继续更新？", "TaskTrace · 准备更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         updateBusy = false;
         await DownloadAndStartUpdate(version);
     }
@@ -183,8 +198,38 @@ internal sealed partial class FloatingWindow {
         }
     }
 
+    async Task<List<Action>> PrepareUnsavedContentForUpdate() {
+        var dirty=new List<UnsavedUpdateEditor>();
+        foreach(var editor in unsavedUpdateEditors.ToArray())try{if(editor.IsDirty())dirty.Add(editor);}catch{dirty.Add(editor);}
+        if(dirty.Count==0)return new List<Action>();
+        DialogResult choice=ShowUnsavedUpdateDialog(dirty.Select(editor=>editor.Label).Distinct().ToList());
+        if(choice==DialogResult.Cancel)return null;
+        if(choice==DialogResult.Ignore)return dirty.Where(editor=>editor.Discard!=null).Select(editor=>editor.Discard).ToList();
+        for(int index=dirty.Count-1;index>=0;index--) {
+            bool saved=false;try{saved=await dirty[index].Save();}catch{}
+            if(!saved){MessageBox.Show("“"+dirty[index].Label+"”未能保存。更新已取消，编辑窗口和草稿均已保留，请检查内容后重试。","TaskTrace · 未保存内容",MessageBoxButtons.OK,MessageBoxIcon.Warning);return null;}
+        }
+        return new List<Action>();
+    }
+
+    DialogResult ShowUnsavedUpdateDialog(List<string> labels) {
+        using(var dialog=DpiDialog(new Form{Text="TaskTrace · 更新前检查",Size=new System.Drawing.Size(590,310),MinimumSize=new System.Drawing.Size(500,280),Font=Font,Icon=Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true})) {
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(16),ColumnCount=1,RowCount=3};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,66));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
+            var heading=new Label{Dock=DockStyle.Fill,Text="检测到尚未保存的内容。请选择如何继续更新：",Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold),TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
+            var details=new TextBox{Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text=String.Join("\r\n",labels.Select(label=>"• "+label)),AccessibleName="尚未保存的内容"};
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
+            var save=new Button{Text="保存后更新",AutoSize=true,DialogResult=DialogResult.Yes};var cancel=new Button{Text="取消更新",AutoSize=true,DialogResult=DialogResult.Cancel};var force=new Button{Text="强制更新",AutoSize=true,DialogResult=DialogResult.Ignore};
+            actions.Controls.Add(save);actions.Controls.Add(cancel);actions.Controls.Add(force);layout.Controls.Add(heading);layout.Controls.Add(details);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=save;dialog.CancelButton=cancel;
+            return dialog.ShowDialog(Form.ActiveForm??this);
+        }
+    }
+
     async Task DownloadAndStartUpdate(string version) {
         if(updateBusy) return;
+        var discardAfterVerification=await PrepareUnsavedContentForUpdate();
+        if(discardAfterVerification==null)return;
+        if(MessageBox.Show(Form.ActiveForm??this,"更新需要关闭正在运行的 TaskTrace。\r\n\r\n是否关闭程序并继续更新？", "TaskTrace · 准备更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         updateBusy = true;
         await Task.Yield();
         string temporaryArchive = "";
@@ -221,6 +266,7 @@ internal sealed partial class FloatingWindow {
                     return;
                 }
             }
+            foreach(var discard in discardAfterVerification)try{discard();}catch{}
             File.WriteAllText(Path.Combine(data, "update-ready.json"), json.Serialize(new Dictionary<string,object> {{"version",version},{"archive",archive},{"install_root",root}}), new UTF8Encoding(false));
             state["status"] = "ready"; WriteUpdateState(state);
             Environment.ExitCode = 10; allowExit = true; Close();

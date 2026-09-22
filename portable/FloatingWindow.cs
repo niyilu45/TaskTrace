@@ -556,11 +556,11 @@ internal sealed partial class FloatingWindow : Form {
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false;
+                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,updateDiscarded=false;
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
                 Action renderImages=delegate { };
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=Plain(progress.Html),images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
-                Func<bool> descriptionDirty=delegate{return descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
+                Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
                     if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
@@ -575,7 +575,7 @@ internal sealed partial class FloatingWindow : Form {
                 descriptionToggle.Click+=delegate{if(!descriptionSaving)setDescriptionExpanded(!descriptionExpanded);};
                 saveDescription.Click+=async delegate{await writeDescription();};
                 cancelDescription.Click+=async delegate{if(descriptionSaving)return;descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);savedDescriptionVersion=descriptionEditor.ChangeVersion;setDescriptionExpanded(false);feedback.Text="任务描述修改已取消。";};
-                Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Html=progress.Html,References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
+                Action stash=delegate {if(updateDiscarded || selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Html=progress.Html,References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action cacheSelectedDay=delegate {
                     if(selectedDay=="")return;stash();ProgressDraft cached;
                     if(drafts.TryGetValue(selectedDay,out cached)){string current=snapshot();if(current!=lastCached){WriteDraftCache("progress",id,selectedDay,cached);lastCached=current;}feedback.Text="草稿已自动缓存到 .cache，内容尚未保存；点击保存后才会正式提交。";}
@@ -755,6 +755,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(descriptionSaved && await saveAllDrafts()){closeAfterSave=true;dialog.Close();}
                     else {feedback.Text="任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
+                using(var updateRegistration=RegisterUnsavedUpdateEditor("任务描述或每日进展编辑窗口",delegate{stash();return drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving)return false;stash();bool descriptionSaved=!descriptionDirty() || await writeDescription();return descriptionSaved && await saveAllDrafts();},delegate{updateDiscarded=true;drafts.Clear();DeleteDraftCaches("progress",id);lastSaved=snapshot();savedDescriptionVersion=descriptionEditor.ChangeVersion;autoTimer.Stop();}))
                 try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
@@ -1182,6 +1183,7 @@ internal sealed partial class FloatingWindow : Form {
             sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
             string expectedOutstandingPath=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
             if(sharedLeaf.Parent!=null || tasks.AncestorTaskText(sharedLeaf)!=expectedOutstandingPath)throw new Exception("Single-line outstanding path layout failed");
+            for(int flatIndex=0;flatIndex<tasks.Nodes.Count;flatIndex++)if(!Regex.IsMatch(tasks.CurrentTaskText(tasks.Nodes[flatIndex]),"^"+(flatIndex+1)+@"\.\s"))throw new Exception("Single-line items retained hierarchical sequence numbers: "+tasks.Nodes[flatIndex].Text);
             taskSurface.Rebuild(true);var grandchildCheck=taskSurface.CheckBounds(flatGrandchild);
             if(grandchildCheck.IsEmpty || flatGrandchild.StateImageIndex!=0)throw new Exception("Single-line task completion box is not visible");
             SaveBounds();var singleLineSettings=ReadObject(File.ReadAllText(Path.Combine(data,"floating-window.json")));if(!Convert.ToBoolean(singleLineSettings["singleLine"]))throw new Exception("Single-line preference was not persisted");
