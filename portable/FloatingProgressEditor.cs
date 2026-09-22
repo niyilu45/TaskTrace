@@ -129,6 +129,12 @@ internal sealed class ProgressHtmlEditor : UserControl {
         if(!ready || browser.Document==null)return false;
         try{return Convert.ToBoolean(browser.Document.InvokeScript("taskTraceTestOpenFirstImage"));}catch{return false;}
     }
+
+    internal bool SimulateUserHtmlForTest(string value) {
+        if(!ready || browser.Document==null)return false;
+        var editor=browser.Document.GetElementById("progress-editor");if(editor==null)return false;
+        editor.InnerHtml=value??"";NotifyChanged();return true;
+    }
 }
 
 internal sealed partial class FloatingWindow {
@@ -147,19 +153,31 @@ internal sealed partial class FloatingWindow {
         return ShowImagePreview(galleryImage,owner);
     }
 
-    async Task<string> PrepareProgressEditorHtml(long taskId,string html) {
-        string safe=ProgressSnapshotHtml(html??"",taskId);var output=new StringBuilder();int cursor=0;
+    static string TaskDescriptionEditorHtml(string html) {
+        string safe=html??"";
+        safe=Regex.Replace(safe,@"<(script|style|iframe|object|embed|svg|math|template|noscript|textarea|select|button|form)\b[^>]*>.*?</\1\s*>","",RegexOptions.IgnoreCase|RegexOptions.Singleline);
+        safe=Regex.Replace(safe,@"</?(?:script|style|iframe|object|embed|svg|math|template|noscript|textarea|select|button|form|input)\b[^>]*>","",RegexOptions.IgnoreCase|RegexOptions.Singleline);
+        safe=Regex.Replace(safe,@"\s+(?:on[a-z0-9_-]+|style)\s*=\s*(?:""[^""]*""|'[^']*'|[^\s>]+)","",RegexOptions.IgnoreCase);
+        safe=Regex.Replace(safe,@"\s+(href|src)\s*=\s*([""'])\s*javascript:[\s\S]*?\2","",RegexOptions.IgnoreCase);
+        return safe;
+    }
+
+    async Task<string> PrepareInlineEditorHtml(long taskId,string html,bool description) {
+        string safe=description?TaskDescriptionEditorHtml(html):ProgressSnapshotHtml(html??"",taskId);var output=new StringBuilder();int cursor=0;
         foreach(Match image in Regex.Matches(safe,@"<img\b[^>]*>",RegexOptions.IgnoreCase)) {
             output.Append(safe.Substring(cursor,image.Index-cursor));cursor=image.Index+image.Length;
             string source=ReferenceAttribute(image.Value,"data-src")??ReferenceAttribute(image.Value,"src")??"";
-            if(!Regex.IsMatch(source,@"^/api/v[12]/tasks/"+taskId+@"/attachments/[1-9][0-9]*$"))continue;
+            string retained=AttachmentPath(source);if(retained==null || !Regex.IsMatch(retained,@"^/api/v2/tasks/"+taskId+@"/attachments/[1-9][0-9]*$"))continue;
             try {
-                byte[] bytes=await DownloadImage(source);
-                output.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(bytes)).Append("\" data-tasktrace-src=\"").Append(WebUtility.HtmlEncode(source.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"进展图片\">");
+                byte[] bytes=await DownloadImage(retained);
+                output.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(bytes)).Append("\" data-tasktrace-src=\"").Append(WebUtility.HtmlEncode(retained.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"").Append(description?"任务描述图片":"进展图片").Append("\">");
             } catch { output.Append("<p>图片加载失败，请保存其他内容后重试。</p>"); }
         }
         output.Append(safe.Substring(cursor));return output.ToString();
     }
+
+    Task<string> PrepareProgressEditorHtml(long taskId,string html) {return PrepareInlineEditorHtml(taskId,html,false);}
+    Task<string> PrepareTaskDescriptionEditorHtml(long taskId,string html) {return PrepareInlineEditorHtml(taskId,html,true);}
 
     async Task<long> UploadProgressEditorImage(long taskId,byte[] bytes,string extension) {
         await Api("GET","/tasks/"+taskId,null);
@@ -178,24 +196,27 @@ internal sealed partial class FloatingWindow {
         throw new Exception("进展图片上传失败，请重试。");
     }
 
-    async Task<string> PersistProgressEditorImages(long taskId,string html) {
+    async Task<string> PersistInlineEditorImages(long taskId,string html,bool description) {
         var output=new StringBuilder();int cursor=0;
         foreach(Match image in Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase)) {
             output.Append((html??"").Substring(cursor,image.Index-cursor));cursor=image.Index+image.Length;
             string retained=ReferenceAttribute(image.Value,"data-tasktrace-src")??"";
             if(Regex.IsMatch(retained,@"^/api/v[12]/tasks/"+taskId+@"/attachments/[1-9][0-9]*$")) {
-                output.Append("<img src=\"").Append(WebUtility.HtmlEncode(retained.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"进展图片\">");continue;
+                output.Append("<img src=\"").Append(WebUtility.HtmlEncode(retained.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"").Append(description?"任务描述图片":"进展图片").Append("\">");continue;
             }
             string source=ReferenceAttribute(image.Value,"src")??"";
             var dataImage=Regex.Match(source,@"^data:image/(?<type>png|jpe?g|gif|bmp);base64,(?<data>[A-Za-z0-9+/=\s]+)$",RegexOptions.IgnoreCase);
             if(dataImage.Success) {
                 string extension=dataImage.Groups["type"].Value.ToLowerInvariant();if(extension=="jpeg")extension="jpg";
                 long attachmentId=await UploadProgressEditorImage(taskId,Convert.FromBase64String(Regex.Replace(dataImage.Groups["data"].Value,@"\s","")),extension);
-                output.Append("<img src=\"/api/v1/tasks/").Append(taskId).Append("/attachments/").Append(attachmentId).Append("\" alt=\"进展图片\">");
+                output.Append("<img src=\"/api/v1/tasks/").Append(taskId).Append("/attachments/").Append(attachmentId).Append("\" alt=\"").Append(description?"任务描述图片":"进展图片").Append("\">");
             }
         }
-        output.Append((html??"").Substring(cursor));return ProgressSnapshotHtml(output.ToString(),taskId);
+        output.Append((html??"").Substring(cursor));string saved=output.ToString();return description?TaskDescriptionEditorHtml(saved):ProgressSnapshotHtml(saved,taskId);
     }
+
+    Task<string> PersistProgressEditorImages(long taskId,string html) {return PersistInlineEditorImages(taskId,html,false);}
+    Task<string> PersistTaskDescriptionEditorImages(long taskId,string html) {return PersistInlineEditorImages(taskId,html,true);}
 }
 
 internal sealed partial class FloatingWindow {

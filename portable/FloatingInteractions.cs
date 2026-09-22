@@ -443,7 +443,7 @@ internal sealed partial class FloatingWindow {
                     if(writing)return false;if(deleting && editingId==null)return false;
                     if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return false;}
                     writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;noteEditor.SetReadOnly(true);priority.Enabled=false;
-                    string savedDraftKey=draftKey();try{
+                    string savedDraftKey=draftKey(),continueEditingId=!deleting?editingId:null;try{
                         bool textChanged=OutstandingEditorText(OutstandingTextHtml(input.Text))!=originalText;
                         bool noteChanged=!SameProgressEditorContent(noteEditor.Html,originalNoteEditorHtml);
                         bool priorityChanged=priority.SelectedIndex!=originalPriority;
@@ -467,7 +467,10 @@ internal sealed partial class FloatingWindow {
                             if(noteChanged)savedNote=await PersistProgressEditorImages(id,noteEditor.Html);
                             if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body,NoteHtml=savedNote,Priority=priority.SelectedIndex});else{existing.Html=body;existing.NoteHtml=savedNote;if(priorityChanged)existing.Priority=priority.SelectedIndex;}
                         }
-                        await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();await edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。备注和图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;
+                        await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();
+                        var continueEditing=String.IsNullOrEmpty(continueEditingId)?null:shared.Items.FirstOrDefault(item=>item.Id==continueEditingId);
+                        if(continueEditing!=null){loading=true;list.SelectedItem=continueEditing;loading=false;await edit(continueEditing);}else await edit(null);
+                        feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。备注和图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;
                     }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;return false;}
                     finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;noteEditor.SetReadOnly(false);priority.Enabled=true;}
                 };
@@ -496,7 +499,8 @@ internal sealed partial class FloatingWindow {
                         if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=4 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1 || !Plain(shared.Items.Last().NoteHtml).Contains("备注图片验收") || Regex.Matches(shared.Items.Last().NoteHtml,@"<img\b").Count!=2)throw new Exception("Outstanding editor note, image create or priority failed: "+feedback.Text);
                         loading=true;list.SelectedIndex=list.Items.Count-1;loading=false;await edit(shared.Items.Last());input.Text="编辑器修改验收";noteEditor.Html=noteEditor.Html.Replace("备注图片验收","备注修改验收");priority.SelectedIndex=2;
                         using(var bitmap=new Bitmap(32,20))using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}
-                        await write(false);
+                        string editedItemId=editingId;await write(false);
+                        if(editingId!=editedItemId || (list.SelectedItem as PendingItem)==null || ((PendingItem)list.SelectedItem).Id!=editedItemId)throw new Exception("Saving an existing outstanding item did not keep it open");
                         if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=2 || !shared.Items.Last().Html.Contains("编辑器修改验收") || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=2)throw new Exception("Outstanding editor image or priority update failed: "+feedback.Text);
                         loading=true;list.SelectedIndex=list.Items.Count-1;loading=false;await edit(shared.Items.Last());
                         var editorImages=new List<GalleryImage>();CollectImages(editorImages,shared.Items.Last().Html,"遗留事项缩略图验收");

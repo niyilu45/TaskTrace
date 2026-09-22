@@ -516,10 +516,18 @@ internal sealed partial class FloatingWindow : Form {
     async Task EditProgress(long id,string taskTitle,bool verify=false,bool expectSavedImage=false) {
         SetBusy(true); timer.Stop();
         try {
+            var task=await Api("GET","/tasks/"+id,null);
             var history = await ReadHistory(id);
             using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true})) {
-                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+                var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=9};
+                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
+                var descriptionPanel=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=new Padding(0)};
+                descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,38));descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Percent,100));descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,0));
+                var descriptionToggle=new Button {Text="查看/编辑任务描述",Dock=DockStyle.Fill,AccessibleName="展开或收起任务描述编辑区"};
+                var descriptionEditor=new ProgressHtmlEditor {Dock=DockStyle.Fill,Visible=false,AccessibleName="任务描述，支持粘贴图片，双击图片查看大图"};
+                var descriptionActions=new FlowLayoutPanel {Dock=DockStyle.Fill,Visible=false,WrapContents=false};
+                var saveDescription=new Button {Text="保存任务描述",AutoSize=true};var cancelDescription=new Button {Text="取消描述修改",AutoSize=true};descriptionActions.Controls.Add(saveDescription);descriptionActions.Controls.Add(cancelDescription);
+                descriptionPanel.Controls.Add(descriptionToggle,0,0);descriptionPanel.Controls.Add(descriptionEditor,0,1);descriptionPanel.Controls.Add(descriptionActions,0,2);
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，双击查看大图，选中后可按退格或 Delete 删除"};
                 var collaboratorGroup=new GroupBox {Text="其他协作人员当天进展",Dock=DockStyle.Fill,Visible=false,Padding=new Padding(8)};
@@ -543,13 +551,30 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day,0,0);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,1);layout.Controls.Add(progress,0,2);layout.Controls.Add(collaboratorGroup,0,3);layout.Controls.Add(referenceGroup,0,4);layout.Controls.Add(navigationRow,0,5);layout.Controls.Add(actionRow,0,6);layout.Controls.Add(feedback,0,7);dialog.Controls.Add(layout);
+                layout.Controls.Add(descriptionPanel,0,0);layout.Controls.Add(day,0,1);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,2);layout.Controls.Add(progress,0,3);layout.Controls.Add(collaboratorGroup,0,4);layout.Controls.Add(referenceGroup,0,5);layout.Controls.Add(navigationRow,0,6);layout.Controls.Add(actionRow,0,7);layout.Controls.Add(feedback,0,8);dialog.Controls.Add(layout);
                 int inlineImageDoubleClicks=0;
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
+                descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false;
+                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false;
+                descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
                 Action renderImages=delegate { };
-                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,html=progress.Html,images=progress.ImageCount,references=SerializeProgressReferences(references)});};
+                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=Plain(progress.Html),images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
+                Func<bool> descriptionDirty=delegate{return descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
+                Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
+                Func<Task<bool>> writeDescription=async delegate {
+                    if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
+                    descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
+                    try {
+                        var latest=await Api("GET","/tasks/"+id,null);string latestDescription=latest.ContainsKey("description")?Convert.ToString(latest["description"]):"";if(latestDescription!=originalDescription)throw new Exception("任务描述已在其他窗口修改，请重新打开后合并。");
+                        string savedHtml=await PersistTaskDescriptionEditorImages(id,descriptionEditor.Html);var saved=await Api("PATCH","/tasks/"+id,new{description=savedHtml});originalDescription=saved.ContainsKey("description")?Convert.ToString(saved["description"]):savedHtml;
+                        descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);savedDescriptionVersion=descriptionEditor.ChangeVersion;feedback.Text="任务描述已保存。";return true;
+                    } catch(Exception error){feedback.Text="任务描述未保存："+error.Message;return false;}
+                    finally{descriptionSaving=false;if(!dialog.IsDisposed){saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=true;descriptionEditor.SetReadOnly(false);}}
+                };
+                descriptionToggle.Click+=delegate{if(!descriptionSaving)setDescriptionExpanded(!descriptionExpanded);};
+                saveDescription.Click+=async delegate{await writeDescription();};
+                cancelDescription.Click+=async delegate{if(descriptionSaving)return;descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);savedDescriptionVersion=descriptionEditor.ChangeVersion;setDescriptionExpanded(false);feedback.Text="任务描述修改已取消。";};
                 Action stash=delegate {if(selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Html=progress.Html,References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action cacheSelectedDay=delegate {
                     if(selectedDay=="")return;stash();ProgressDraft cached;
@@ -561,7 +586,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(selected!=null)referenceList.SelectedItem=references.FirstOrDefault(item=>item.Id==selected.Id);if(referenceList.SelectedIndex<0 && references.Count>0)referenceList.SelectedIndex=0;
                     int choices=DailyHistory(history).Select(note=>DayOf(note)).Distinct().Count(date=>String.CompareOrdinal(date,selectedDay)<0 && !references.Any(item=>item.Date==date));chooseReferences.Enabled=choices>0;previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;
                     toggleReferences.Visible=references.Count>0;toggleReferences.Text=referenceExpanded?"收起引用的历史进展":"展开引用的历史进展（"+references.Count+"）";
-                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[4].Height=referenceList.Visible?230:82;
+                    referenceList.Visible=referenceActions.Visible=referenceExpanded && references.Count>0;layout.RowStyles[5].Height=referenceList.Visible?230:82;
                     referenceLayout.RowStyles[2].Height=referenceActions.Visible?34:0;
                     referenceGroup.Text="引用历史进展";
                 };
@@ -573,7 +598,7 @@ internal sealed partial class FloatingWindow : Form {
                     var records=(collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker==null || String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}):allRecords).ToList();
                     var otherRecords=collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker!=null && !String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}).ToList():new List<Dictionary<string,object>>();
                     collaboratorProgress.Text=String.Join("\r\n\r\n",otherRecords.Select(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);string value=Plain(ProgressBody((string)note["comment"],id));return (String.IsNullOrWhiteSpace(marker.author)?"协作成员":marker.author)+"："+(String.IsNullOrWhiteSpace(value)?"（包含图片或引用，请在历史进展中查看）":value);}));
-                    collaboratorGroup.Visible=otherRecords.Count>0;layout.RowStyles[3].Height=otherRecords.Count>0?112:0;
+                    collaboratorGroup.Visible=otherRecords.Count>0;layout.RowStyles[4].Height=otherRecords.Count>0?112:0;
                     commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));
                     mergedIds=records.Select(note=>Convert.ToInt64(note["id"])).Concat(records.SelectMany(note=>MergedIds((string)note["comment"]))).Where(value=>value!=commentId).Distinct().ToList();
                     currentTeamId=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).LastOrDefault()??"";
@@ -653,14 +678,20 @@ internal sealed partial class FloatingWindow : Form {
                     finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}}
                 };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !submitting && progress.ContainsFocus && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);progress.InsertImage(stream.ToArray());}feedback.Text="图片已嵌入进展正文，共 "+progress.ImageCount+" 张；选中图片后可按退格或 Delete 删除。";}catch{feedback.Text="剪贴板读取失败，请重试。";}}
-                    if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
+                    if(e.Control && e.KeyCode==Keys.V && !submitting && !descriptionSaving && (progress.ContainsFocus || descriptionEditor.ContainsFocus) && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);var target=descriptionEditor.ContainsFocus?descriptionEditor:progress;target.InsertImage(stream.ToArray());feedback.Text=target==descriptionEditor?"图片已嵌入任务描述，双击可查看大图。":"图片已嵌入进展正文，共 "+progress.ImageCount+" 张；选中图片后可按退格或 Delete 删除。";}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;if(descriptionEditor.ContainsFocus)saveDescription.PerformClick();else save.PerformClick();}
                 };
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate {
                     try {
                         autoTimer.Stop();
                         if(!dialog.ShowInTaskbar)throw new Exception("Progress editor must have its own taskbar entry");
+                        if(descriptionEditor.Visible || layout.RowStyles[0].Height!=42)throw new Exception("Task description editor must be collapsed by default");
+                        descriptionToggle.PerformClick();if(!descriptionEditor.Visible || layout.RowStyles[0].Height<=42)throw new Exception("Task description editor did not expand");
+                        string descriptionBefore=originalDescription;if(!descriptionEditor.SimulateUserHtmlForTest("<p>悬浮窗任务描述编辑验收</p>") || !descriptionDirty() || !await writeDescription())throw new Exception("Task description editor did not save an edit");
+                        var editedDescription=await Api("GET","/tasks/"+id,null);if(!Convert.ToString(editedDescription["description"]).Contains("悬浮窗任务描述编辑验收"))throw new Exception("Task description edit was not persisted");
+                        if(!descriptionEditor.SimulateUserHtmlForTest(descriptionBefore) || !await writeDescription())throw new Exception("Task description editor did not restore its original value");descriptionToggle.PerformClick();
+                        stash();if(drafts.Count!=0)throw new Exception("Opening an unchanged progress editor was treated as an unsaved edit");
                         var chooseBounds=dialog.RectangleToClient(chooseReferences.RectangleToScreen(chooseReferences.ClientRectangle));
                         if(chooseReferences.Height<28 || !dialog.ClientRectangle.Contains(chooseBounds))throw new Exception("Reference picker button is clipped in progress dialog");
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");
@@ -713,14 +744,16 @@ internal sealed partial class FloatingWindow : Form {
                 };
                 dialog.FormClosing+=async delegate(object sender,FormClosingEventArgs e){
                     if(taskDeleted || closeAfterSave || verify)return;
-                    if(submitting){e.Cancel=true;return;}
-                    stash();if(drafts.Count==0){DeleteDraftCache("progress",id,selectedDay);return;}
-                    var choice=MessageBox.Show(dialog,"还有 "+drafts.Count+" 个日期的进展未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","每日进展",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
+                    if(submitting || descriptionSaving){e.Cancel=true;return;}
+                    stash();bool unsavedDescription=descriptionDirty();if(drafts.Count==0 && !unsavedDescription){DeleteDraftCache("progress",id,selectedDay);return;}
+                    string unsavedText=(unsavedDescription?"任务描述":"")+(unsavedDescription && drafts.Count>0?"和":"")+(drafts.Count>0?drafts.Count+" 个日期的进展":"");
+                    var choice=MessageBox.Show(dialog,unsavedText+"尚未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","任务编辑",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
                     if(choice==DialogResult.Cancel){e.Cancel=true;return;}
                     if(choice==DialogResult.No){drafts.Clear();DeleteDraftCaches("progress",id);return;}
                     e.Cancel=true;autoTimer.Stop();
-                    if(await saveAllDrafts()){closeAfterSave=true;dialog.Close();}
-                    else {feedback.Text="部分进展未能保存，窗口已保留，请检查后重试。";autoTimer.Start();}
+                    bool descriptionSaved=!unsavedDescription || await writeDescription();
+                    if(descriptionSaved && await saveAllDrafts()){closeAfterSave=true;dialog.Close();}
+                    else {feedback.Text="任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
                 try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
