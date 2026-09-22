@@ -517,7 +517,7 @@ internal sealed partial class FloatingWindow : Form {
         SetBusy(true); timer.Stop();
         try {
             var history = await ReadHistory(id);
-            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true})) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
@@ -660,6 +660,7 @@ internal sealed partial class FloatingWindow : Form {
                 if(verify)dialog.Shown+=async delegate {
                     try {
                         autoTimer.Stop();
+                        if(!dialog.ShowInTaskbar)throw new Exception("Progress editor must have its own taskbar entry");
                         var chooseBounds=dialog.RectangleToClient(chooseReferences.RectangleToScreen(chooseReferences.ClientRectangle));
                         if(chooseReferences.Height<28 || !dialog.ClientRectangle.Contains(chooseBounds))throw new Exception("Reference picker button is clipped in progress dialog");
                         if(day.VisibleMarkedDatesForTest()<3)throw new Exception("Progress calendar did not mark existing dates");

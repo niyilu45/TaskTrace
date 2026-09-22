@@ -383,7 +383,7 @@ internal sealed partial class FloatingWindow {
         if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;SetBusy(true);timer.Stop();editingOutstanding=true;
         try {
             var shared=ReadShared(await ReadHistory(id));
-            using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false,KeyPreview=true})){
+            using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,KeyPreview=true})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=9};
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,66));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,76));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
                 var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
@@ -483,6 +483,7 @@ internal sealed partial class FloatingWindow {
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
                     try{
+                        if(!dialog.ShowInTaskbar)throw new Exception("Outstanding editor must have its own taskbar entry");
                         var unchangedItem=shared.Items.FirstOrDefault();
                         if(unchangedItem!=null){await edit(unchangedItem);await Task.Delay(120);if(dirty())throw new Exception("Opening an unchanged outstanding item was treated as an unsaved edit");var otherItem=shared.Items.Skip(1).FirstOrDefault();if(otherItem!=null){await edit(otherItem);await Task.Delay(40);if(dirty())throw new Exception("Switching between unchanged outstanding items was treated as an unsaved edit");}await edit(null);if(dirty())throw new Exception("Opening an empty new outstanding item was treated as an unsaved edit");}
                         int count=shared.Items.Count;input.Text="编辑器图片验收";noteEditor.Html="<p>备注图片验收</p>";priority.SelectedIndex=4;
