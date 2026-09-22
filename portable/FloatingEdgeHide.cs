@@ -146,7 +146,7 @@ internal sealed partial class FloatingWindow {
         bool originalEnabled = edgeHideEnabled;
         var area = Screen.FromRectangle(originalBounds).WorkingArea;
         try {
-            if(edgeHideMenu == null || edgeHideMenu.Text != "边缘隐藏" || !edgeHideMenu.CheckOnClick || tray.ContextMenuStrip == null || !tray.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "重置悬浮窗位置"))throw new Exception("Tray edge-hide or reset-position menu item is missing");
+            if(edgeHideMenu == null || edgeHideMenu.Text != "边缘隐藏" || !edgeHideMenu.CheckOnClick || tray.ContextMenuStrip == null || !tray.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "重置悬浮窗位置") || !tray.ContextMenuStrip.Items.Cast<ToolStripItem>().Any(item => item.Text == "打开程序路径"))throw new Exception("Tray edge-hide, reset-position, or open-program-path menu item is missing");
             edgeHideEnabled = true;
             Bounds = new Rectangle(area.Left, area.Top + Math.Min(80, Math.Max(0, area.Height - Height)), Width, Height);
             TryHideAtTouchedEdge();

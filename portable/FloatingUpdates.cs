@@ -9,6 +9,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -77,6 +78,8 @@ internal sealed partial class FloatingWindow {
                 {"current_version", CurrentPackageVersion()}, {"status", "checking"}, {"notify", false}, {"available", false}, {"error", ""}
             });
             Dictionary<string,object> latest = null;
+            var newerReleases = new List<Dictionary<string,object>>();
+            string currentVersion = CurrentPackageVersion();
             using(var client = CreateUpdateHttpClient()) {
                 string response = await client.GetStringAsync("https://api.github.com/repos/niyilu45/TaskTrace/releases?per_page=30");
                 var releases = json.DeserializeObject(response) as IEnumerable;
@@ -84,14 +87,15 @@ internal sealed partial class FloatingWindow {
                     var release = item as Dictionary<string,object>;
                     if(release == null || Bool(release, "draft")) continue;
                     string tag = UpdateText(release, "tag_name");
-                    if(CompareVersions(tag, CurrentPackageVersion()) <= 0) continue;
+                    if(CompareVersions(tag, currentVersion) <= 0) continue;
+                    newerReleases.Add(release);
                     if(FindReleaseAsset(release, UpdateArchiveName) == "") continue;
                     if(latest == null || CompareVersions(tag, UpdateText(latest, "tag_name")) > 0) latest = release;
                 }
             }
             var settings = ReadUpdateSettings();
             var state = new Dictionary<string,object>();
-            state["current_version"] = CurrentPackageVersion();
+            state["current_version"] = currentVersion;
             state["checked_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
             state["status"] = "idle"; state["error"] = "";
             state["available"] = latest != null;
@@ -99,7 +103,7 @@ internal sealed partial class FloatingWindow {
                 string version = UpdateText(latest, "tag_name");
                 state["latest_version"] = version;
                 state["published_at"] = UpdateText(latest, "published_at");
-                state["release_notes"] = UpdateText(latest, "body");
+                state["release_notes"] = BuildVersionChanges(newerReleases, currentVersion, version);
                 state["release_url"] = UpdateText(latest, "html_url");
                 state["asset_url"] = FindReleaseAsset(latest, UpdateArchiveName);
                 state["checksum_url"] = FindReleaseAsset(latest, UpdateChecksumName);
@@ -117,6 +121,19 @@ internal sealed partial class FloatingWindow {
             lastAutomaticUpdateCheck = DateTime.UtcNow;
             if(interactive) ShowUpdateCheckFailure(FriendlyUpdateError(e));
         } finally { updateBusy = false; }
+    }
+
+    static string BuildVersionChanges(List<Dictionary<string,object>> releases,string currentVersion,string latestVersion) {
+        var included=releases.Where(release=>CompareVersions(UpdateText(release,"tag_name"),currentVersion)>0&&CompareVersions(UpdateText(release,"tag_name"),latestVersion)<=0).ToList();
+        included.Sort(delegate(Dictionary<string,object> left,Dictionary<string,object> right){return CompareVersions(UpdateText(right,"tag_name"),UpdateText(left,"tag_name"));});
+        var result=new StringBuilder();
+        foreach(var release in included) {
+            if(result.Length>0)result.AppendLine().AppendLine();
+            string tag=UpdateText(release,"tag_name"),published=DisplayReleaseDate(UpdateText(release,"published_at")),body=UpdateText(release,"body").Trim();
+            result.Append(tag).Append(" · ").Append(published).AppendLine();
+            result.Append(body==""?"本版本未填写更新内容。":body);
+        }
+        return result.ToString();
     }
 
     void ShowUpdateCheckFailure(string error) {
@@ -141,9 +158,7 @@ internal sealed partial class FloatingWindow {
         string version = UpdateText(state, "latest_version");
         string published = DisplayReleaseDate(UpdateText(state, "published_at"));
         string notes = UpdateText(state, "release_notes");
-        if(notes.Length > 1800) notes = notes.Substring(0, 1800) + "…";
-        string message = "发现新版本 " + version + "\r\n发布日期：" + published + "\r\n\r\n更新内容：\r\n" + (notes == "" ? "本次发布未填写更新内容。" : notes) + "\r\n\r\n是否下载并更新？";
-        if(MessageBox.Show(message, "TaskTrace · 发现新版本", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) {
+        if(!ShowUpdateAvailableDialog(version,published,notes)) {
             IgnoreUpdateVersion(version);
             return;
         }
@@ -152,36 +167,142 @@ internal sealed partial class FloatingWindow {
         await DownloadAndStartUpdate(version);
     }
 
+    bool ShowUpdateAvailableDialog(string version,string published,string notes) {
+        using(var dialog=DpiDialog(new Form {Text="TaskTrace · 发现新版本",Size=new System.Drawing.Size(640,330),MinimumSize=new System.Drawing.Size(520,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(16),ColumnCount=1,RowCount=5};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            var heading=new Label{Dock=DockStyle.Fill,Text="发现新版本 "+version,Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold),TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
+            var range=new Label{Dock=DockStyle.Fill,Text="本地版本："+CurrentPackageVersion()+"\r\n最新版本："+version+"    发布日期："+published,TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
+            var toggle=new Button{Text="查看版本改动",AutoSize=true,Anchor=AnchorStyles.Left};
+            var changes=new TextBox{Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text=notes==""?"本次发布未填写更新内容。":notes,AccessibleName="版本改动"};
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
+            var install=new Button{Text="开始更新",AutoSize=true,DialogResult=DialogResult.Yes};var later=new Button{Text="暂不更新",AutoSize=true,DialogResult=DialogResult.No};
+            bool expanded=false;toggle.Click+=delegate{expanded=!expanded;layout.RowStyles[3].Height=expanded?150:0;toggle.Text=expanded?"收起版本改动":"查看版本改动";dialog.Height=expanded?480:330;};
+            actions.Controls.Add(install);actions.Controls.Add(later);layout.Controls.Add(heading);layout.Controls.Add(range);layout.Controls.Add(toggle);layout.Controls.Add(changes);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=install;dialog.CancelButton=later;
+            return dialog.ShowDialog(this)==DialogResult.Yes;
+        }
+    }
+
     async Task DownloadAndStartUpdate(string version) {
         if(updateBusy) return;
         updateBusy = true;
+        await Task.Yield();
+        string temporaryArchive = "";
         try {
             var state = ReadUpdateState();
             if(!Bool(state, "available") || UpdateText(state, "latest_version") != version || UpdateText(state, "asset_url") == "") throw new Exception("所选版本已经失效，请重新检查更新。");
             state["status"] = "downloading"; state["error"] = ""; WriteUpdateState(state);
             string folder = Path.Combine(data, "updates"); Directory.CreateDirectory(folder);
             string archive = Path.Combine(folder, "TaskTrace-" + SafeVersion(version) + ".zip");
-            byte[] payload;
-            using(var client = CreateUpdateHttpClient()) payload = await client.GetByteArrayAsync(UpdateText(state, "asset_url"));
-            File.WriteAllBytes(archive + ".tmp", payload);
-            if(File.Exists(archive)) File.Delete(archive);
-            File.Move(archive + ".tmp", archive);
-            string checksumUrl = UpdateText(state, "checksum_url");
-            if(checksumUrl != "") {
-                string sums;
-                using(var client = CreateUpdateHttpClient()) sums = await client.GetStringAsync(checksumUrl);
-                string expected = ParseExpectedChecksum(sums, UpdateArchiveName);
-                if(expected == "") throw new Exception("发布包校验文件中没有找到 " + UpdateArchiveName + "。更新已取消。");
-                string actual = Sha256(archive);
-                if(!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase)) throw new Exception("下载文件校验失败，更新已取消。请稍后重试。");
+            temporaryArchive = archive + ".tmp";
+            TryDelete(temporaryArchive);
+            bool completed = false;
+            using(var progress = new UpdateDownloadDialog(Font, TopMost, version)) {
+                Exception failure = null;
+                progress.Shown += async delegate {
+                    try {
+                        await DownloadUpdateArchive(state, temporaryArchive, progress);
+                        progress.SetPhase("正在校验更新包…", "校验通过后才会关闭当前程序。", 100, false);
+                        await VerifyUpdateArchive(state, temporaryArchive, progress.Token);
+                        progress.Token.ThrowIfCancellationRequested();
+                        if(File.Exists(archive)) File.Delete(archive);
+                        File.Move(temporaryArchive, archive);
+                        completed = true;
+                    } catch(OperationCanceledException) {
+                    } catch(Exception e) { failure = e; }
+                    finally { progress.Finish(); }
+                };
+                progress.ShowDialog(this);
+                if(failure != null) throw failure;
+                if(!completed) {
+                    TryDelete(temporaryArchive);
+                    state["status"] = "idle"; state["error"] = ""; WriteUpdateState(state);
+                    MessageBox.Show("更新已取消，当前程序和数据没有变化。", "TaskTrace · 已取消更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
             }
             File.WriteAllText(Path.Combine(data, "update-ready.json"), json.Serialize(new Dictionary<string,object> {{"version",version},{"archive",archive},{"install_root",root}}), new UTF8Encoding(false));
             state["status"] = "ready"; WriteUpdateState(state);
             Environment.ExitCode = 10; allowExit = true; Close();
         } catch(Exception e) {
+            TryDelete(temporaryArchive);
             var state = ReadUpdateState(); state["status"] = "error"; state["error"] = FriendlyUpdateError(e); WriteUpdateState(state);
             MessageBox.Show(FriendlyUpdateError(e), "TaskTrace · 更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally { updateBusy = false; }
+    }
+
+    async Task DownloadUpdateArchive(Dictionary<string,object> state,string destination,UpdateDownloadDialog progress) {
+        using(var client = CreateUpdateHttpClient()) {
+            client.Timeout = TimeSpan.FromMinutes(30);
+            using(var response = await client.GetAsync(UpdateText(state, "asset_url"), HttpCompletionOption.ResponseHeadersRead, progress.Token)) {
+                response.EnsureSuccessStatusCode();
+                long total = response.Content.Headers.ContentLength.HasValue ? response.Content.Headers.ContentLength.Value : -1;
+                using(var input = await response.Content.ReadAsStreamAsync())
+                using(var output = new FileStream(destination, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true)) {
+                    byte[] buffer = new byte[81920]; long received = 0; int read;
+                    var watch = System.Diagnostics.Stopwatch.StartNew(); long lastUi = 0;
+                    while((read = await input.ReadAsync(buffer, 0, buffer.Length, progress.Token)) > 0) {
+                        await output.WriteAsync(buffer, 0, read, progress.Token); received += read;
+                        if(watch.ElapsedMilliseconds - lastUi >= 150 || (total > 0 && received >= total)) {
+                            lastUi = watch.ElapsedMilliseconds;
+                            int percent = total > 0 ? (int)Math.Min(100, received * 100L / total) : 0;
+                            double seconds = Math.Max(.001, watch.Elapsed.TotalSeconds);
+                            string detail = FormatUpdateBytes(received) + (total > 0 ? " / " + FormatUpdateBytes(total) : "") + " · " + FormatUpdateBytes((long)(received / seconds)) + "/s";
+                            progress.SetPhase("正在下载 " + UpdateArchiveName, detail, percent, total <= 0);
+                        }
+                    }
+                    await output.FlushAsync(progress.Token);
+                }
+            }
+        }
+    }
+
+    async Task VerifyUpdateArchive(Dictionary<string,object> state,string archive,CancellationToken token) {
+        string checksumUrl = UpdateText(state, "checksum_url");
+        if(checksumUrl == "") return;
+        string sums;
+        using(var client = CreateUpdateHttpClient()) {
+            client.Timeout = TimeSpan.FromMinutes(5);
+            using(var response = await client.GetAsync(checksumUrl, token)) {
+                response.EnsureSuccessStatusCode();
+                sums = await response.Content.ReadAsStringAsync();
+            }
+        }
+        token.ThrowIfCancellationRequested();
+        string expected = ParseExpectedChecksum(sums, UpdateArchiveName);
+        if(expected == "") throw new Exception("发布包校验文件中没有找到 " + UpdateArchiveName + "。更新已取消。");
+        string actual = Sha256(archive);
+        token.ThrowIfCancellationRequested();
+        if(!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase)) throw new Exception("下载文件校验失败，更新已取消。请稍后重试。");
+    }
+
+    static string FormatUpdateBytes(long value) {
+        string[] units={"B","KB","MB","GB"};double size=Math.Max(0,value);int index=0;
+        while(size>=1024&&index<units.Length-1){size/=1024;index++;}
+        return size.ToString(index==0?"0":"0.0",CultureInfo.InvariantCulture)+" "+units[index];
+    }
+
+    sealed class UpdateDownloadDialog : Form {
+        readonly Label phase = new Label(); readonly Label detail = new Label(); readonly ProgressBar bar = new ProgressBar(); readonly Button cancel = new Button();
+        readonly CancellationTokenSource cancellation = new CancellationTokenSource(); bool finished;
+        internal CancellationToken Token { get { return cancellation.Token; } }
+        internal UpdateDownloadDialog(System.Drawing.Font font,bool topMost,string version) {
+            Text="TaskTrace · 正在更新";Size=new System.Drawing.Size(540,220);MinimumSize=new System.Drawing.Size(460,210);StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;TopMost=topMost;Font=font;
+            var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=4};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            phase.Dock=DockStyle.Fill;phase.Text="准备下载 "+version+"…";phase.Font=new System.Drawing.Font(font,System.Drawing.FontStyle.Bold);phase.TextAlign=System.Drawing.ContentAlignment.MiddleLeft;
+            detail.Dock=DockStyle.Fill;detail.Text="更新包会先下载到临时文件并完成校验，取消不会修改当前程序。";detail.TextAlign=System.Drawing.ContentAlignment.MiddleLeft;
+            bar.Dock=DockStyle.Fill;bar.Style=ProgressBarStyle.Marquee;
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};cancel.Text="取消更新";cancel.AutoSize=true;cancel.Click+=delegate{RequestCancel();};actions.Controls.Add(cancel);
+            layout.Controls.Add(phase);layout.Controls.Add(detail);layout.Controls.Add(bar);layout.Controls.Add(actions);Controls.Add(layout);CancelButton=cancel;
+        }
+        internal void SetPhase(string title,string description,int percent,bool indeterminate) {
+            if(IsDisposed)return;phase.Text=title;detail.Text=description;bar.Style=indeterminate?ProgressBarStyle.Marquee:ProgressBarStyle.Continuous;if(!indeterminate)bar.Value=Math.Max(0,Math.Min(100,percent));
+        }
+        void RequestCancel(){if(finished||cancellation.IsCancellationRequested)return;cancellation.Cancel();cancel.Enabled=false;cancel.Text="正在取消…";phase.Text="正在取消更新…";detail.Text="正在清理临时文件，当前程序不会被修改。";bar.Style=ProgressBarStyle.Marquee;}
+        internal void Finish(){finished=true;if(!IsDisposed)Close();}
+        protected override void OnFormClosing(FormClosingEventArgs e){if(!finished&&e.CloseReason==CloseReason.UserClosing){e.Cancel=true;RequestCancel();return;}base.OnFormClosing(e);}
+        protected override void Dispose(bool disposing){if(disposing)cancellation.Dispose();base.Dispose(disposing);}
     }
 
     Dictionary<string,object> ReadUpdateSettings() {

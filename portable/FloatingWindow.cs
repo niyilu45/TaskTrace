@@ -217,6 +217,10 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         InitializeEdgeHide(menu);
         InitializeStartWithWindows(menu);
+        menu.Items.Add("打开程序路径", null, delegate {
+            try { Process.Start(new ProcessStartInfo(root) { UseShellExecute = true }); }
+            catch(Exception e) { MessageBox.Show(this, "无法打开程序路径。\r\n\r\n" + e.Message, "TaskTrace", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        });
         menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);

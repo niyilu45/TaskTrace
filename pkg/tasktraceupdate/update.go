@@ -38,7 +38,7 @@ type State struct {
 	AssetURL       string    `json:"asset_url" readOnly:"true" doc:"GitHub API download URL for the portable Windows archive."`
 	ChecksumURL    string    `json:"checksum_url" readOnly:"true" doc:"GitHub API download URL for SHA256SUMS.txt when present."`
 	CheckedAt      time.Time `json:"checked_at,omitempty" readOnly:"true" doc:"Time the desktop process completed the latest check."`
-	Status         string    `json:"status" readOnly:"true" doc:"Current updater state: idle, checking, downloading, ready, or error."`
+	Status         string    `json:"status" readOnly:"true" doc:"Current updater state: idle, queued, checking, downloading, ready, or error."`
 	Error          string    `json:"error" readOnly:"true" doc:"Last update error suitable for display to the local user."`
 }
 
@@ -114,6 +114,18 @@ func Queue(action, releaseVersion string) (Command, error) {
 	command := Command{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, Version: strings.TrimSpace(releaseVersion), CreatedAt: time.Now().UTC()}
 	if err := writeJSONLocked(commandPath(), command); err != nil {
 		return Command{}, err
+	}
+	if action == "check" {
+		state := State{CurrentVersion: CurrentVersion(), Status: "queued"}
+		if err := readJSONLocked(statePath(), &state); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Command{}, err
+		}
+		state.CurrentVersion = CurrentVersion()
+		state.Status = "queued"
+		state.Error = ""
+		if err := writeJSONLocked(statePath(), state); err != nil {
+			return Command{}, err
+		}
 	}
 	return command, nil
 }

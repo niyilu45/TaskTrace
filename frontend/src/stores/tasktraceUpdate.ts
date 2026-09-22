@@ -54,11 +54,14 @@ export const useTasktraceUpdateStore = defineStore('tasktrace-update', () => {
 		const previousCheck = state.value.checked_at
 		try {
 			await tasktraceUpdateCheck()
+			let observedCurrentCheck = false
 			for (let attempt = 0; attempt < 90; attempt++) {
 				await wait(500)
 				await refresh()
-				if (state.value.status === 'error') throw new Error(state.value.error || '检查更新失败。')
-				if (state.value.checked_at && state.value.checked_at !== previousCheck && state.value.status === 'idle') return state.value
+				if (state.value.status === 'queued' || state.value.status === 'checking') observedCurrentCheck = true
+				const completedCurrentCheck = Boolean(state.value.checked_at && state.value.checked_at !== previousCheck)
+				if (state.value.status === 'error' && (observedCurrentCheck || completedCurrentCheck)) throw new Error(state.value.error || '检查更新失败。')
+				if (completedCurrentCheck && state.value.status === 'idle') return state.value
 			}
 			throw new Error('检查更新超时，请确认系统托盘中的 TaskTrace 正在运行。')
 		} finally {

@@ -170,12 +170,15 @@
 			</template>
 			<template #text>
 				<p><strong>发布日期：</strong>{{ displayReleaseDate(updateStore.state.published_at) }}</p>
-				<p class="mbs-3">
-					<strong>更新内容：</strong>
-				</p>
-				<pre class="release-notes">{{ updateStore.state.release_notes || '本次发布未填写更新内容。' }}</pre>
+				<VersionChanges
+					class="mbs-3"
+					:current-version="updateStore.state.current_version"
+					:latest-version="updateStore.state.latest_version"
+					:release-notes="updateStore.state.release_notes"
+					:available="updateStore.available"
+				/>
 				<p class="mbs-4">
-					更新需要关闭正在运行的 TaskTrace。确认后将使用 Windows 系统代理下载更新，随后关闭、替换文件并自动重新启动。
+					确认更新后会打开进度小窗。下载或替换期间可以取消，原版本会保持不变或自动恢复。
 				</p>
 			</template>
 		</Modal>
@@ -199,6 +202,7 @@ import {useAuthStore} from '@/stores/auth'
 import {useWebSocket} from '@/composables/useWebSocket'
 import XButton from '@/components/input/Button.vue'
 import Modal from '@/components/misc/Modal.vue'
+import VersionChanges from '@/components/update/VersionChanges.vue'
 import {error as showError, success} from '@/message'
 import {useI18n} from 'vue-i18n'
 import {useTasktraceUpdateStore} from '@/stores/tasktraceUpdate'
@@ -357,7 +361,7 @@ async function installUpdate() {
 	try {
 		await updateStore.install()
 		showUpdateDetails.value = false
-		success({message: '正在下载更新，完成后 TaskTrace 将关闭并重新启动。'})
+		success({message: '已开始更新，请在更新进度小窗中查看进度或取消。'})
 	} catch (cause) {
 		showError(cause)
 	}
@@ -671,15 +675,5 @@ async function clearAll() {
 		font-weight: 700;
 	}
 
-}
-
-.release-notes {
-	max-block-size: 16rem;
-	overflow: auto;
-	white-space: pre-wrap;
-	font: inherit;
-	background: var(--grey-100);
-	border-radius: $radius;
-	padding: .75rem;
 }
 </style>

@@ -37,7 +37,15 @@ func TestUpdateStateAndSettingsSharePortableStorage(t *testing.T) {
 	require.False(t, state.Notify)
 	require.Equal(t, "v1.2.3-beta.4", state.CurrentVersion)
 
-	command, err := Queue("install", "v1.3.0")
+	command, err := Queue("check", "")
+	require.NoError(t, err)
+	require.Equal(t, "check", command.Action)
+	state, err = ReadState()
+	require.NoError(t, err)
+	require.Equal(t, "queued", state.Status)
+	require.Empty(t, state.Error)
+
+	command, err = Queue("install", "v1.3.0")
 	require.NoError(t, err)
 	require.Equal(t, "install", command.Action)
 	require.Equal(t, "v1.3.0", command.Version)
