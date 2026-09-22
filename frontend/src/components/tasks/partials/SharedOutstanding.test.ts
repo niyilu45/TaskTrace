@@ -180,6 +180,32 @@ describe('outstanding item images', () => {
 		expect(history[0].comment.match(/<img /g)).toHaveLength(2)
 	})
 
+	it('merges non-overlapping changes to the same item from another window', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first" data-priority="5"><p>Original</p><aside data-tasktrace-outstanding-note="true" hidden><p>Old note</p></aside></li>')}]
+		await open()
+		await click('编辑')
+		await wrapper.get('.mock-note-editor').setValue('<p>My updated note</p>')
+		history[0].comment = shared('<li data-id="first" data-priority="2"><p>Renamed elsewhere</p><aside data-tasktrace-outstanding-note="true" hidden><p>Old note</p></aside></li>')
+		await click('保存修改')
+		expect(history[0].comment).toContain('Renamed elsewhere')
+		expect(history[0].comment).toContain('My updated note')
+		expect(history[0].comment).toContain('data-priority="2"')
+		expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+	})
+
+	it('refuses only an overlapping edit to the same field and keeps the draft', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Original</p></li>')}]
+		await open()
+		await click('编辑')
+		await wrapper.get('textarea').setValue('My version')
+		history[0].comment = shared('<li data-id="first"><p>Other version</p></li>')
+		await click('保存修改')
+		expect(update).not.toHaveBeenCalled()
+		expect(history[0].comment).toContain('Other version')
+		expect(wrapper.get('textarea').element.value).toBe('My version')
+		expect(wrapper.get('[role="alert"]').text()).toContain('同一内容已在其他窗口修改')
+	})
+
 	it('preserves separate drafts when switching between new and existing items', async () => {
 		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
 		await open()

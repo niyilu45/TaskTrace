@@ -300,7 +300,8 @@ import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
-type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, priority: number, original: string}
+type DraftBase = {text: string, note: string, imageKeys: string[], priority: number}
+type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, priority: number, original: string, base: DraftBase}
 type CachedDraft = {text: string, note?: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string, priority?: number}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
 const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
@@ -327,7 +328,7 @@ const completedItems = computed(() => numberedItems.value.filter(entry => entry.
 const draft = computed(() => {
 	const key = `${props.taskId}:${activeId.value}`
 	if (!drafts.has(key)) {
-		const fresh = {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: ''}
+		const fresh = {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: '', base: emptyDraftBase()}
 		fresh.original = draftSignature(fresh)
 		drafts.set(key, fresh)
 	}
@@ -368,20 +369,16 @@ async function selectItem(id: string) {
 }
 
 async function draftFromItem(item: OutstandingItem): Promise<Draft> {
-	const doc = new DOMParser().parseFromString(deduplicateHtmlImages(item.html || ''), 'text/html')
+	const state = outstandingItemState(item)
 	const images: ImageDraft[] = []
-	for (const image of doc.querySelectorAll('img')) {
-		const source = image.getAttribute('src') || ''
+	for (const source of state.imageSources) {
 		const match = source.match(/\/tasks\/(\d+)\/attachments\/(\d+)(?:$|[?#])/)
 		if (!match) continue
 		const attachmentId = Number(match[2])
 		const taskId = Number(match[1]) || props.taskId
 		images.push({attachmentId, preview: await fetchAttachmentBlobUrl({taskId, id: attachmentId})})
 	}
-	doc.querySelectorAll('img').forEach(image => image.remove())
-	doc.querySelectorAll('br').forEach(line => line.replaceWith('\n'))
-	const blocks = Array.from(doc.body.querySelectorAll('p, div, li')).map(block => block.textContent?.trim() || '').filter(Boolean)
-	const result = {text: blocks.length ? blocks.join('\n') : doc.body.textContent?.trim() || '', note: item.note || '', images, itemId: item.id, priority: item.priority ?? 9, original: ''}
+	const result = {text: state.text, note: item.note || '', images, itemId: item.id, priority: item.priority ?? 9, original: '', base: {text: state.text, note: item.note || '', imageKeys: state.imageKeys, priority: item.priority ?? 9}}
 	result.original = draftSignature(result)
 	return result
 }
@@ -391,7 +388,7 @@ function cacheKey(id: string) { return id || 'new' }
 async function restoreDraft(id: string) {
 	const key = `${props.taskId}:${id}`
 	const item = id ? items.value.find(candidate => candidate.id === id) : undefined
-	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: ''}
+	const base = item ? await draftFromItem(item) : {text: '', note: '', images: [], itemId: crypto.randomUUID(), priority: TASKTRACE_DEFAULT_PRIORITY, original: '', base: emptyDraftBase()}
 	base.original = draftSignature(base)
 	try {
 		const cached = await readTaskTraceDraft<CachedDraft>('outstanding', props.taskId, cacheKey(id))
@@ -427,6 +424,38 @@ async function restoreDraft(id: string) {
 
 function draftSignature(value: Pick<Draft, 'text' | 'note' | 'images' | 'priority'>) {
 	return JSON.stringify([value.text, value.note, value.priority, value.images.map(image => [image.preview, image.attachmentId])])
+}
+
+function emptyDraftBase(): DraftBase {
+	return {text: '', note: '', imageKeys: [], priority: TASKTRACE_DEFAULT_PRIORITY}
+}
+
+function imageSourceKey(source: string) {
+	return source.match(/\/tasks\/\d+\/attachments\/(\d+)(?:$|[?#])/)?.[1] || source
+}
+
+function outstandingItemState(item: OutstandingItem) {
+	const doc = new DOMParser().parseFromString(deduplicateHtmlImages(item.html || ''), 'text/html')
+	const imageSources = Array.from(doc.querySelectorAll('img')).map(image => image.getAttribute('data-tasktrace-src') || image.getAttribute('data-src') || image.getAttribute('src') || '')
+	doc.querySelectorAll('img').forEach(image => image.remove())
+	doc.querySelectorAll('br').forEach(line => line.replaceWith('\n'))
+	const blocks = Array.from(doc.body.querySelectorAll('p, div, li')).map(block => block.textContent?.trim() || '').filter(Boolean)
+	return {
+		text: blocks.length ? blocks.join('\n') : doc.body.textContent?.trim() || '',
+		imageSources,
+		imageKeys: imageSources.map(imageSourceKey),
+	}
+}
+
+function editorContentSignature(html: string) {
+	const doc = new DOMParser().parseFromString(deduplicateHtmlImages(html || ''), 'text/html')
+	const images = Array.from(doc.querySelectorAll('img')).map(image => imageSourceKey(image.getAttribute('data-tasktrace-src') || image.getAttribute('data-src') || image.getAttribute('src') || ''))
+	doc.querySelectorAll('img').forEach(image => image.remove())
+	return JSON.stringify([doc.body.textContent?.trim() || '', images])
+}
+
+function sameValues(left: string[], right: string[]) {
+	return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function draftHasContent(value: Pick<Draft, 'text' | 'note' | 'images'>) {
@@ -473,6 +502,7 @@ function recoverDraft() {
 		pending.images.push(...recovered.images)
 	} else {
 		recovered.original = draftSignature({text: '', note: '', images: [], priority: TASKTRACE_DEFAULT_PRIORITY})
+		recovered.base = emptyDraftBase()
 		drafts.set(newKey, recovered)
 	}
 	drafts.delete(key)
@@ -596,7 +626,7 @@ async function save() {
 	error.value = ''
 	message.value = ''
 	try {
-		const note = await persistProgressImages(savedDraft.note, taskId)
+		const savedNote = await persistProgressImages(savedDraft.note, taskId)
 		for (const picture of savedDraft.images) {
 			if (picture.attachmentId) continue
 			if (!picture.file) continue
@@ -609,8 +639,28 @@ async function save() {
 			const current = targetId ? existing.find(item => item.id === targetId) : undefined
 			if (targetId && !current) throw new Error('Outstanding item no longer exists')
 			const images = savedDraft.images.map(picture => picture.attachmentId ? `/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}` : picture.preview)
-			const html = `${textHtml(savedDraft.text)}${images.map(imageHtml).join('')}`
-			if (current) return existing.map(item => item.id === targetId ? {...item, html, note, priority: savedDraft.priority} : item)
+			let text = savedDraft.text
+			let note = savedNote
+			let priority = savedDraft.priority
+			let mergedImages = images
+			if (current) {
+				const latest = outstandingItemState(current)
+				const desiredImageKeys = images.map(imageSourceKey)
+				const textChanged = savedDraft.text !== savedDraft.base.text
+				const noteChanged = editorContentSignature(savedDraft.note) !== editorContentSignature(savedDraft.base.note)
+				const imagesChanged = !sameValues(desiredImageKeys, savedDraft.base.imageKeys)
+				const priorityChanged = savedDraft.priority !== savedDraft.base.priority
+				if (textChanged && latest.text !== savedDraft.base.text && latest.text !== savedDraft.text) throw new Error('Outstanding edit conflict')
+				if (noteChanged && editorContentSignature(current.note || '') !== editorContentSignature(savedDraft.base.note) && editorContentSignature(current.note || '') !== editorContentSignature(savedNote)) throw new Error('Outstanding edit conflict')
+				if (imagesChanged && !sameValues(latest.imageKeys, savedDraft.base.imageKeys) && !sameValues(latest.imageKeys, desiredImageKeys)) throw new Error('Outstanding edit conflict')
+				if (priorityChanged && (current.priority ?? 9) !== savedDraft.base.priority && (current.priority ?? 9) !== savedDraft.priority) throw new Error('Outstanding edit conflict')
+				if (!textChanged) text = latest.text
+				if (!noteChanged) note = current.note || ''
+				if (!imagesChanged) mergedImages = latest.imageSources
+				if (!priorityChanged) priority = current.priority ?? 9
+			}
+			const html = `${textHtml(text)}${mergedImages.map(imageHtml).join('')}`
+			if (current) return existing.map(item => item.id === targetId ? {...item, html, note, priority} : item)
 			const added = {id: savedDraft.itemId, html, note, done: false, priority: savedDraft.priority}
 			return existing.some(item => item.id === added.id) ? existing.map(item => item.id === added.id ? added : item) : [...existing, added]
 		})
@@ -626,7 +676,9 @@ async function save() {
 		if (taskId !== props.taskId || !mounted) return
 		error.value = cause instanceof Error && cause.message === 'Outstanding item no longer exists'
 			? '这条遗留事项已被移除或移动。输入和图片已保留，请重新读取。'
-			: '保存失败，输入和图片已保留，请重试。'
+			: cause instanceof Error && cause.message === 'Outstanding edit conflict'
+				? '这条遗留事项的同一内容已在其他窗口修改。输入和图片已保留，请重新读取后合并。'
+				: '保存失败，输入和图片已保留，请重试。'
 	} finally {
 		busy.value = false
 	}

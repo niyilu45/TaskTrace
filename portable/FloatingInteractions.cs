@@ -367,6 +367,16 @@ internal sealed partial class FloatingWindow {
     static bool SameProgressEditorContent(string left,string right) {
         return Plain(left)==Plain(right) && ProgressEditorImageKeys(left).SequenceEqual(ProgressEditorImageKeys(right),StringComparer.Ordinal);
     }
+    static string OutstandingEditorText(string html) {
+        return Plain(Regex.Replace(html??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase));
+    }
+    static string OutstandingTextHtml(string value) {
+        string text=(value??"").Trim();
+        return text==""?"":"<p>"+WebUtility.HtmlEncode(text).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>";
+    }
+    static string OutstandingImagesHtml(string html) {
+        return String.Join("",Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
+    }
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
     async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
     async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
@@ -390,7 +400,7 @@ internal sealed partial class FloatingWindow {
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool writing=false,loading=false,removeExistingImages=false,restoredDraftDirty=false;
+                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,restoredDraftDirty=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();
@@ -413,12 +423,12 @@ internal sealed partial class FloatingWindow {
                     if(MessageBox.Show(dialog,"当前修改尚未保存，是否放弃？\r\n\r\n放弃后再次打开会显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return false;
                     DeleteDraftCache("outstanding",id,draftKey());return true;
                 };
-                Func<PendingItem,Task> edit=async delegate(PendingItem item){loading=true;try{editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalNoteHtml=item==null?"":item.NoteHtml??"";originalPriority=item==null?defaultPriority:item.Priority;originalText=Plain(Regex.Replace(originalHtml,@"<img\b[^>]*>","",RegexOptions.IgnoreCase));input.Text=originalText;noteEditor.Html=await PrepareProgressEditorHtml(id,originalNoteHtml);originalNoteEditorHtml=noteEditor.Html;originalNoteVersion=noteEditor.ChangeVersion;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;restoredDraftDirty=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;reminder.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){string cachedText=cached.Text??"",cachedNote=cached.NoteHtml??originalNoteEditorHtml;int cachedPriority=Math.Max(0,Math.Min(9,cached.Priority));var cachedPictures=cached.Pictures??new List<PastedImage>();bool emptyNew=item==null && String.IsNullOrWhiteSpace(cachedText) && SameProgressEditorContent(cachedNote,"") && cachedPictures.Count==0;bool unchanged=(emptyNew || (cachedText==originalText && cachedPriority==originalPriority && SameProgressEditorContent(cachedNote,originalNoteEditorHtml))) && cachedPictures.Count==0 && !cached.RemoveExistingImages;if(unchanged){DeleteDraftCache("outstanding",id,draftKey());lastCached="";}else{input.Text=cachedText;noteEditor.Html=cachedNote;draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=cachedPriority;pictures=cachedPictures;removeExistingImages=cached.RemoveExistingImages;restoredDraftDirty=true;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}}else lastCached="";renderPreviews();}finally{loading=false;}};
+                Func<PendingItem,Task> edit=async delegate(PendingItem item){loading=true;try{editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalNoteHtml=item==null?"":item.NoteHtml??"";originalPriority=item==null?defaultPriority:item.Priority;originalDone=item!=null&&item.Done;originalCompletedAt=item==null?null:item.CompletedAt;originalReminderAt=item==null?null:item.ReminderAt;originalText=OutstandingEditorText(originalHtml);input.Text=originalText;noteEditor.Html=await PrepareProgressEditorHtml(id,originalNoteHtml);originalNoteEditorHtml=noteEditor.Html;originalNoteVersion=noteEditor.ChangeVersion;priority.SelectedIndex=originalPriority;pictures.Clear();removeExistingImages=false;restoredDraftDirty=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;reminder.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){string cachedText=cached.Text??"",cachedNote=cached.NoteHtml??originalNoteEditorHtml;int cachedPriority=Math.Max(0,Math.Min(9,cached.Priority));var cachedPictures=cached.Pictures??new List<PastedImage>();bool emptyNew=item==null && String.IsNullOrWhiteSpace(cachedText) && SameProgressEditorContent(cachedNote,"") && cachedPictures.Count==0;bool unchanged=(emptyNew || (cachedText==originalText && cachedPriority==originalPriority && SameProgressEditorContent(cachedNote,originalNoteEditorHtml))) && cachedPictures.Count==0 && !cached.RemoveExistingImages;if(unchanged){DeleteDraftCache("outstanding",id,draftKey());lastCached="";}else{input.Text=cachedText;noteEditor.Html=cachedNote;draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=cachedPriority;pictures=cachedPictures;removeExistingImages=cached.RemoveExistingImages;restoredDraftDirty=true;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}}else lastCached="";renderPreviews();}finally{loading=false;}};
                 list.SelectedIndexChanged+=async delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}await edit(selected);};
                 PendingItem initiallySelected=null;if(!String.IsNullOrEmpty(selectedItemId))initiallySelected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(initiallySelected!=null){loading=true;list.SelectedItem=initiallySelected;loading=false;}await edit(initiallySelected);
                 fresh.Click+=async delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;await edit(null);input.Focus();};
                 editParent.Click+=delegate{if(writing || !mayDiscard())return;editParentRequested=true;dialog.Close();};
-                recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
+                recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalCompletedAt=null;originalReminderAt=null;originalDone=false;originalPriority=defaultPriority;priority.SelectedIndex=defaultPriority;removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
                 gallery.Click+=async delegate{
@@ -432,16 +442,28 @@ internal sealed partial class FloatingWindow {
                     if(!deleting && String.IsNullOrWhiteSpace(input.Text) && pictures.Count==0 && (removeExistingImages || !Regex.IsMatch(originalHtml,@"<img\b",RegexOptions.IgnoreCase))){feedback.Text="请输入内容或添加图片。";return false;}
                     writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;noteEditor.SetReadOnly(true);priority.Enabled=false;
                     string savedDraftKey=draftKey();try{
-                        string uploaded=deleting?"":await UploadOutstandingPictures(id,pictures);
-                        string savedNote=deleting?"":(noteEditor.Html==originalNoteEditorHtml?originalNoteHtml:await PersistProgressEditorImages(id,noteEditor.Html));
+                        bool textChanged=OutstandingEditorText(OutstandingTextHtml(input.Text))!=originalText;
+                        bool noteChanged=!SameProgressEditorContent(noteEditor.Html,originalNoteEditorHtml);
+                        bool priorityChanged=priority.SelectedIndex!=originalPriority;
                         var current=ReadShared(await ReadHistory(id));var existing=current.Items.FirstOrDefault(item=>item.Id==(editingId??draftId));
                         if(editingId!=null && existing==null)throw new Exception("这条事项已被移动或移除；输入已保留，请重新读取后添加。");
-                        if(existing!=null && (existing.Html!=originalHtml || (existing.NoteHtml??"")!=(originalNoteHtml??"")))throw new Exception("这条事项或备注已在其他窗口更新。请保留输入并重新打开，避免覆盖修改。");
+                        if(existing!=null){
+                            bool sameText=OutstandingEditorText(existing.Html)==originalText,sameNote=SameProgressEditorContent(existing.NoteHtml,originalNoteHtml),sameImages=ProgressEditorImageKeys(existing.Html).SequenceEqual(ProgressEditorImageKeys(originalHtml),StringComparer.Ordinal),samePriority=existing.Priority==originalPriority;
+                            if(deleting && (!sameText || !sameNote || !sameImages || !samePriority || existing.Done!=originalDone || existing.CompletedAt!=originalCompletedAt || existing.ReminderAt!=originalReminderAt))throw new Exception("这条事项本身已在其他窗口修改。输入已保留，请重新读取后再删除。");
+                            if(textChanged && !sameText && OutstandingEditorText(existing.Html)!=OutstandingEditorText(OutstandingTextHtml(input.Text)))throw new Exception("这条事项的名称已在其他窗口修改。输入已保留，请重新读取后合并。");
+                            if(noteChanged && !sameNote && !SameProgressEditorContent(existing.NoteHtml,noteEditor.Html))throw new Exception("这条事项的备注已在其他窗口修改。输入已保留，请重新读取后合并。");
+                            if(priorityChanged && !samePriority && existing.Priority!=priority.SelectedIndex)throw new Exception("这条事项的优先级已在其他窗口修改。输入已保留，请重新读取后合并。");
+                            if(removeExistingImages && !sameImages && ProgressEditorImageKeys(existing.Html).Count>0)throw new Exception("这条事项的图片已在其他窗口修改。输入已保留，请重新读取后合并。");
+                        }
                         if(deleting)current.Items.Remove(existing);
                         else{
-                            string body=input.Text==originalText?originalHtml:"<p>"+WebUtility.HtmlEncode(input.Text.Trim()).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>"+String.Join("",Regex.Matches(originalHtml,@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
+                            string latestHtml=existing==null?originalHtml:existing.Html??"";
+                            string body=textChanged?OutstandingTextHtml(input.Text)+OutstandingImagesHtml(latestHtml):latestHtml;
                             if(removeExistingImages)body=Regex.Replace(body,@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
-                            if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body+uploaded,NoteHtml=savedNote,Priority=priority.SelectedIndex});else{existing.Html=body+uploaded;existing.NoteHtml=savedNote;existing.Priority=priority.SelectedIndex;}
+                            string uploaded=await UploadOutstandingPictures(id,pictures);body+=uploaded;
+                            string savedNote=existing==null?originalNoteHtml:existing.NoteHtml??"";
+                            if(noteChanged)savedNote=await PersistProgressEditorImages(id,noteEditor.Html);
+                            if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body,NoteHtml=savedNote,Priority=priority.SelectedIndex});else{existing.Html=body;existing.NoteHtml=savedNote;if(priorityChanged)existing.Priority=priority.SelectedIndex;}
                         }
                         await WriteShared(id,current);DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();await edit(null);feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。备注和图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;
                     }catch(Exception e){feedback.Text=e.Message;recover.Visible=editingId!=null;return false;}
