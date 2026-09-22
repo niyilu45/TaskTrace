@@ -48,6 +48,14 @@
 			<div v-if="updateStore.state.error">
 				<dt>检测结果</dt><dd class="has-text-danger">
 					{{ updateStore.state.error }}
+					<a
+						class="manual-download-link"
+						:href="updateStore.state.release_url || releaseDownloadUrl"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						打开 GitHub Releases 手动下载
+					</a>
 				</dd>
 			</div>
 			<div v-else>
@@ -94,6 +102,7 @@ const intervalMinutes = ref(60)
 const loading = ref(true)
 const saving = ref(false)
 const showUpdateModal = ref(false)
+const releaseDownloadUrl = 'https://github.com/niyilu45/TaskTrace/releases'
 
 onMounted(async () => {
 	try {
@@ -187,5 +196,10 @@ function displayDate(value?: string) {
 	background: var(--grey-100);
 	border-radius: $radius;
 	padding: .75rem;
+}
+
+.manual-download-link {
+	display: block;
+	margin-block-start: .5rem;
 }
 </style>

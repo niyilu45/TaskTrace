@@ -15,6 +15,7 @@ using System.Windows.Forms;
 internal sealed partial class FloatingWindow {
     const string UpdateArchiveName = "TaskTrace-local-windows-x64.zip";
     const string UpdateChecksumName = "SHA256SUMS.txt";
+    const string UpdateReleasesUrl = "https://github.com/niyilu45/TaskTrace/releases";
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 2000 };
     bool updateBusy;
     DateTime lastAutomaticUpdateCheck = DateTime.MinValue;
@@ -111,11 +112,25 @@ internal sealed partial class FloatingWindow {
             if(interactive) await ShowInteractiveUpdateResult(state);
         } catch(Exception e) {
             WriteUpdateState(new Dictionary<string,object> {
-                {"current_version", CurrentPackageVersion()}, {"checked_at", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)}, {"status", "error"}, {"available", false}, {"notify", false}, {"error", FriendlyUpdateError(e)}
+                {"current_version", CurrentPackageVersion()}, {"checked_at", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)}, {"status", "error"}, {"available", false}, {"notify", false}, {"error", FriendlyUpdateError(e)}, {"release_url", UpdateReleasesUrl}
             });
             lastAutomaticUpdateCheck = DateTime.UtcNow;
-            if(interactive) MessageBox.Show(FriendlyUpdateError(e), "TaskTrace · 检查更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if(interactive) ShowUpdateCheckFailure(FriendlyUpdateError(e));
         } finally { updateBusy = false; }
+    }
+
+    void ShowUpdateCheckFailure(string error) {
+        using(var dialog=DpiDialog(new Form {Text="TaskTrace · 检查更新失败",Size=new System.Drawing.Size(620,300),MinimumSize=new System.Drawing.Size(500,260),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+            var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=4};
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
+            var details=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text=error,AccessibleName="检查更新失败原因"};
+            var hint=new Label {Dock=DockStyle.Fill,Text="自动检查失败时，可以从下面的 GitHub Releases 页面手动下载免安装包：",TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
+            var address=new TextBox {Dock=DockStyle.Fill,ReadOnly=true,BackColor=System.Drawing.SystemColors.Window,Text=UpdateReleasesUrl,AccessibleName="TaskTrace 手动下载网址"};
+            var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
+            var close=new Button {Text="关闭",AutoSize=true,DialogResult=DialogResult.Cancel};var open=new Button {Text="打开下载页面",AutoSize=true};
+            open.Click+=delegate{try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(UpdateReleasesUrl){UseShellExecute=true});}catch(Exception e){MessageBox.Show("无法打开浏览器，请复制下载网址。\r\n\r\n"+e.Message,"TaskTrace · 打开下载页面失败",MessageBoxButtons.OK,MessageBoxIcon.Warning);}};
+            actions.Controls.Add(close);actions.Controls.Add(open);layout.Controls.Add(details);layout.Controls.Add(hint);layout.Controls.Add(address);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=open;dialog.CancelButton=close;dialog.ShowDialog(this);
+        }
     }
 
     async Task ShowInteractiveUpdateResult(Dictionary<string,object> state) {
