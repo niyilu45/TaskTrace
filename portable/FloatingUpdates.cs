@@ -162,7 +162,7 @@ internal sealed partial class FloatingWindow {
             var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
             var close=new Button {Text="关闭",AutoSize=true,DialogResult=DialogResult.Cancel};var open=new Button {Text="打开下载页面",AutoSize=true};
             open.Click+=delegate{try{System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(UpdateReleasesUrl){UseShellExecute=true});}catch(Exception e){MessageBox.Show("无法打开浏览器，请复制下载网址。\r\n\r\n"+e.Message,"TaskTrace · 打开下载页面失败",MessageBoxButtons.OK,MessageBoxIcon.Warning);}};
-            actions.Controls.Add(close);actions.Controls.Add(open);layout.Controls.Add(details);layout.Controls.Add(hint);layout.Controls.Add(address);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=open;dialog.CancelButton=close;dialog.ShowDialog(this);
+            actions.Controls.Add(close);actions.Controls.Add(open);layout.Controls.Add(details);layout.Controls.Add(hint);layout.Controls.Add(address);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=open;dialog.CancelButton=close;dialog.ShowDialog(Form.ActiveForm??this);
         }
     }
 
@@ -194,7 +194,7 @@ internal sealed partial class FloatingWindow {
             var install=new Button{Text="开始更新",AutoSize=true,DialogResult=DialogResult.Yes};var later=new Button{Text="暂不更新",AutoSize=true,DialogResult=DialogResult.No};
             bool expanded=false;toggle.Click+=delegate{expanded=!expanded;layout.RowStyles[3].Height=expanded?150:0;toggle.Text=expanded?"收起版本改动":"查看版本改动";dialog.Height=expanded?480:330;};
             actions.Controls.Add(install);actions.Controls.Add(later);layout.Controls.Add(heading);layout.Controls.Add(range);layout.Controls.Add(toggle);layout.Controls.Add(changes);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=install;dialog.CancelButton=later;
-            return dialog.ShowDialog(this)==DialogResult.Yes;
+            return dialog.ShowDialog(Form.ActiveForm??this)==DialogResult.Yes;
         }
     }
 
@@ -257,7 +257,7 @@ internal sealed partial class FloatingWindow {
                     } catch(Exception e) { failure = e; }
                     finally { progress.Finish(); }
                 };
-                progress.ShowDialog(this);
+                progress.ShowDialog(Form.ActiveForm??this);
                 if(failure != null) throw failure;
                 if(!completed) {
                     TryDelete(temporaryArchive);
