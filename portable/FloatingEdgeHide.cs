@@ -2,6 +2,7 @@
 using System;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 internal sealed partial class FloatingWindow {
@@ -52,7 +53,39 @@ internal sealed partial class FloatingWindow {
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct EdgeFrameRect { internal int Left, Top, Right, Bottom; }
+    [DllImport("dwmapi.dll")]
+    static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out EdgeFrameRect value, int size);
+
+    Padding EdgeFrameInsets() {
+        if(FormBorderStyle==FormBorderStyle.None || !IsHandleCreated)return Padding.Empty;
+        try {
+            EdgeFrameRect frame;
+            // Win11 resize borders extend beyond the visible frame, especially at high DPI.
+            if(DwmGetWindowAttribute(Handle,9,out frame,Marshal.SizeOf(typeof(EdgeFrameRect)))==0 && frame.Right>frame.Left && frame.Bottom>frame.Top) {
+                var outer=Bounds;
+                return new Padding(Math.Max(0,frame.Left-outer.Left),Math.Max(0,frame.Top-outer.Top),Math.Max(0,outer.Right-frame.Right),Math.Max(0,outer.Bottom-frame.Bottom));
+            }
+        } catch(DllNotFoundException) { } catch(EntryPointNotFoundException) { }
+        return Padding.Empty;
+    }
+
+    static Rectangle VisibleEdgeBounds(Rectangle bounds, Padding frame) {
+        return new Rectangle(bounds.Left+frame.Left,bounds.Top+frame.Top,Math.Max(1,bounds.Width-frame.Horizontal),Math.Max(1,bounds.Height-frame.Vertical));
+    }
+
     EdgeDock TouchedEdge(Rectangle bounds, Rectangle area) {
+        return TouchedFrameEdge(bounds,area,EdgeFrameInsets());
+    }
+
+    static EdgeDock TouchedFrameEdge(Rectangle bounds, Rectangle area, Padding frame) {
+        var edge=TouchedVisibleEdge(VisibleEdgeBounds(bounds,frame),area);
+        // Saved outer bounds can be clamped to the work area when the app restarts.
+        return edge==EdgeDock.None?TouchedVisibleEdge(bounds,area):edge;
+    }
+
+    static EdgeDock TouchedVisibleEdge(Rectangle bounds, Rectangle area) {
         int left = Math.Abs(bounds.Left - area.Left), right = Math.Abs(bounds.Right - area.Right);
         int top = Math.Abs(bounds.Top - area.Top), bottom = Math.Abs(bounds.Bottom - area.Bottom);
         int nearest = Math.Min(Math.Min(left, right), Math.Min(top, bottom));
@@ -64,10 +97,14 @@ internal sealed partial class FloatingWindow {
     }
 
     Rectangle AlignBoundsToEdge(Rectangle bounds, Rectangle area, EdgeDock edge) {
-        if(edge == EdgeDock.Left)bounds.X = area.Left;
-        else if(edge == EdgeDock.Right)bounds.X = area.Right - bounds.Width;
-        else if(edge == EdgeDock.Top)bounds.Y = area.Top;
-        else if(edge == EdgeDock.Bottom)bounds.Y = area.Bottom - bounds.Height;
+        return AlignBoundsToEdge(bounds,area,edge,EdgeFrameInsets());
+    }
+
+    static Rectangle AlignBoundsToEdge(Rectangle bounds, Rectangle area, EdgeDock edge, Padding frame) {
+        if(edge == EdgeDock.Left)bounds.X = area.Left-frame.Left;
+        else if(edge == EdgeDock.Right)bounds.X = area.Right - bounds.Width+frame.Right;
+        else if(edge == EdgeDock.Top)bounds.Y = area.Top-frame.Top;
+        else if(edge == EdgeDock.Bottom)bounds.Y = area.Bottom - bounds.Height+frame.Bottom;
         if(edge == EdgeDock.Left || edge == EdgeDock.Right)
             bounds.Y = Math.Max(area.Top, Math.Min(bounds.Y, area.Bottom - bounds.Height));
         else if(edge == EdgeDock.Top || edge == EdgeDock.Bottom)
@@ -118,23 +155,32 @@ internal sealed partial class FloatingWindow {
         var area = Screen.FromRectangle(bounds).WorkingArea;
         var edge = TouchedEdge(bounds, area);
         if(edge == EdgeDock.None) { edgeDock = EdgeDock.None; edgePointerLeftUtc = DateTime.MinValue; return; }
-        SyncFullBoundsToSimpleEdge(bounds, area, edge);
-        edgeRestoreBounds = bounds;
-        edgeWorkingArea = area;
-        edgeDock = edge;
-        HideDockedWindow();
+        ArmEdgeHideAfterLayoutChange(edge,area);
+        edgePointerLeftUtc = DateTime.MinValue;
     }
 
     void HideDockedWindow() {
         if(edgeDock == EdgeDock.None || edgeRestoreBounds.IsEmpty || closing || IsDisposed)return;
-        var hidden = edgeRestoreBounds;
-        if(edgeDock == EdgeDock.Left)hidden.X = edgeWorkingArea.Left - hidden.Width + EdgeRevealStrip;
-        else if(edgeDock == EdgeDock.Right)hidden.X = edgeWorkingArea.Right - EdgeRevealStrip;
-        else if(edgeDock == EdgeDock.Top)hidden.Y = edgeWorkingArea.Top - hidden.Height + EdgeRevealStrip;
-        else hidden.Y = edgeWorkingArea.Bottom - EdgeRevealStrip;
+        var hidden = HiddenEdgeBounds(edgeRestoreBounds,edgeWorkingArea,edgeDock,EdgeFrameInsets());
         edgeHidden = true;
         edgePointerLeftUtc = DateTime.MinValue;
         Bounds = hidden;
+    }
+
+    static Rectangle HiddenEdgeBounds(Rectangle bounds, Rectangle area, EdgeDock edge, Padding frame) {
+        if(edge==EdgeDock.Left)bounds.X=area.Left-bounds.Width+EdgeRevealStrip+frame.Right;
+        else if(edge==EdgeDock.Right)bounds.X=area.Right-EdgeRevealStrip-frame.Left;
+        else if(edge==EdgeDock.Top)bounds.Y=area.Top-bounds.Height+EdgeRevealStrip+frame.Bottom;
+        else if(edge==EdgeDock.Bottom)bounds.Y=area.Bottom-EdgeRevealStrip-frame.Top;
+        return bounds;
+    }
+
+    bool EdgeHideInteractionActive() {
+        if(!Enabled || dragging || AutoRefreshInteractionActive() || OwnedForms.Any(form=>form.Visible))return true;
+        if(projects.DroppedDown || entryPriority.DroppedDown)return true;
+        // Clicking a task or a toolbar button leaves focus in the full window. That alone
+        // must not pin it open after the pointer leaves; focused text entry still stays open.
+        return entry.ContainsFocus || search.ContainsFocus;
     }
 
     Rectangle EdgeTriggerBounds() {
@@ -149,17 +195,25 @@ internal sealed partial class FloatingWindow {
         return Rectangle.Empty;
     }
 
+    bool CanPollEdgeHide() {
+        return edgeHideEnabled && edgeDock!=EdgeDock.None && !closing && !IsDisposed && Visible && WindowState==FormWindowState.Normal && !edgeSizing;
+    }
+
     void PollEdgeHide() {
-        if(!edgeHideEnabled || edgeDock == EdgeDock.None || closing || IsDisposed || !Visible || WindowState != FormWindowState.Normal || edgeSizing)return;
-        var pointer = Cursor.Position;
+        if(!CanPollEdgeHide())return;
+        PollEdgeHide(Cursor.Position,DateTime.UtcNow,!edgeHidden && EdgeHideInteractionActive());
+    }
+
+    void PollEdgeHide(Point pointer, DateTime now, bool interactionActive) {
+        if(!CanPollEdgeHide())return;
         if(edgeHidden) {
             if(EdgeTriggerBounds().Contains(pointer))RestoreFromEdge(false);
             return;
         }
-        bool interacting = Bounds.Contains(pointer) || ContainsFocus || Control.MouseButtons != MouseButtons.None || AutoRefreshInteractionActive();
+        bool interacting = Bounds.Contains(pointer) || interactionActive;
         if(interacting) { edgePointerLeftUtc = DateTime.MinValue; return; }
-        if(edgePointerLeftUtc == DateTime.MinValue) { edgePointerLeftUtc = DateTime.UtcNow; return; }
-        if((DateTime.UtcNow - edgePointerLeftUtc).TotalMilliseconds >= 500)HideDockedWindow();
+        if(edgePointerLeftUtc == DateTime.MinValue) { edgePointerLeftUtc = now; return; }
+        if((now - edgePointerLeftUtc).TotalMilliseconds >= 500)HideDockedWindow();
     }
 
     void RestoreFromEdge(bool clearDock) {
@@ -199,7 +253,9 @@ internal sealed partial class FloatingWindow {
             edgeHideEnabled = true;
             Bounds = new Rectangle(area.Left, area.Top + Math.Min(80, Math.Max(0, area.Height - Height)), Width, Height);
             TryHideAtTouchedEdge();
-            if(!edgeHidden || edgeDock != EdgeDock.Left || Bounds.Right != area.Left + EdgeRevealStrip)throw new Exception("Edge hide did not move a docked window outside the working area");
+            var outside=new Point(Bounds.Right+50,Bounds.Bottom+50);var now=DateTime.UtcNow;
+            PollEdgeHide(outside,now,false);PollEdgeHide(outside,now.AddSeconds(1),false);
+            if(!edgeHidden || edgeDock != EdgeDock.Left || VisibleEdgeBounds(Bounds,EdgeFrameInsets()).Right != area.Left + EdgeRevealStrip)throw new Exception("Edge hide did not move a docked window outside the working area");
             var trigger = EdgeTriggerBounds();
             if(trigger.Width != EdgeTriggerThickness || !trigger.Contains(new Point(area.Left, edgeRestoreBounds.Top)))throw new Exception("Edge restore trigger does not match the hidden window segment");
             Cursor.Position = new Point(trigger.Left + trigger.Width / 2, trigger.Top + trigger.Height / 2);
@@ -209,7 +265,7 @@ internal sealed partial class FloatingWindow {
             var preferredEdge = TouchedEdge(Bounds, area);
             Bounds = new Rectangle(Bounds.Left, Bounds.Top, Math.Max(160, Width / 2), Height);
             ArmEdgeHideAfterLayoutChange(preferredEdge, area);
-            if(edgeHidden || edgeDock != EdgeDock.Right || Bounds.Right != area.Right)throw new Exception("Edge hide was not re-armed after a layout size change");
+            if(edgeHidden || edgeDock != EdgeDock.Right || VisibleEdgeBounds(Bounds,EdgeFrameInsets()).Right != area.Right)throw new Exception("Edge hide was not re-armed after a layout size change");
             ResetFloatingWindowPosition();
             var centered = Bounds;
             if(Math.Abs((centered.Left + centered.Width / 2) - (area.Left + area.Width / 2)) > 1 || Math.Abs((centered.Top + centered.Height / 2) - (area.Top + area.Height / 2)) > 1)throw new Exception("Reset window position did not center the floating window");
