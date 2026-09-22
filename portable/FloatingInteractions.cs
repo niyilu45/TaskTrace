@@ -389,8 +389,8 @@ internal sealed partial class FloatingWindow {
                 var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
                 var mode=new Label{Text="遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项内容说明"};
                 var input=new TextBox{Dock=DockStyle.Fill,Multiline=true,ScrollBars=ScrollBars.Vertical,AccessibleName="遗留事项内容",AccessibleDescription="遗留事项内容"};
-                var noteMode=new Label{Text="备注 · 仅在编辑窗口显示；图片直接嵌入正文，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="遗留事项备注说明"};
-                var noteEditor=new ProgressHtmlEditor{Dock=DockStyle.Fill,AccessibleName="遗留事项备注，图片直接嵌入正文"};
+                var noteMode=new Label{Text="备注 · 仅在编辑窗口显示；双击图片查看大图，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="遗留事项备注说明"};
+                var noteEditor=new ProgressHtmlEditor{Dock=DockStyle.Fill,AccessibleName="遗留事项备注，图片直接嵌入正文，双击查看大图"};
                 var priority=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="遗留事项优先级"};InitializePriorityChoice(priority,defaultPriority);
                 var priorityRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};priorityRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));priorityRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,115));
                 priorityRow.Controls.Add(new Label{Text="优先级（0 最高，9 最低）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项优先级说明"},0,0);priorityRow.Controls.Add(priority,1,0);
@@ -399,6 +399,8 @@ internal sealed partial class FloatingWindow {
                 var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
+                int noteImageDoubleClicks=0;
+                noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,restoredDraftDirty=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
@@ -488,6 +490,7 @@ internal sealed partial class FloatingWindow {
                         using(var noteBitmap=new Bitmap(36,24))using(var noteStream=new MemoryStream()){using(var canvas=Graphics.FromImage(noteBitmap))canvas.Clear(Color.CornflowerBlue);noteBitmap.Save(noteStream,System.Drawing.Imaging.ImageFormat.Png);noteEditor.InsertImage(noteStream.ToArray());}
                         using(var noteBitmap=new Bitmap(30,22))using(var noteStream=new MemoryStream()){using(var canvas=Graphics.FromImage(noteBitmap))canvas.Clear(Color.Goldenrod);noteBitmap.Save(noteStream,System.Drawing.Imaging.ImageFormat.Png);noteEditor.InsertImage(noteStream.ToArray());}
                         if(noteEditor.ImageCount!=2)throw new Exception("Multiple note images were not retained in the editor");
+                        if(!noteEditor.SimulateFirstImageDoubleClickForTest())throw new Exception("Outstanding note image did not expose double-click preview");await Task.Delay(80);if(noteImageDoubleClicks==0)throw new Exception("Outstanding note image double-click did not open the preview");
                         renderPreviews();await write(false);
                         if(shared.Items.Count!=count+1 || shared.Items.Last().Priority!=4 || Regex.Matches(shared.Items.Last().Html,@"<img\b").Count!=1 || !Plain(shared.Items.Last().NoteHtml).Contains("备注图片验收") || Regex.Matches(shared.Items.Last().NoteHtml,@"<img\b").Count!=2)throw new Exception("Outstanding editor note, image create or priority failed: "+feedback.Text);
                         loading=true;list.SelectedIndex=list.Items.Count-1;loading=false;await edit(shared.Items.Last());input.Text="编辑器修改验收";noteEditor.Html=noteEditor.Html.Replace("备注图片验收","备注修改验收");priority.SelectedIndex=2;

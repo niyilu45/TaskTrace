@@ -521,7 +521,7 @@ internal sealed partial class FloatingWindow : Form {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
-                var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，选中后可按退格或 Delete 删除"};
+                var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，双击查看大图，选中后可按退格或 Delete 删除"};
                 var collaboratorGroup=new GroupBox {Text="其他协作人员当天进展",Dock=DockStyle.Fill,Visible=false,Padding=new Padding(8)};
                 var collaboratorProgress=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=SystemColors.Window,AccessibleName="其他协作人员在所选日期的进展"};collaboratorGroup.Controls.Add(collaboratorProgress);
                 var sharedButton=new Button {Text="遗留事项 · 所有日期共享",Dock=DockStyle.Fill};
@@ -543,7 +543,9 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(day,0,0);layout.Controls.Add(new Label {Text="当天进展与更正 · 图片直接嵌入正文，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,1);layout.Controls.Add(progress,0,2);layout.Controls.Add(collaboratorGroup,0,3);layout.Controls.Add(referenceGroup,0,4);layout.Controls.Add(navigationRow,0,5);layout.Controls.Add(actionRow,0,6);layout.Controls.Add(feedback,0,7);dialog.Controls.Add(layout);
+                layout.Controls.Add(day,0,0);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,1);layout.Controls.Add(progress,0,2);layout.Controls.Add(collaboratorGroup,0,3);layout.Controls.Add(referenceGroup,0,4);layout.Controls.Add(navigationRow,0,5);layout.Controls.Add(actionRow,0,6);layout.Controls.Add(feedback,0,7);dialog.Controls.Add(layout);
+                int inlineImageDoubleClicks=0;
+                progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false;
                 Action renderImages=delegate { };
@@ -667,6 +669,7 @@ internal sealed partial class FloatingWindow : Form {
                         if(Regex.IsMatch(originalBody,@"<img\b",RegexOptions.IgnoreCase) && progress.ImageCount==0)throw new Exception("Saved progress images were not embedded in the editor");
                         byte[] previewBytes;using(var previewBitmap=new Bitmap(64,40))using(var previewStream=new MemoryStream()){using(var canvas=Graphics.FromImage(previewBitmap))canvas.Clear(Color.CornflowerBlue);previewBitmap.Save(previewStream,System.Drawing.Imaging.ImageFormat.Png);previewBytes=previewStream.ToArray();}
                         int imageCountBefore=progress.ImageCount;progress.InsertImage(previewBytes);if(progress.ImageCount!=imageCountBefore+1)throw new Exception("Pasted progress image was not embedded in the editor");
+                        if(!progress.SimulateFirstImageDoubleClickForTest())throw new Exception("Progress image did not expose double-click preview");await Task.Delay(80);if(inlineImageDoubleClicks==0)throw new Exception("Progress image double-click did not open the preview");
                         using(var imageBitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(imageBitmap,new Rectangle(Point.Empty,dialog.Size));imageBitmap.Save(Path.Combine(data,"floating-progress-inline-images-test.png"));}
                         await ShowImagePreview(new GalleryImage{Bytes=previewBytes,Caption="每日进展内嵌图片验收"},dialog,true);
                         await ShowProgressHistory(id,taskTitle,history,dialog,true);

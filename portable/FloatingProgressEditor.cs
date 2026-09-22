@@ -9,17 +9,35 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+
+[ComVisible(true)]
+public sealed class ProgressHtmlEditorBridge {
+    internal Action<string,string> ImageDoubleClicked;
+    public void OpenImage(string source,string retainedSource) {
+        var callback=ImageDoubleClicked;if(callback!=null)callback(source??"",retainedSource??"");
+    }
+}
+
+internal sealed class ProgressEditorImageEventArgs : EventArgs {
+    public readonly string Source,RetainedSource;
+    public ProgressEditorImageEventArgs(string source,string retainedSource) {Source=source??"";RetainedSource=retainedSource??"";}
+}
 
 internal sealed class ProgressHtmlEditor : UserControl {
     readonly WebBrowser browser = new WebBrowser { Dock = DockStyle.Fill, AllowWebBrowserDrop = false, IsWebBrowserContextMenuEnabled = false, WebBrowserShortcutsEnabled = true, ScriptErrorsSuppressed = true };
+    readonly ProgressHtmlEditorBridge bridge = new ProgressHtmlEditorBridge();
     string pendingHtml = "";
     string observedHtml = "";
     int changeVersion;
+    int imageDoubleClickCount;
     bool ready, changing, readOnly;
     public event EventHandler HtmlChanged;
+    public event EventHandler<ProgressEditorImageEventArgs> ImageDoubleClicked;
 
     public ProgressHtmlEditor() {
+        bridge.ImageDoubleClicked=QueueImageDoubleClick;browser.ObjectForScripting=bridge;
         Controls.Add(browser);
         browser.DocumentCompleted += delegate {
             if(browser.Document == null || browser.Document.GetElementById("progress-editor") == null) return;
@@ -28,7 +46,15 @@ internal sealed class ProgressHtmlEditor : UserControl {
             ApplyHtml();
             SetReadOnly(readOnly);
         };
-        browser.DocumentText = "<!doctype html><html><head><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var e=document.getElementById('progress-editor');e.focus();var selection=window.getSelection(),range;if(selection&&selection.rangeCount&&e.contains(selection.anchorNode)){range=selection.getRangeAt(0);}else{range=document.createRange();range.selectNodeContents(e);range.collapse(false);}range.deleteContents();var image=document.createElement('img'),after=document.createTextNode(taskTraceCaret);image.src=src;range.insertNode(after);range.insertNode(image);ensureTaskTraceImageCarets();range.setStartAfter(after);range.collapse(true);selection.removeAllRanges();selection.addRange(range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\"></div></body></html>";
+        browser.DocumentText = "<!doctype html><html><head><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceOpenImage(e){e=e||window.event;var image=e.srcElement||e.target;if(!image||String(image.tagName).toLowerCase()!=='img')return true;window.external.OpenImage(image.src||'',image.getAttribute('data-tasktrace-src')||'');if(e.preventDefault)e.preventDefault();e.returnValue=false;return false;}function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var e=document.getElementById('progress-editor');e.focus();var selection=window.getSelection(),range;if(selection&&selection.rangeCount&&e.contains(selection.anchorNode)){range=selection.getRangeAt(0);}else{range=document.createRange();range.selectNodeContents(e);range.collapse(false);}range.deleteContents();var image=document.createElement('img'),after=document.createTextNode(taskTraceCaret);image.src=src;range.insertNode(after);range.insertNode(image);ensureTaskTraceImageCarets();range.setStartAfter(after);range.collapse(true);selection.removeAllRanges();selection.addRange(range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>";
+    }
+
+    void QueueImageDoubleClick(string source,string retainedSource) {
+        if(IsDisposed || !IsHandleCreated)return;
+        BeginInvoke(new Action(delegate {
+            if(IsDisposed)return;imageDoubleClickCount++;var handler=ImageDoubleClicked;
+            if(handler!=null)handler(this,new ProgressEditorImageEventArgs(source,retainedSource));
+        }));
     }
 
     static string CleanHtml(string value) {
@@ -76,6 +102,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
 
     public int ImageCount { get { return Regex.Matches(Html ?? "", @"<img\b", RegexOptions.IgnoreCase).Count; } }
     public int ChangeVersion { get { return changeVersion; } }
+    internal int ImageDoubleClickCountForTest { get { return imageDoubleClickCount; } }
 
     public void InsertImage(byte[] bytes) {
         if(bytes == null || bytes.Length == 0 || !ready || browser.Document == null) return;
@@ -97,9 +124,29 @@ internal sealed class ProgressHtmlEditor : UserControl {
         }
         browser.Focus();
     }
+
+    internal bool SimulateFirstImageDoubleClickForTest() {
+        if(!ready || browser.Document==null)return false;
+        try{return Convert.ToBoolean(browser.Document.InvokeScript("taskTraceTestOpenFirstImage"));}catch{return false;}
+    }
 }
 
 internal sealed partial class FloatingWindow {
+    GalleryImage ProgressEditorGalleryImage(ProgressEditorImageEventArgs image,string caption) {
+        foreach(string raw in new[]{image.RetainedSource,image.Source}.Where(value=>!String.IsNullOrWhiteSpace(value)).Distinct()) {
+            string path=AttachmentPath(raw);if(path!=null)return new GalleryImage{Source=path,Caption=caption};
+            var dataImage=Regex.Match(raw,@"^data:image/(?:png|jpe?g|gif|bmp);base64,(?<data>[A-Za-z0-9+/=\s]+)$",RegexOptions.IgnoreCase);
+            if(dataImage.Success)try{return new GalleryImage{Bytes=Convert.FromBase64String(Regex.Replace(dataImage.Groups["data"].Value,@"\s","")),Caption=caption};}catch{}
+        }
+        return null;
+    }
+
+    Task ShowProgressEditorImage(ProgressEditorImageEventArgs image,Form owner,string caption) {
+        var galleryImage=ProgressEditorGalleryImage(image,caption);
+        if(galleryImage==null)throw new Exception("图片无法读取，请保存其他内容后重试。");
+        return ShowImagePreview(galleryImage,owner);
+    }
+
     async Task<string> PrepareProgressEditorHtml(long taskId,string html) {
         string safe=ProgressSnapshotHtml(html??"",taskId);var output=new StringBuilder();int cursor=0;
         foreach(Match image in Regex.Matches(safe,@"<img\b[^>]*>",RegexOptions.IgnoreCase)) {
