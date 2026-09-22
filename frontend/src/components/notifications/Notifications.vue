@@ -187,6 +187,8 @@
 
 <script lang="ts" setup>
 import {computed, onMounted, onUnmounted, ref, watch} from 'vue'
+import equal from 'fast-deep-equal'
+import {useVisiblePolling} from '@/composables/useVisiblePolling'
 import {useRouter, isNavigationFailure, NavigationFailureType, type RouteLocationRaw} from 'vue-router'
 
 import NotificationService from '@/services/notification'
@@ -235,19 +237,18 @@ const notifications = computed(() => {
 const userInfo = computed(() => authStore.info)
 
 let unsubscribeWs: (() => void) | null = null
-let pollInterval: ReturnType<typeof setInterval> | null = null
-let updatePollInterval: ReturnType<typeof setInterval> | null = null
+let activeRead: Promise<void> | undefined
+let notificationsRevision = 0
+let disposed = false
 
 const POLL_INTERVAL = 10000
+const {refresh: refreshNotifications} = useVisiblePolling(loadNotifications, POLL_INTERVAL, {immediate: false, enabled: () => !wsConnected.value, catchUpOnResume: true})
+useVisiblePolling(() => updateStore.refresh(), 15_000, {enabled: () => isLocalBuild && updateStore.supported})
 
-onMounted(async () => {
+onMounted(() => {
 	// Initial load via REST - wrapped in try/catch so the rest of setup
 	// (click handler, WS subscription, polling) still runs if this fails
-	try {
-		await loadNotifications()
-	} catch (e) {
-		console.warn('Failed to load initial notifications:', e)
-	}
+	void refreshNotifications(true).catch(e => console.warn('Failed to load initial notifications:', e))
 
 	document.addEventListener('click', hidePopup)
 
@@ -258,30 +259,26 @@ onMounted(async () => {
 			// Avoid duplicates if the same notification was already loaded via REST
 			const exists = allNotifications.value.some(n => n.id === notification.id)
 			if (!exists) {
+				notificationsRevision++
 				allNotifications.value = [notification, ...allNotifications.value]
 			}
 		}
 	})
 
-	// Fallback polling when WebSocket is not available
-	startPollingFallback()
-	try { await updateStore.refresh() } catch { /* Updates are available only in the local portable build. */ }
-	updatePollInterval = setInterval(() => updateStore.refresh().catch(() => undefined), 15_000)
 })
 
 // Reload notifications when WebSocket disconnects to catch any events
 // that may have been missed during the disconnect window
 watch(wsConnected, (isConnected, wasConnected) => {
-	if (wasConnected && !isConnected) {
-		loadNotifications().catch(e => console.warn('Failed to reload notifications after WS disconnect:', e))
+	if (wasConnected && !isConnected && !document.hidden) {
+		refreshNotifications(true).catch(e => console.warn('Failed to reload notifications after WS disconnect:', e))
 	}
 })
 
 onUnmounted(() => {
 	document.removeEventListener('click', hidePopup)
 	unsubscribeWs?.()
-	stopPollingFallback()
-	if (updatePollInterval) clearInterval(updatePollInterval)
+	disposed = true
 })
 
 function openUpdateDetails() {
@@ -373,24 +370,23 @@ function displayReleaseDate(value?: string) {
 	return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
 
-function startPollingFallback() {
-	pollInterval = setInterval(async () => {
-		if (!wsConnected.value && document.visibilityState === 'visible') {
-			await loadNotifications()
-		}
-	}, POLL_INTERVAL)
-}
-
-function stopPollingFallback() {
-	if (pollInterval) {
-		clearInterval(pollInterval)
-		pollInterval = null
-	}
-}
-
-async function loadNotifications() {
+function loadNotifications(): Promise<void> {
+	if (activeRead) return activeRead
 	const notificationService = new NotificationService()
-	allNotifications.value = await notificationService.getAll()
+	const operation = (async () => {
+		while (!disposed) {
+			const version = notificationsRevision
+			const next = await notificationService.getAll()
+			if (disposed) return
+			// A websocket event can arrive while the initial history is being read.
+			// Fetch one current snapshot instead of permanently losing the older unread items.
+			if (version !== notificationsRevision) continue
+			if (!equal(allNotifications.value, next)) allNotifications.value = next
+			return
+		}
+	})().finally(() => { if (activeRead === operation) activeRead = undefined })
+	activeRead = operation
+	return operation
 }
 
 function hidePopup(e) {
@@ -430,10 +426,14 @@ function to(n: INotification, index: number) {
 			router.go(0)
 		}
 
+		notificationsRevision++
 		n.read = true
 		if (allNotifications.value[index]) {
 			const notificationService = new NotificationService()
-			Object.assign(allNotifications.value[index], await notificationService.update(n))
+			const saved = await notificationService.update(n)
+			notificationsRevision++
+			const current = allNotifications.value.find(item => item.id === n.id)
+			if (current) Object.assign(current, saved)
 		}
 
 		showNotifications.value = false
@@ -441,22 +441,26 @@ function to(n: INotification, index: number) {
 }
 
 async function markAllRead() {
+	notificationsRevision++
 	const notificationService = new NotificationService()
 	await Promise.all([
 		notifications.value.some(n => n.readAt === null) ? notificationService.markAllRead() : Promise.resolve(),
 		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
 	])
+	notificationsRevision++
 	success({message: t('notification.markAllReadSuccess')})
 
 	notifications.value.forEach(n => n.readAt = new Date())
 }
 
 async function clearAll() {
+	notificationsRevision++
 	const notificationService = new NotificationService()
 	await Promise.all([
 		notifications.value.length ? notificationService.delete(new NotificationModel({})) : Promise.resolve(),
 		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
 	])
+	notificationsRevision++
 	success({message: t('notification.clearAllSuccess')})
 	allNotifications.value = []
 }

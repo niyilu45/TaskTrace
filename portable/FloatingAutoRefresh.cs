@@ -21,7 +21,7 @@ internal sealed partial class FloatingWindow {
     bool autoRefreshDatabaseVersionKnown,autoRefreshDatabaseFailed;
     DateTime autoRefreshDatabaseRetryAfterUtc;
     string autoRefreshDatabaseError="";
-    DateTime teamSyncAfterUtc=DateTime.MinValue;
+    readonly System.Windows.Forms.Timer teamSyncTimer=new System.Windows.Forms.Timer {Interval=15000};
     bool teamSyncRunning;
 
     [DllImport("winsqlite3.dll",EntryPoint="sqlite3_open_v2",ExactSpelling=true,CallingConvention=CallingConvention.Cdecl)]
@@ -55,6 +55,8 @@ internal sealed partial class FloatingWindow {
         PollAutoRefreshFiles();
         timer.Interval=1000;
         timer.Tick+=AutoRefreshTimerTick;
+        teamSyncTimer.Tick+=TeamSyncTimerTick;
+        if(!selfTest){teamSyncTimer.Start();Shown+=TeamSyncTimerTick;}
         Disposed+=delegate {DisposeAutoRefresh();};
     }
 
@@ -63,15 +65,20 @@ internal sealed partial class FloatingWindow {
         try {
             if(DateTime.UtcNow>=completedHideRefreshAfterUtc && Visible && !collapsed && !busy && !rendering && !dragging && !AutoRefreshInteractionActive())
                 await LoadTasks(true);
-            if(!teamSyncRunning && DateTime.UtcNow>=teamSyncAfterUtc) {
-                teamSyncRunning=true;teamSyncAfterUtc=DateTime.UtcNow.AddSeconds(15);
-                try {await Api("POST","/tasktrace/team/sync",null);}
-                catch {teamSyncAfterUtc=DateTime.UtcNow.AddSeconds(15);}
-                finally {teamSyncRunning=false;}
-            }
+
             await ProcessAutoRefresh();
         }
         catch {DeferAutoRefreshFailure();}
+    }
+
+    async void TeamSyncTimerTick(object sender,EventArgs e) {
+        // Editors pause the view-refresh timer, not collaboration. Slow LAN reads must
+        // not hold up local task refresh, and an in-flight sync must never overlap itself.
+        if(selfTest || closing || IsDisposed || teamSyncRunning)return;
+        teamSyncRunning=true;
+        try {await Api("POST","/tasktrace/team/sync",null);}
+        catch { }
+        finally {teamSyncRunning=false;}
     }
 
     static bool IsAutoRefreshDataFile(string name) {
@@ -248,6 +255,7 @@ internal sealed partial class FloatingWindow {
             autoRefreshDisposed=true;watcher=autoRefreshWatcher;autoRefreshWatcher=null;CloseAutoRefreshDatabase();
         }
         timer.Tick-=AutoRefreshTimerTick;
+        Shown-=TeamSyncTimerTick;teamSyncTimer.Stop();teamSyncTimer.Tick-=TeamSyncTimerTick;teamSyncTimer.Dispose();
         if(watcher!=null)try {watcher.Dispose();}catch { }
     }
 

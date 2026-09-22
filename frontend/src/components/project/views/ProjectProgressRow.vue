@@ -117,6 +117,7 @@
 			<SubtaskOutstandingSummary
 				v-if="descendants?.length"
 				:tasks="descendants"
+				:refresh-revision="refreshRevision"
 				@edit="$emit('edit', $event)"
 			/>
 		</td>
@@ -169,10 +170,12 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, onBeforeUnmount, watch} from 'vue'
+import {ref, computed, onBeforeUnmount, watch, inject} from 'vue'
+import equal from 'fast-deep-equal'
 import {useIntersectionObserver} from '@vueuse/core'
-import {taskCommentsList, type TaskComment} from '@/client/generated'
-import {queueProgressRead, type ProgressTask} from '@/helpers/projectProgress'
+import type {TaskComment} from '@/client/generated'
+import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
+import {type ProgressTask} from '@/helpers/projectProgress'
 import {sharedOutstanding} from '@/helpers/sharedOutstanding'
 import {finalProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
@@ -183,19 +186,22 @@ import {useAuthStore} from '@/stores/auth'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 import TaskCollaborationMembers from '@/components/tasks/partials/TaskCollaborationMembers.vue'
-const props = withDefaults(defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean, anchor?: boolean}>(), {
+const props = withDefaults(defineProps<{task: ProgressTask, depth: number, hasChildren?: boolean, expanded?: boolean, descendants?: ProgressTask[], progressDays?: number, showCollaboration?: boolean, anchor?: boolean, refreshRevision?: number}>(), {
 	hasChildren: false,
 	expanded: false,
 	descendants: () => [],
 	progressDays: 0,
 	showCollaboration: true,
 	anchor: true,
+	refreshRevision: 0,
 })
 defineEmits<{toggle: [], edit: [taskId: number]}>()
 const element = ref<HTMLElement>()
 const authStore = useAuthStore()
 const teamStore = useTasktraceTeamStore()
 const history = ref<TaskComment[]>([])
+const sharedProgressHistory = inject(projectProgressHistoryKey, null)
+const progressHistory = sharedProgressHistory || createProjectProgressHistory()
 const allNotes = computed(() => finalProgressNotes(history.value))
 const progressBacklinkMap = computed(() => progressBacklinks(history.value))
 const limitedNotes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
@@ -227,28 +233,30 @@ const loading = ref(false)
 const error = ref('')
 let disposed = false
 let requested = false
+let loadVersion = 0
 async function load() {
-	if (loading.value || disposed) return
+	if (disposed) return
+	const version = ++loadVersion
 	loading.value = true; error.value = ''
 	try {
-		const all: TaskComment[] = []
-		for (let page = 1; ; page++) {
-			const result = await queueProgressRead(() => disposed ? Promise.reject(new Error('disposed')) : taskCommentsList({path: {task: props.task.id}, query: {page, per_page: 100, order_by: 'desc'}}))
-			if (disposed) return
-			const items = result.data.items || []
-			all.push(...items)
-			if (page >= (result.data.total_pages || 1) || !items.length) break
-		}
-		history.value = all
-	} catch { if (!disposed) error.value = '进展读取失败，请重试。' }
-	finally { if (!disposed) loading.value = false }
+		const all = props.task.comment_count === 0 ? [] : await progressHistory.read(props.task.id)
+		if (!disposed && version === loadVersion && !equal(history.value, all)) history.value = all
+	} catch (failure) { if (!disposed && version === loadVersion && !isProgressReadCancelled(failure)) error.value = '进展读取失败，请重试。' }
+	finally { if (!disposed && version === loadVersion) loading.value = false }
 }
+watch(() => [props.task.id, props.refreshRevision], () => {
+	if (!sharedProgressHistory) progressHistory.clear()
+	if (requested) void load()
+})
 useIntersectionObserver(element, ([entry]) => {
 	if (!entry?.isIntersecting || requested) return
 	requested = true
 	if (props.task.comment_count !== 0) void load()
 }, {rootMargin: '200px'})
-onBeforeUnmount(() => { disposed = true })
+onBeforeUnmount(() => {
+	disposed = true
+	if (!sharedProgressHistory) progressHistory.clear()
+})
 </script>
 
 <style scoped lang="scss">

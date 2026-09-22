@@ -1,5 +1,6 @@
 import {defineStore} from 'pinia'
 import {computed, ref} from 'vue'
+import equal from 'fast-deep-equal'
 
 import {
 	tasksTeamShare,
@@ -35,6 +36,10 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const loaded = ref(false)
 	const directoryProfiles = ref<Record<string, TaskTraceTeamMemberCandidate>>({})
 	let activeRead: Promise<TaskTraceTeamStatus> | null = null
+	let activeSync: Promise<TaskTraceTeamStatus> | null = null
+	const mutations = new Set<Promise<TaskTraceTeamStatus>>()
+	let lastReadAt = -Infinity
+	const profileRetryAfter = new Map<string, number>()
 	let pending = 0
 	let requestSequence = 0
 	let appliedSequence = 0
@@ -44,7 +49,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		if (sequence < appliedSequence) return status.value
 		appliedSequence = sequence
 		if (next) {
-			status.value = next
+			if (!equal(status.value, next)) status.value = next
+			lastReadAt = Date.now()
 			rememberMemberProfiles((next.profiles ?? []).map(profile => ({
 				username: profile.username || '',
 				account_name: profile.account_name || profile.username || '',
@@ -57,26 +63,38 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return status.value
 	}
 
-	async function run(request: () => Promise<{data: TaskTraceTeamStatus}>, deduplicate = false) {
-		if (deduplicate && activeRead) return activeRead
+	async function run(request: () => Promise<{data: TaskTraceTeamStatus}>, kind: 'read' | 'sync' | 'write' = 'write'): Promise<TaskTraceTeamStatus> {
+		// A status read started during a write must see the completed mutation.
+		if (kind === 'read' && mutations.size) {
+			await Promise.allSettled([...mutations])
+			return run(request, kind)
+		}
+		if (kind === 'read' && activeRead) return activeRead
+		if (kind === 'sync' && activeSync) return activeSync
+		if (kind !== 'read') { lastReadAt = -Infinity; activeRead = null }
 		const sequence = ++requestSequence
 		pending++
 		loading.value = true
-		const operation = request().then(result => apply(result.data, sequence)).finally(() => {
+		const operation = Promise.resolve().then(request).then(result => apply(result.data, sequence)).finally(() => {
+			mutations.delete(operation)
 			pending--
 			loading.value = pending > 0
 			if (activeRead === operation) activeRead = null
+			if (activeSync === operation) activeSync = null
 		})
-		if (deduplicate) activeRead = operation
+		if (kind !== 'read') mutations.add(operation)
+		if (kind === 'read') activeRead = operation
+		if (kind === 'sync') activeSync = operation
 		return operation
 	}
 
-	async function refresh() {
-		return run(() => tasktraceTeamStatus(), true)
+	async function refresh(force = false) {
+		if (!force && loaded.value && Date.now() - lastReadAt < 2000 && pending === 0) return status.value
+		return run(() => tasktraceTeamStatus(), 'read')
 	}
 
 	async function sync() {
-		return run(() => tasktraceTeamSync(), true)
+		return run(() => tasktraceTeamSync(), 'sync')
 	}
 
 	async function share(taskId: number, members: string[]) {
@@ -121,12 +139,14 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 
 	function rememberMemberProfiles(candidates: TaskTraceTeamMemberCandidate[]) {
 		const next = {...directoryProfiles.value}
+		let changed = false
 		for (const candidate of candidates) {
 			const key = teamMemberKey(candidate.account_name || candidate.username || candidate.email)
 			if (!key) continue
-			next[key] = mergeTeamMemberCandidates([next[key]].filter(Boolean) as TaskTraceTeamMemberCandidate[], [candidate])[0]
+			const merged = mergeTeamMemberCandidates([next[key]].filter(Boolean) as TaskTraceTeamMemberCandidate[], [candidate])[0]
+			if (!equal(next[key], merged)) { next[key] = merged; changed = true }
 		}
-		directoryProfiles.value = next
+		if (changed) directoryProfiles.value = next
 	}
 
 	function memberProfile(username: string): TaskTraceTeamMemberCandidate {
@@ -190,7 +210,10 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			const key = teamMemberKey(member)
 			const profile = directoryProfiles.value[key]
 			const hasDirectoryIdentity = Boolean(profile?.email || (profile?.display_name && teamMemberKey(profile.display_name) !== key))
-			if (!key || hydratingProfiles.has(key) || hasDirectoryIdentity) continue
+			if (!key || hydratingProfiles.has(key) || hasDirectoryIdentity || Date.now() < (profileRetryAfter.get(key) ?? 0)) continue
+			// Failed/background directory lookups must not restart on every status poll.
+			// Explicit user searches still run immediately.
+			profileRetryAfter.set(key, Date.now() + 300_000)
 			hydratingProfiles.add(key)
 			void searchMembers(key)
 				.then(async candidates => {

@@ -1,5 +1,6 @@
 import {computed, ref} from 'vue'
 import {defineStore} from 'pinia'
+import equal from 'fast-deep-equal'
 import {
 	tasktraceUpdateCheck,
 	tasktraceUpdateIgnore,
@@ -20,13 +21,39 @@ export const useTasktraceUpdateStore = defineStore('tasktrace-update', () => {
 	const shouldNotify = computed(() => Boolean(available.value && state.value.notify))
 	const checking = ref(false)
 	const supported = ref(true)
+	let activeRead: Promise<void> | undefined
+	let revision = 0
+	const mutations = new Set<Promise<unknown>>()
 
-	async function refresh() {
+	function refresh(): Promise<void> {
+		if (mutations.size) return Promise.allSettled([...mutations]).then(() => refresh())
+		if (activeRead) return activeRead
+		const version = revision
+		const operation = readStatus(version).finally(() => { if (activeRead === operation) activeRead = undefined })
+		activeRead = operation
+		return operation
+	}
+
+	function mutate<T>(write: () => Promise<T>): Promise<T> {
+		revision++
+		activeRead = undefined
+		const operation = Promise.resolve().then(write).finally(() => {
+			mutations.delete(operation)
+			revision++
+			activeRead = undefined
+		})
+		mutations.add(operation)
+		return operation
+	}
+
+	async function readStatus(version: number) {
 		try {
 			const {data} = await tasktraceUpdateStatus()
-			state.value = data
+			if (version !== revision) return
+			if (!equal(state.value, data)) state.value = data
 			supported.value = true
 		} catch (cause) {
+			if (version !== revision) return
 			const status = (cause as {status?: number}).status
 			if (status === 404) supported.value = false
 			else throw cause
@@ -53,7 +80,7 @@ export const useTasktraceUpdateStore = defineStore('tasktrace-update', () => {
 		checking.value = true
 		const previousCheck = state.value.checked_at
 		try {
-			await tasktraceUpdateCheck()
+			await mutate(() => tasktraceUpdateCheck())
 			let observedCurrentCheck = false
 			for (let attempt = 0; attempt < 90; attempt++) {
 				await wait(500)
@@ -72,16 +99,20 @@ export const useTasktraceUpdateStore = defineStore('tasktrace-update', () => {
 	async function ignore() {
 		const version = state.value.latest_version
 		if (!version) return
-		const {data} = await tasktraceUpdateIgnore({body: {version}})
-		state.value = data
-		settings.value.ignored_version = version
+		await mutate(async () => {
+			const {data} = await tasktraceUpdateIgnore({body: {version}})
+			state.value = data
+			settings.value.ignored_version = version
+		})
 	}
 
 	async function install() {
 		const version = state.value.latest_version
 		if (!version) return
-		await tasktraceUpdateInstall({body: {version}})
-		state.value = {...state.value, status: 'downloading'}
+		await mutate(async () => {
+			await tasktraceUpdateInstall({body: {version}})
+			state.value = {...state.value, status: 'downloading'}
+		})
 	}
 
 	return {state, settings, available, shouldNotify, checking, supported, refresh, loadSettings, saveSettings, checkNow, ignore, install}

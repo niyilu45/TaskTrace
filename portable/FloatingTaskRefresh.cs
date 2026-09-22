@@ -114,10 +114,40 @@ internal sealed partial class FloatingWindow {
         }
         return visible;
     }
-    async Task ReadSharedLists(IEnumerable<long> ids,Dictionary<long,SharedList> destination) {
+    static async Task<List<Dictionary<string,object>>> ReadOutstandingPages(long id,string query,Func<string,Task<Dictionary<string,object>>> read,Func<bool> current) {
+        var notes=new List<Dictionary<string,object>>();
+        for(int pageIndex=1;;pageIndex++) {
+            if(current!=null && !current())return null;
+            var result=await read("/tasks/"+id+"/comments?per_page=100&page="+pageIndex+"&order_by=desc"+query);
+            if(current!=null && !current())return null;
+            int count=0;foreach(Dictionary<string,object> note in (IEnumerable)result["items"]){notes.Add(note);count++;}
+            if(count==0 || pageIndex>=Convert.ToInt32(result["total_pages"]))return notes;
+        }
+    }
+    static async Task<SharedList> ReadOutstandingList(long id,long commentCount,Func<string,Task<Dictionary<string,object>>> read,Func<bool> current) {
+        if(current!=null && !current())return null;
+        if(commentCount==0)return new SharedList();
+        // Small/legacy tasks keep their one-page read. Large histories only need the current
+        // shared list, never the daily progress, attachments or audit comments around it.
+        if(commentCount>100) {
+            var matching=await ReadOutstandingPages(id,"&q="+Uri.EscapeDataString("<h3>"+SharedHeading+"</h3>"),read,current);
+            if(matching==null)return null;
+            if(matching.Any(note=>Convert.ToString(note["comment"]).Contains("<h3>"+SharedHeading+"</h3>")))return ReadShared(matching);
+        }
+        var history=await ReadOutstandingPages(id,"",read,current);
+        return history==null?null:ReadShared(history);
+    }
+    async Task ReadSharedLists(IEnumerable<long> ids,Dictionary<long,SharedList> destination,Dictionary<long,Dictionary<string,object>> all,Func<bool> current) {
         using(var gate=new SemaphoreSlim(4,4)) {
             await Task.WhenAll(ids.Distinct().Select(async delegate(long id){
-                await gate.WaitAsync();try{destination[id]=ReadShared(await ReadHistory(id));}finally{gate.Release();}
+                if(!current())return;
+                await gate.WaitAsync();
+                try {
+                    if(!current())return;
+                    object count;long commentCount=all[id].TryGetValue("comment_count",out count)&&count!=null?Convert.ToInt64(count):-1;
+                    var shared=await ReadOutstandingList(id,commentCount,path=>Api("GET",path,null),current);
+                    if(shared!=null && current())destination[id]=shared;
+                }finally{gate.Release();}
             }));
         }
     }
@@ -125,14 +155,17 @@ internal sealed partial class FloatingWindow {
         DateTime nextCompletionRefreshUtc=DateTime.MaxValue;
         int version=++taskLoadVersion;
         string context=TaskViewContext();
+        Func<bool> current=delegate{return TaskLoadCurrent(version,context,background);};
         var oldProject=projects.SelectedItem as Project;
         long requestedProject=oldProject==null?preferredProjectId:oldProject.Id;
         var projectList=(projectsDirty || background)?await FetchProjects():projects.Items.Cast<Project>().ToList();
+        if(!current())return false;
         var project=projectList.FirstOrDefault(item=>item.Id==requestedProject)??projectList.FirstOrDefault();
         var all=new Dictionary<long,Dictionary<string,object>>();
         var ordered=new List<long>();
         if(project!=null)for(int fetchPage=1;;fetchPage++) {
-            var result=await Api("GET","/projects/"+project.Id+"/tasks?per_page=100&page="+fetchPage+"&sort_by=id&order_by=desc",null);
+            var result=await Api("GET","/projects/"+project.Id+"/tasks?per_page=100&page="+fetchPage+"&sort_by=id&order_by=desc&expand=comment_count",null);
+            if(!current())return false;
             int count=0;
             foreach(Dictionary<string,object> item in (IEnumerable)result["items"]) {
                 long id=Convert.ToInt64(item["id"]);count++;
@@ -168,7 +201,7 @@ internal sealed partial class FloatingWindow {
             if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
             candidates.Add(id);
         }
-        if(PriorityFilterActive && visiblePriorities.Count>0){await ReadSharedLists(candidates,sharedLists);foreach(var pair in sharedLists)reminderSharedLists[pair.Key]=pair.Value;}
+        if(PriorityFilterActive && visiblePriorities.Count>0){await ReadSharedLists(candidates,sharedLists,all,current);foreach(var pair in sharedLists)reminderSharedLists[pair.Key]=pair.Value;}
         if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
         if(!TaskLoadCurrent(version,context,background))return false;
         foreach(long id in candidates) {
@@ -192,7 +225,7 @@ internal sealed partial class FloatingWindow {
         }
         NumberTasks(roots,all);
         int groupCount=roots.Count;
-        await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists);
+        await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists,all,current);
         if(!TaskLoadCurrent(version,context,background))return false;
         foreach(var pair in sharedLists)if(!reminderSharedLists.ContainsKey(pair.Key))reminderSharedLists[pair.Key]=pair.Value;
         UpdateReminderTargets(all,reminderSharedLists);

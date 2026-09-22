@@ -349,6 +349,7 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useRouter} from 'vue-router'
+import {useVisiblePolling} from '@/composables/useVisiblePolling'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import Modal from '@/components/misc/Modal.vue'
@@ -385,7 +386,7 @@ const memberImportResult = ref<TaskTraceTeamMemberImportResult | null>(null)
 const pendingRemoval = ref('')
 const removingMember = ref('')
 const memberActionError = ref('')
-let timer: ReturnType<typeof setInterval> | null = null
+useVisiblePolling(poll, 15_000, {enabled: () => activityHost.value})
 
 const knownMembers = computed(() => [
 	teamStore.status.username || '',
@@ -408,25 +409,21 @@ watch(() => teamStore.status.conflicts, conflicts => {
 
 async function poll() {
 	try {
-		await teamStore.sync()
+		// The desktop process owns LAN synchronization. Browser tabs only read its result.
+		await teamStore.refresh()
 	} catch {
 		// An unavailable LAN share is reflected in each binding. Silent retry keeps offline work uninterrupted.
 	}
 }
 
-onMounted(async () => {
-	try { await teamStore.refresh() } catch { /* Offline team repositories retry on the next poll. */ }
+onMounted(() => {
+	if (!activityHost.value) void teamStore.refresh().catch(() => undefined)
 	if (activityHost.value) {
-		window.addEventListener('focus', poll)
 		window.addEventListener('tasktrace-team-activity-open', openActivity)
-		void poll()
-		timer = setInterval(poll, 15_000)
 	}
 })
 
 onBeforeUnmount(() => {
-	if (timer) clearInterval(timer)
-	window.removeEventListener('focus', poll)
 	window.removeEventListener('tasktrace-team-activity-open', openActivity)
 })
 

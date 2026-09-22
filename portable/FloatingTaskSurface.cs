@@ -14,7 +14,10 @@ internal sealed class TaskTreeSurface : Panel {
         internal string PrefixText="",PriorityText="",TitleText="",AncestorText="";
         internal Font Font;
         internal int AnchorY;
-        internal bool HasChildren,Done,Wrap;
+        internal bool HasChildren,Done,Wrap,ImageAvailable,ReminderAvailable;
+        internal string SourceText="",CurrentText="";
+        internal int Level;
+        internal Color SourceColor;
     }
     static readonly Regex Parts=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+)(?<priority>\[P[0-9]\])(?:\s+)?(?<title>.*)$");
     readonly List<Row> rows=new List<Row>();
@@ -26,6 +29,11 @@ internal sealed class TaskTreeSurface : Panel {
     bool dragging;
     bool correctingScroll;
     int verticalWheelRemainder,horizontalWheelRemainder;
+    Size layoutClientSize;
+    int layoutIndent,layoutItemHeight;
+    bool layoutFlat,layoutWrap;
+    TreeNode layoutSelection;
+    internal long LayoutBuildCount,LayoutReuseCount;
 
     internal Action<TreeNode> CompletionClicked,PriorityClicked,ImageClicked,ReminderClicked,NodeDoubleClicked;
     internal Action<TreeNode,Point> HoverChanged;
@@ -109,12 +117,34 @@ internal sealed class TaskTreeSurface : Panel {
     static bool HasReminder(TreeNode node) {return FloatingWindow.NodeHasReminder(node);}
     static int Advance(string text,Font font) {return TextRenderer.MeasureText((text??"")+"x",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Width-TextRenderer.MeasureText("x",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Width;}
     int BaseHeight(Font font) {return Math.Max(model==null?28:model.ItemHeight,TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+8);}
+    bool ReuseLayout(List<TreeNode> visible,bool preserveScroll) {
+        if(layoutClientSize!=ClientSize || layoutIndent!=model.Indent || layoutItemHeight!=model.ItemHeight ||
+            layoutFlat!=model.SingleLinePaths || layoutWrap!=model.WrapNodeText || rows.Count!=visible.Count)return false;
+        bool repaint=layoutSelection!=model.SelectedNode;
+        for(int index=0;index<visible.Count;index++) {
+            var node=visible[index];var row=rows[index];var leaf=node.Tag as FloatingWindow.OutstandingLeaf;
+            if(row.Node!=node || row.SourceText!=node.Text || row.Level!=node.Level || row.CurrentText!=model.CurrentTaskText(node) ||
+                !row.Font.Equals(model.DisplayFont(node)) || row.HasChildren!=node.Nodes.Cast<TreeNode>().Any(Real) ||
+                row.Done!=(leaf==null?node.Checked:leaf.Done) || row.ImageAvailable!=HasImage(node) || row.ReminderAvailable!=HasReminder(node))return false;
+            if(row.SourceColor!=node.ForeColor){row.SourceColor=node.ForeColor;repaint=true;}
+        }
+        if(!preserveScroll && AutoScrollPosition!=Point.Empty){AutoScrollPosition=Point.Empty;repaint=true;}
+        layoutSelection=model.SelectedNode;LayoutReuseCount++;
+        if(repaint)Invalidate();
+        return true;
+    }
     internal void Rebuild(bool preserveScroll) {
         if(model==null || IsDisposed)return;
+        var visible=VisibleNodes(model.Nodes).ToList();
+        // Selection, focus and unchanged background reads invalidate the native model too.
+        // Reuse the measured rows unless content, geometry or display options actually changed.
+        if(ReuseLayout(visible,preserveScroll))return;
+        LayoutBuildCount++;
         Point scroll=preserveScroll?new Point(-AutoScrollPosition.X,-AutoScrollPosition.Y):Point.Empty;
-        rows.Clear();int y=2,maxRight=Math.Max(0,ClientSize.Width-2);bool flat=model.SingleLinePaths;
-        int viewport=Math.Max(80,ClientSize.Width-(flat?4:SystemInformation.VerticalScrollBarWidth+6));
-        foreach(var node in VisibleNodes(model.Nodes)) {
+        Size measuredClientSize=ClientSize;
+        rows.Clear();int y=2,maxRight=Math.Max(0,measuredClientSize.Width-2);bool flat=model.SingleLinePaths;
+        int viewport=Math.Max(80,measuredClientSize.Width-(flat?4:SystemInformation.VerticalScrollBarWidth+6));
+        foreach(var node in visible) {
             Font font=model.DisplayFont(node);string current=model.CurrentTaskText(node),ancestors=model.AncestorTaskText(node);var match=Parts.Match(current);
             string prefix=match.Success?match.Groups["prefix"].Value:"";string priority=match.Success?match.Groups["priority"].Value:"";string title=match.Success?match.Groups["title"].Value:current;
             int level=flat?0:node.Level;int left=4+level*Math.Max(18,model.Indent);int expandLeft=left;int checkLeft=left+14;int textLeft=checkLeft+20;
@@ -127,7 +157,7 @@ internal sealed class TaskTreeSurface : Panel {
             else titleWidth=Math.Max(1,Advance(title,font)+4);
             int textHeight=TextRenderer.MeasureText(title.Length==0?" ":title,font,new Size(titleWidth,Int32.MaxValue),TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|(wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.SingleLine)).Height;
             int height=wrap?Math.Max(baseHeight,(stacked?baseHeight:0)+textHeight+(stacked?2:8)):baseHeight;
-            var row=new Row{Node=node,Font=font,PrefixText=prefix,PriorityText=priority,TitleText=title,AncestorText=ancestors,HasChildren=node.Nodes.Cast<TreeNode>().Any(Real),Done=node.Tag is FloatingWindow.OutstandingLeaf?((FloatingWindow.OutstandingLeaf)node.Tag).Done:node.Checked,Wrap=wrap};
+            var row=new Row{Node=node,SourceText=node.Text,CurrentText=current,Level=node.Level,SourceColor=node.ForeColor,ImageAvailable=image,ReminderAvailable=reminder,Font=font,PrefixText=prefix,PriorityText=priority,TitleText=title,AncestorText=ancestors,HasChildren=node.Nodes.Cast<TreeNode>().Any(Real),Done=node.Tag is FloatingWindow.OutstandingLeaf?((FloatingWindow.OutstandingLeaf)node.Tag).Done:node.Checked,Wrap=wrap};
             row.Bounds=new Rectangle(0,y,Math.Max(viewport,titleLeft+titleWidth+6),height);row.AnchorY=y+baseHeight/2;
             row.Expand=new Rectangle(expandLeft,y+(baseHeight-12)/2,12,12);row.Check=new Rectangle(checkLeft,y+(baseHeight-16)/2,16,16);
             int lineHeight=TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+2;int textTop=y+4;int headerHeight=Math.Max(1,Math.Min(height-8,lineHeight));
@@ -144,7 +174,9 @@ internal sealed class TaskTreeSurface : Panel {
             row.Bounds.Width=Math.Max(viewport,right);maxRight=Math.Max(maxRight,right);rows.Add(row);y+=height;
         }
         AutoScrollMinSize=new Size(flat?maxRight:0,y+2);
-        AutoScrollPosition=scroll;Invalidate();
+        AutoScrollPosition=scroll;
+        layoutClientSize=measuredClientSize;layoutIndent=model.Indent;layoutItemHeight=model.ItemHeight;layoutFlat=model.SingleLinePaths;layoutWrap=model.WrapNodeText;layoutSelection=model.SelectedNode;
+        Invalidate();
     }
     static Color NodeColor(TreeNode node,Color fallback) {return node.ForeColor.IsEmpty?fallback:node.ForeColor;}
     static Rectangle OffsetRectangle(Rectangle value,Point offset) {value.Offset(offset);return value;}

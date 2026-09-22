@@ -222,7 +222,7 @@
 		</p>
 		<section
 			v-for="group in visibleGroups"
-			:key="`${revision}-${group.root.id}`"
+			:key="group.root.id"
 			class="progress-group"
 		>
 			<header :data-progress-anchor="`group-${group.root.id}`">
@@ -268,6 +268,7 @@
 					>
 						<ProjectProgressRow
 							:task="group.root"
+							:refresh-revision="revision"
 							:anchor="false"
 							:descendants="group.matching.slice(1).map(row => row.task)"
 							:depth="0"
@@ -289,6 +290,7 @@
 						v-for="row in group.visibleRows"
 						:key="row.task.id"
 						:task="row.task"
+						:refresh-revision="revision"
 						:depth="row.depth"
 						:progress-days="progressDays"
 						:has-children="parents.has(row.task.id)"
@@ -330,11 +332,13 @@
 </template>
 
 <script setup lang="ts">
-import {ref, computed, watch, onBeforeUnmount, nextTick} from 'vue'
+import {ref, computed, watch, onBeforeUnmount, nextTick, provide} from 'vue'
+import equal from 'fast-deep-equal'
 import {useRoute, useRouter} from 'vue-router'
-import {projectTasksList, taskCommentsList, type TaskComment} from '@/client/generated'
+import {projectTasksList} from '@/client/generated'
+import {createProjectProgressHistory, projectProgressHistoryKey} from '@/helpers/projectProgressHistory'
 import {onClickOutside, useElementSize, useStorage} from '@vueuse/core'
-import {visibleProgressRows, groupProgressTasks, latestProgressDate, progressTaskPeople, queueProgressRead, recentProgressTaskIds, type ProgressTask} from '@/helpers/projectProgress'
+import {visibleProgressRows, groupProgressTasks, latestProgressDate, progressTaskPeople, recentProgressTaskIds, type ProgressTask} from '@/helpers/projectProgress'
 import {sortProgressNotes} from '@/helpers/progressNotes'
 import ProjectProgressRow from './ProjectProgressRow.vue'
 import ProjectProgressTable from './ProjectProgressTable.vue'
@@ -348,6 +352,8 @@ import Icon from '@/components/misc/Icon'
 import {captureTasktraceScrollAnchor, tasktraceScrollAnchorDelta, type TasktraceScrollAnchor} from '@/helpers/tasktraceScrollAnchor'
 import {readProjectProgressCache, writeProjectProgressCache} from '@/helpers/projectProgressCache'
 const props = defineProps<{projectId: number}>()
+const progressHistory = createProjectProgressHistory()
+provide(projectProgressHistoryKey, progressHistory)
 const route = useRoute()
 const router = useRouter()
 const teamStore = useTasktraceTeamStore()
@@ -555,14 +561,8 @@ async function loadProgressActivity(sourceTasks = tasks.value) {
 	try {
 		const entries = await Promise.all(sourceTasks.map(async task => {
 			if (task.comment_count === 0) return [task.id, ''] as const
-			const history: TaskComment[] = []
-			for (let next = 1; ; next++) {
-				const result = await queueProgressRead(() => taskCommentsList({path: {task: task.id}, query: {page: next, per_page: 100, order_by: 'desc'}}))
-				if (version !== progressActivityRequestId) return [task.id, ''] as const
-				const items = result.data.items || []
-				history.push(...items)
-				if (next >= (result.data.total_pages || 1) || items.length === 0) break
-			}
+			const history = await progressHistory.read(task.id)
+			if (version !== progressActivityRequestId) return [task.id, ''] as const
 			return [task.id, latestProgressDate(sortProgressNotes(history), today)] as const
 		}))
 		if (version !== progressActivityRequestId) return
@@ -609,17 +609,29 @@ async function restoreViewAnchor(anchor: TasktraceScrollAnchor | null) {
 	if (delta === null) window.scrollTo(0, anchor.scrollY)
 	else if (delta) window.scrollBy(0, delta)
 }
+function applyTasks(collected: ProgressTask[]) {
+	const previous = new Map(tasks.value.map(task => [task.id, task]))
+	const next = [...new Map(collected.map(task => [task.id, task])).values()].map(task => {
+		const existing = previous.get(task.id)
+		return existing && equal(existing, task) ? existing : task
+	})
+	if (next.length !== tasks.value.length || next.some((task, index) => task !== tasks.value[index])) tasks.value = next
+}
 async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null} = {}) {
 	const viewAnchor = options.preserveView ? options.anchor ?? captureViewAnchor() : null
 	const version = ++requestId
 	const projectId = props.projectId
+	progressHistory.clear()
 	progressActivityRequestId++
 	progressActivityLoading.value = false
 	loading.value = true; error.value = ''
 	if (!options.preserveView) {
 		tasks.value = readProjectProgressCache(projectId)
 		page.value = 1
+		progressActivityReady.value = false
+		latestProgressDates.value = {}
 	}
+	const progressivelyDisplay = tasks.value.length === 0
 	if (isLocalBuild) void teamStore.refresh().catch(() => { /* The task list remains usable while a LAN repository is offline. */ })
 	try {
 		const collected: ProgressTask[] = []
@@ -628,14 +640,13 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 			if (version !== requestId) return
 			const items = (result.data.items || []).filter((task): task is ProgressTask => typeof task.id === 'number')
 			collected.push(...items)
-			tasks.value = [...new Map(collected.map(task => [task.id, task])).values()]
-			revision.value++
+			if (progressivelyDisplay) applyTasks(collected)
 			if (next >= (result.data.total_pages || 1) || items.length === 0) break
 		}
+		applyTasks(collected)
+		revision.value++
 		writeProjectProgressCache(projectId, tasks.value)
 		progressActivityRequestId++
-		progressActivityReady.value = false
-		latestProgressDates.value = {}
 		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value)
 	} catch { if (version === requestId) error.value = '项目读取失败，请重试。' }
 	finally {
@@ -675,7 +686,7 @@ watch(() => props.projectId, () => {
 watch(currentPersonKey, (value, previous) => {
 	if (!personSelectionDirty.value && value !== previous) selectedPersonKeys.value = value ? [value] : []
 })
-onBeforeUnmount(() => { requestId++; progressActivityRequestId++ })
+onBeforeUnmount(() => { requestId++; progressActivityRequestId++; progressHistory.clear() })
 </script>
 
 <style scoped lang="scss">

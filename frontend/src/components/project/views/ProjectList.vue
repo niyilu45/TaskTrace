@@ -23,7 +23,6 @@
 					v-model="params"
 					:view-id="viewId"
 					:project-id="projectId"
-					@update:modelValue="loadTasks()"
 				/>
 			</div>
 		</template>

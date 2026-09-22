@@ -21,6 +21,8 @@ import (
 
 var errTaskTraceTeamAdminRequired = errors.New("设置 teamData 共享读写权限需要 Windows 管理员授权")
 
+var taskTraceWindowsAccessCache taskTraceTeamAccessCache
+
 const taskTraceTeamSearchScript = `$Keyword=$env:TASKTRACE_TEAM_KEYWORD
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
@@ -209,6 +211,12 @@ func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string, quick 
 }
 
 func taskTraceTeamListWindowsAccess(root string) ([]string, error) {
+	return taskTraceWindowsAccessCache.read(root, func() ([]string, error) {
+		return taskTraceTeamReadWindowsAccess(root)
+	})
+}
+
+func taskTraceTeamReadWindowsAccess(root string) ([]string, error) {
 	output, err := taskTraceTeamPowerShell(taskTraceTeamListAccessScript, "TASKTRACE_TEAM_ROOT="+root)
 	if err != nil {
 		return nil, err
@@ -254,6 +262,7 @@ func taskTraceTeamGrantWindowsAccessWithElevation(root, member string, elevate b
 		}
 		return "", err
 	}
+	taskTraceWindowsAccessCache.invalidate(root)
 	var value struct {
 		AccountName string `json:"account_name"`
 	}
@@ -357,6 +366,7 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 	if err != nil {
 		return "", err
 	}
+	taskTraceWindowsAccessCache.invalidate(root)
 	var value struct {
 		AccountName string `json:"account_name"`
 	}
@@ -369,11 +379,17 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 func taskTraceTeamRemoveWindowsAccessWithElevation(root, member string, elevate bool) error {
 	if elevate {
 		_, err := taskTraceTeamRunWindowsAccessElevated(root, member, "remove-team-access.ps1", taskTraceTeamRemoveElevatedScript())
+		if err == nil {
+			taskTraceWindowsAccessCache.invalidate(root)
+		}
 		return err
 	}
 	_, err := taskTraceTeamPowerShell(taskTraceTeamRemoveAccessScript, "TASKTRACE_TEAM_ROOT="+root, "TASKTRACE_TEAM_MEMBER="+member)
 	if taskTraceTeamAccessNeedsElevation(err) {
 		return fmt.Errorf("%w：Windows 拒绝了共享权限修改（系统错误 5）", errTaskTraceTeamAdminRequired)
+	}
+	if err == nil {
+		taskTraceWindowsAccessCache.invalidate(root)
 	}
 	return err
 }
