@@ -439,17 +439,19 @@ func taskTraceTeamProtectOutstandingChanges(currentHTML, oldHTML, nodeID, actor 
 }
 
 func taskTraceTeamMergeAttachmentMetadata(groups ...[]TaskTraceTeamAttachment) []TaskTraceTeamAttachment {
-	byID := map[string]TaskTraceTeamAttachment{}
+	bySource := map[string]TaskTraceTeamAttachment{}
 	for _, attachments := range groups {
 		for _, attachment := range attachments {
-			byID[attachment.ID] = attachment
+			bySource[taskTraceTeamAttachmentSourceKey(attachment)] = attachment
 		}
 	}
-	result := make([]TaskTraceTeamAttachment, 0, len(byID))
-	for _, attachment := range byID {
+	result := make([]TaskTraceTeamAttachment, 0, len(bySource))
+	for _, attachment := range bySource {
 		result = append(result, attachment)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.Slice(result, func(i, j int) bool {
+		return taskTraceTeamAttachmentSourceKey(result[i]) < taskTraceTeamAttachmentSourceKey(result[j])
+	})
 	return result
 }
 
@@ -638,6 +640,11 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 	if nodeID == "" {
 		return nil, errors.New("task does not belong to this collaboration")
 	}
+	release, err := taskTraceTeamAcquireShareLock(binding)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	var manifest TaskTraceTeamManifest
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
 	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {

@@ -4,6 +4,7 @@ package models
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,23 @@ func TestTaskTraceTeamFieldMergeStillConflictsForDifferentImages(t *testing.T) {
 	require.Len(t, options, 2)
 }
 
+func TestTaskTraceTeamDescriptionUsesThreeWayConflictDetection(t *testing.T) {
+	base := TaskTraceTeamTask{NodeID: "node", Description: `<p>original<img src="/api/v1/tasks/10/attachments/20"></p>`, Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 10, SourceAttachmentID: 20}}}
+	alice := TaskTraceTeamSnapshot{Actor: "alice", Tasks: []TaskTraceTeamTask{{NodeID: "node", Description: `<p>Alice edit</p>`}}}
+	bob := TaskTraceTeamSnapshot{Actor: "bob", Tasks: []TaskTraceTeamTask{{NodeID: "node", Description: `<p>Bob edit</p>`}}}
+
+	_, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{alice, bob}, "node", "description", base.Description, "", base)
+	require.True(t, conflict)
+	require.Len(t, options, 2)
+
+	alice.Tasks[0] = TaskTraceTeamTask{NodeID: "node", Description: `<p>same content<img src="/api/v1/tasks/11/attachments/21"></p>`, Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 11, SourceAttachmentID: 21}}}
+	bob.Tasks[0] = TaskTraceTeamTask{NodeID: "node", Description: `<p>same content<img src="/api/v2/tasks/12/attachments/22"></p>`, Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 12, SourceAttachmentID: 22}}}
+	value, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{alice, bob}, "node", "description", base.Description, "", base)
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Contains(t, value, "same content")
+}
+
 func TestTaskTraceTeamCombinesComputersWithSameUsername(t *testing.T) {
 	now := time.Now().UTC()
 	older := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "one", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "old", Updated: now, Comments: []TaskTraceTeamComment{{ID: "first", Body: "one", Created: now}}}}}
@@ -113,6 +131,18 @@ func TestTaskTraceTeamCombinesComputersWithSameUsername(t *testing.T) {
 	require.Len(t, combined[0].Tasks[0].Comments, 2)
 }
 
+func TestTaskTraceTeamSameSecondMetadataTieIsDeterministic(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	one := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "a-device", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "first", Updated: now}}}
+	two := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "b-device", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "second", Updated: now}}}
+
+	for _, snapshots := range [][]TaskTraceTeamSnapshot{{one, two}, {two, one}} {
+		combined := taskTraceTeamLatestActorSnapshots(snapshots)
+		require.Len(t, combined, 1)
+		require.Equal(t, "second", combined[0].Tasks[0].Title)
+	}
+}
+
 func TestTaskTraceTeamCombinesSameAttachmentContentAcrossComputers(t *testing.T) {
 	now := time.Now().UTC()
 	one := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "one", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Updated: now, Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 1, SourceAttachmentID: 10}}}}}
@@ -121,6 +151,105 @@ func TestTaskTraceTeamCombinesSameAttachmentContentAcrossComputers(t *testing.T)
 	require.Len(t, combined, 1)
 	require.Len(t, combined[0].Tasks, 1)
 	require.Len(t, combined[0].Tasks[0].Attachments, 2, "each computer's source id is needed to rewrite its HTML to the local attachment")
+}
+
+func TestTaskTraceTeamCommentTieIsDeterministic(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	one := TaskTraceTeamComment{ID: "progress", Body: "first", Author: "alice", Created: now, Updated: now}
+	two := TaskTraceTeamComment{ID: "progress", Body: "second", Author: "alice", Created: now, Updated: now}
+	snapshotOne := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "one", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{one}}}}
+	snapshotTwo := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "two", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{two}}}}
+
+	require.NotEqual(t, taskTraceTeamCommentEventSupersedes(one, two), taskTraceTeamCommentEventSupersedes(two, one))
+	for _, snapshots := range [][]TaskTraceTeamSnapshot{{snapshotOne, snapshotTwo}, {snapshotTwo, snapshotOne}} {
+		combined := taskTraceTeamLatestActorSnapshots(snapshots)
+		require.Len(t, combined, 1)
+		require.Len(t, combined[0].Tasks[0].Comments, 1)
+		require.Equal(t, "second", combined[0].Tasks[0].Comments[0].Body)
+	}
+}
+
+func TestTaskTraceTeamMissingTaskPlanUsesEverySnapshot(t *testing.T) {
+	now := time.Now().UTC()
+	binding := &TaskTraceTeamBinding{NodeTasks: map[string]int64{"root": 1}}
+	snapshots := []TaskTraceTeamSnapshot{
+		{Actor: "alice", Tasks: []TaskTraceTeamTask{{NodeID: "root"}, {NodeID: "old-one", ParentNode: "root"}, {NodeID: "old-two", ParentNode: "root"}}},
+		{Actor: "bob", Tasks: []TaskTraceTeamTask{{NodeID: "root"}, {NodeID: "new-child", ParentNode: "root", Updated: now}}},
+	}
+	plan, err := taskTraceTeamMissingTaskPlan(binding, snapshots)
+	require.NoError(t, err)
+	require.Len(t, plan, 3)
+	nodes := []string{plan[0].NodeID, plan[1].NodeID, plan[2].NodeID}
+	require.ElementsMatch(t, []string{"old-one", "old-two", "new-child"}, nodes)
+}
+
+func TestTaskTraceTeamMissingTaskPlanRejectsInvalidHierarchyBeforeCreation(t *testing.T) {
+	binding := &TaskTraceTeamBinding{NodeTasks: map[string]int64{}}
+	_, err := taskTraceTeamMissingTaskPlan(binding, []TaskTraceTeamSnapshot{{Tasks: []TaskTraceTeamTask{{NodeID: "one", ParentNode: "two"}, {NodeID: "two", ParentNode: "one"}}}})
+	require.ErrorContains(t, err, "cycle")
+
+	_, err = taskTraceTeamMissingTaskPlan(binding, []TaskTraceTeamSnapshot{{Tasks: []TaskTraceTeamTask{{NodeID: "child", ParentNode: "missing"}}}})
+	require.ErrorContains(t, err, "missing parent")
+
+	tooDeep := TaskTraceTeamSnapshot{}
+	parent := ""
+	for i := 1; i <= MaxTaskHierarchyDepth+1; i++ {
+		node := strconv.Itoa(i)
+		tooDeep.Tasks = append(tooDeep.Tasks, TaskTraceTeamTask{NodeID: node, ParentNode: parent})
+		parent = node
+	}
+	_, err = taskTraceTeamMissingTaskPlan(binding, []TaskTraceTeamSnapshot{tooDeep})
+	require.ErrorContains(t, err, "exceeds")
+}
+
+func TestTaskTraceTeamPrunesMissingChildMappingWithoutDroppingBase(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	binding := &TaskTraceTeamBinding{
+		RootTaskID:       1,
+		NodeTasks:        map[string]int64{"root": 1, "missing": 999999},
+		Base:             map[string]TaskTraceTeamBase{"missing": {Title: "recover me"}},
+		LocalAttachments: map[string]int64{"missing:image": 123},
+	}
+
+	require.NoError(t, taskTraceTeamPruneMissingTaskMappings(s, binding))
+	require.NotContains(t, binding.NodeTasks, "missing")
+	require.NotContains(t, binding.LocalAttachments, "missing:image")
+	require.Equal(t, "recover me", binding.Base["missing"].Title, "the merge base is needed to restore remote content without inventing a deletion")
+}
+
+func TestTaskTraceTeamSnapshotKeepsMappedTaskMovedOutsideSharedRoot(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	actor := &user.User{ID: 1, Username: "user1"}
+	root := &Task{Title: "shared root", ProjectID: 1, Priority: 7}
+	detached := &Task{Title: "detached shared task", ProjectID: 1, Priority: 7}
+	require.NoError(t, root.Create(s, actor))
+	require.NoError(t, detached.Create(s, actor))
+	binding := &TaskTraceTeamBinding{
+		Repository:     t.TempDir(),
+		ShareID:        "share",
+		RootTaskID:     root.ID,
+		NodeTasks:      map[string]int64{"root": root.ID, "detached": detached.ID},
+		ResolutionAcks: map[string]string{},
+	}
+
+	snapshot, err := taskTraceTeamBuildSnapshot(s, binding, actor.Username, "device")
+	require.NoError(t, err)
+	shared := taskTraceTeamTaskMap(snapshot)
+	require.Contains(t, shared, "detached")
+	require.Empty(t, shared["detached"].ParentNode, "a personal parent outside the shared subtree must remain local")
+}
+
+func TestTaskTraceTeamRejectsMissingCollaborativeRoot(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	binding := &TaskTraceTeamBinding{RootTaskID: 999999, NodeTasks: map[string]int64{"root": 999999}}
+
+	require.ErrorContains(t, taskTraceTeamPruneMissingTaskMappings(s, binding), "root task was deleted")
 }
 
 func TestTaskTraceTeamRewritesEverySourceForSameAttachmentContent(t *testing.T) {
@@ -142,6 +271,24 @@ func TestTaskTraceTeamRewritesEverySourceForSameAttachmentContent(t *testing.T) 
 	require.NotContains(t, rewritten, "tasks/11/attachments/21")
 	require.NotContains(t, rewritten, "tasks/12/attachments/22")
 	require.Equal(t, 2, strings.Count(rewritten, "tasks/42/attachments/77"))
+}
+
+func TestTaskTraceTeamConflictResolutionRewritesRemoteImageSource(t *testing.T) {
+	binding := &TaskTraceTeamBinding{
+		Repository:       t.TempDir(),
+		ShareID:          "share",
+		NodeTasks:        map[string]int64{"node": 42},
+		LocalAttachments: map[string]int64{"node:same-content": 77},
+	}
+	snapshot := TaskTraceTeamSnapshot{
+		Schema: taskTraceTeamSchema, ShareID: "share", Actor: "alice", DeviceID: "device",
+		Tasks: []TaskTraceTeamTask{{NodeID: "node", Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 11, SourceAttachmentID: 21}}}},
+	}
+	require.NoError(t, taskTraceTeamWriteSnapshot(binding, snapshot))
+
+	value, err := taskTraceTeamLocalResolutionValue(binding, "node", `<p><img src="/api/v1/tasks/11/attachments/21"></p>`)
+	require.NoError(t, err)
+	require.Contains(t, value, "/api/v1/tasks/42/attachments/77")
 }
 
 func TestTaskTraceTeamExportKeepsDuplicateContentSourceIDs(t *testing.T) {
@@ -374,6 +521,32 @@ func TestTaskTraceTeamOutstandingUpsertCleansDuplicatesAndEmptyLists(t *testing.
 	for _, comment := range comments {
 		require.False(t, taskTraceTeamIsOutstanding(comment.Comment))
 	}
+}
+
+func TestTaskTraceTeamOutstandingResolutionKeepsOtherItems(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	actor := &user.User{ID: 1, Username: "user1"}
+	body := `<h3 data-tasktrace-comment-type="outstanding">TaskTrace outstanding list</h3><ul><li data-id="one">original</li><li data-id="two">must remain</li></ul>`
+	require.NoError(t, taskTraceTeamUpsertOutstanding(s, actor, 1, body))
+	binding := &TaskTraceTeamBinding{NodeTasks: map[string]int64{"node": 1}, Base: map[string]TaskTraceTeamBase{"node": {Outstanding: body}}}
+
+	err := taskTraceTeamApplyResolution(s, actor, binding, taskTraceTeamResolutionRecord{NodeID: "node", Field: "outstanding:one", Value: "updated"})
+	require.NoError(t, err)
+
+	var comments []*TaskComment
+	require.NoError(t, s.Where("task_id = ?", 1).Find(&comments))
+	for _, comment := range comments {
+		if !taskTraceTeamIsOutstanding(comment.Comment) {
+			continue
+		}
+		items, _ := taskTraceTeamOutstandingItems(comment.Comment)
+		require.Equal(t, "updated", items["one"])
+		require.Equal(t, "must remain", items["two"])
+		return
+	}
+	t.Fatal("canonical outstanding comment was not saved")
 }
 
 func TestTaskTraceTeamOutstandingPriorityStaysLocal(t *testing.T) {

@@ -277,6 +277,37 @@ func DispatchOnCommit(key any, event Event) {
 	queue.mu.Unlock()
 }
 
+// PendingCheckpoint returns the current queue length so callers using database
+// savepoints can later discard only events created after that savepoint.
+func PendingCheckpoint(key any) int {
+	val, ok := pendingEvents.Load(key)
+	if !ok {
+		return 0
+	}
+	queue := val.(*pendingEventQueue)
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	return len(queue.events)
+}
+
+// RollbackPendingTo discards events queued after a savepoint while preserving
+// events from earlier successful work in the same outer transaction.
+func RollbackPendingTo(key any, checkpoint int) {
+	val, ok := pendingEvents.Load(key)
+	if !ok {
+		return
+	}
+	queue := val.(*pendingEventQueue)
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+	if checkpoint < 0 {
+		checkpoint = 0
+	}
+	if checkpoint < len(queue.events) {
+		queue.events = queue.events[:checkpoint]
+	}
+}
+
 // DispatchPending dispatches all events accumulated for the given key and removes them.
 // Call this after s.Commit(). Safe to call even if no events were registered.
 // Request metadata on the context (see WithRequestMeta) is copied onto each message.

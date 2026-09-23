@@ -81,6 +81,19 @@ func TestCleanupPending(t *testing.T) {
 	assert.Equal(t, 0, CountDispatchedEvents("test.event"))
 }
 
+func TestTaskTraceTeamSavepointRollbackKeepsEarlierEvents(t *testing.T) {
+	Fake()
+	key := new(int)
+	DispatchOnCommit(key, &testEvent{})
+	checkpoint := PendingCheckpoint(key)
+	DispatchOnCommit(key, &testEvent{})
+
+	RollbackPendingTo(key, checkpoint)
+	DispatchPending(context.Background(), key)
+
+	assert.Equal(t, 1, CountDispatchedEvents("test.event"))
+}
+
 func TestDispatchPendingNoEvents(t *testing.T) {
 	Fake()
 

@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/modules/avatar"
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
@@ -303,6 +304,33 @@ func taskTraceTeamWriteJSON(path string, value interface{}) error {
 	return nil
 }
 
+func taskTraceTeamAcquireShareLock(binding *TaskTraceTeamBinding) (func(), error) {
+	path := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), ".tasktrace-write.lock")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, _ = fmt.Fprintf(file, "%d\n", time.Now().UTC().UnixNano())
+			return func() {
+				_ = file.Close()
+				_ = os.Remove(path)
+			}, nil
+		}
+		if !os.IsExist(err) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 2*time.Minute {
+			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
+				continue
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("another computer is updating this collaborative task; retry shortly")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func taskTraceTeamLoadState() (taskTraceTeamState, error) {
 	state := taskTraceTeamState{Schema: taskTraceTeamSchema, Bindings: []TaskTraceTeamBinding{}}
 	path := taskTraceTeamStatePath()
@@ -515,11 +543,20 @@ func taskTraceTeamSubtree(s *xorm.Session, root int64) ([]int64, map[int64]int64
 	ids := []int64{}
 	parents := map[int64]int64{}
 	seen := map[int64]bool{}
-	var walk func(int64) error
-	walk = func(id int64) error {
+	visiting := map[int64]bool{}
+	var walk func(int64, int) error
+	walk = func(id int64, depth int) error {
+		if visiting[id] {
+			return fmt.Errorf("task hierarchy contains a cycle at task %d", id)
+		}
 		if seen[id] {
 			return nil
 		}
+		if depth > MaxTaskHierarchyDepth {
+			return fmt.Errorf("task hierarchy exceeds %d levels at task %d", MaxTaskHierarchyDepth, id)
+		}
+		visiting[id] = true
+		defer delete(visiting, id)
 		seen[id] = true
 		ids = append(ids, id)
 		var relations []*TaskRelation
@@ -528,14 +565,22 @@ func taskTraceTeamSubtree(s *xorm.Session, root int64) ([]int64, map[int64]int64
 		}
 		sort.Slice(relations, func(i, j int) bool { return relations[i].OtherTaskID < relations[j].OtherTaskID })
 		for _, relation := range relations {
-			parents[relation.OtherTaskID] = id
-			if err := walk(relation.OtherTaskID); err != nil {
+			if _, err := GetTaskByIDSimple(s, relation.OtherTaskID); err != nil {
+				if IsErrTaskDoesNotExist(err) {
+					continue
+				}
+				return err
+			}
+			if previous := parents[relation.OtherTaskID]; previous == 0 || id < previous {
+				parents[relation.OtherTaskID] = id
+			}
+			if err := walk(relation.OtherTaskID, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	return ids, parents, walk(root)
+	return ids, parents, walk(root, 1)
 }
 
 type taskTraceTeamMarkerValue struct {
@@ -791,12 +836,36 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 }
 
 func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, actor, device string) (TaskTraceTeamSnapshot, error) {
-	ids, parents, err := taskTraceTeamSubtree(s, binding.RootTaskID)
-	if err != nil {
-		return TaskTraceTeamSnapshot{}, err
-	}
 	if binding.NodeTasks == nil {
 		binding.NodeTasks = map[string]int64{}
+	}
+	roots := []int64{binding.RootTaskID}
+	for _, taskID := range binding.NodeTasks {
+		if taskID != 0 && taskID != binding.RootTaskID {
+			roots = append(roots, taskID)
+		}
+	}
+	additionalRoots := roots[1:]
+	sort.Slice(additionalRoots, func(i, j int) bool { return additionalRoots[i] < additionalRoots[j] })
+	ids := []int64{}
+	parents := map[int64]int64{}
+	seen := map[int64]bool{}
+	for _, root := range roots {
+		subtreeIDs, subtreeParents, err := taskTraceTeamSubtree(s, root)
+		if err != nil {
+			return TaskTraceTeamSnapshot{}, err
+		}
+		for _, taskID := range subtreeIDs {
+			if !seen[taskID] {
+				seen[taskID] = true
+				ids = append(ids, taskID)
+			}
+		}
+		for child, parent := range subtreeParents {
+			if previous := parents[child]; previous == 0 || parent < previous {
+				parents[child] = parent
+			}
+		}
 	}
 	for _, taskID := range ids {
 		if taskTraceTeamNodeForTask(binding, taskID) == "" {
@@ -1008,7 +1077,15 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 	}
 	result := make([]TaskTraceTeamSnapshot, 0, len(grouped))
 	for _, devices := range grouped {
-		sort.Slice(devices, func(i, j int) bool { return devices[i].Updated.Before(devices[j].Updated) })
+		sort.Slice(devices, func(i, j int) bool {
+			if !devices[i].Updated.Equal(devices[j].Updated) {
+				return devices[i].Updated.Before(devices[j].Updated)
+			}
+			if devices[i].DeviceID != devices[j].DeviceID {
+				return devices[i].DeviceID < devices[j].DeviceID
+			}
+			return taskTraceTeamSnapshotHash(devices[i]) < taskTraceTeamSnapshotHash(devices[j])
+		})
 		combined := devices[len(devices)-1]
 		tasks := map[string]TaskTraceTeamTask{}
 		for _, device := range devices {
@@ -1042,7 +1119,12 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 			for _, comment := range comments {
 				task.Comments = append(task.Comments, comment)
 			}
-			sort.Slice(task.Comments, func(i, j int) bool { return task.Comments[i].Created.Before(task.Comments[j].Created) })
+			sort.Slice(task.Comments, func(i, j int) bool {
+				if !task.Comments[i].Created.Equal(task.Comments[j].Created) {
+					return task.Comments[i].Created.Before(task.Comments[j].Created)
+				}
+				return task.Comments[i].ID < task.Comments[j].ID
+			})
 			attachments := map[string]TaskTraceTeamAttachment{}
 			for _, attachment := range task.Attachments {
 				attachments[taskTraceTeamAttachmentSourceKey(attachment)] = attachment
@@ -1051,7 +1133,9 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 			for _, attachment := range attachments {
 				task.Attachments = append(task.Attachments, attachment)
 			}
-			sort.Slice(task.Attachments, func(i, j int) bool { return task.Attachments[i].ID < task.Attachments[j].ID })
+			sort.Slice(task.Attachments, func(i, j int) bool {
+				return taskTraceTeamAttachmentSourceKey(task.Attachments[i]) < taskTraceTeamAttachmentSourceKey(task.Attachments[j])
+			})
 			combined.Tasks = append(combined.Tasks, task)
 		}
 		sort.Slice(combined.Tasks, func(i, j int) bool { return combined.Tasks[i].NodeID < combined.Tasks[j].NodeID })
@@ -1073,8 +1157,21 @@ func taskTraceTeamTaskMap(snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTe
 // same shared comment. A deletion must win a timestamp tie; otherwise an older
 // actor snapshot can recreate a progress entry which the task owner deleted.
 func taskTraceTeamCommentEventSupersedes(candidate, current TaskTraceTeamComment) bool {
-	return candidate.Updated.After(current.Updated) ||
-		(candidate.Updated.Equal(current.Updated) && candidate.Deleted && !current.Deleted)
+	if candidate.Updated.After(current.Updated) {
+		return true
+	}
+	if !candidate.Updated.Equal(current.Updated) {
+		return false
+	}
+	if candidate.Deleted != current.Deleted {
+		return candidate.Deleted
+	}
+	// Snapshot files are discovered through filesystem iteration, whose order is
+	// not a synchronization contract. Use a stable tie-breaker so two edits with
+	// SQLite's same-second timestamp cannot alternate between sync runs.
+	candidateKey := strings.Join([]string{candidate.Body, strings.ToLower(candidate.Author), candidate.Created.UTC().Format(time.RFC3339Nano)}, "\x00")
+	currentKey := strings.Join([]string{current.Body, strings.ToLower(current.Author), current.Created.UTC().Format(time.RFC3339Nano)}, "\x00")
+	return candidateKey > currentKey
 }
 
 // taskTraceTeamReconcileLocalCommentEvents turns comments which disappeared
@@ -1156,10 +1253,18 @@ func taskTraceTeamFieldValue(task TaskTraceTeamTask, field string) string {
 	switch field {
 	case "title":
 		return task.Title
+	case "description":
+		return task.Description
 	case "done":
 		return strconv.FormatBool(task.Done)
 	case "status":
-		return string(task.Status)
+		if task.Status != "" {
+			return string(task.Status)
+		}
+		if task.Done {
+			return string(TaskStatusDone)
+		}
+		return string(TaskStatusTodo)
 	}
 	return ""
 }
@@ -1172,10 +1277,18 @@ func taskTraceTeamBaseValue(base TaskTraceTeamBase, field string) string {
 	switch field {
 	case "title":
 		return base.Title
+	case "description":
+		return base.Description
 	case "done":
 		return strconv.FormatBool(base.Done)
 	case "status":
-		return string(base.Status)
+		if base.Status != "" {
+			return string(base.Status)
+		}
+		if base.Done {
+			return string(TaskStatusDone)
+		}
+		return string(TaskStatusTodo)
 	}
 	return ""
 }
@@ -1262,7 +1375,7 @@ func taskTraceTeamCanonicalHTML(value string, attachments []TaskTraceTeamAttachm
 }
 
 func taskTraceTeamCanonicalFieldValue(task TaskTraceTeamTask, field, value string) string {
-	if strings.HasPrefix(field, "outstanding:") {
+	if field == "description" || strings.HasPrefix(field, "outstanding:") {
 		return taskTraceTeamCanonicalHTML(value, task.Attachments)
 	}
 	if field == "title" {
@@ -1348,34 +1461,72 @@ func taskTraceTeamWriteResolutions(binding *TaskTraceTeamBinding, records map[st
 	return taskTraceTeamWriteJSON(taskTraceTeamResolutionPath(binding), &records)
 }
 
+func taskTraceTeamLocalResolutionValue(binding *TaskTraceTeamBinding, nodeID, value string) (string, error) {
+	snapshots, err := taskTraceTeamReadSnapshots(binding)
+	if err != nil {
+		return "", err
+	}
+	rows := make([]struct {
+		actor string
+		task  TaskTraceTeamTask
+	}, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		for _, task := range snapshot.Tasks {
+			if task.NodeID == nodeID {
+				rows = append(rows, struct {
+					actor string
+					task  TaskTraceTeamTask
+				}{actor: snapshot.Actor, task: task})
+			}
+		}
+	}
+	return taskTraceTeamRewriteAttachments(value, binding.NodeTasks[nodeID], taskTraceTeamAllAttachments(rows), binding), nil
+}
+
 func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, record taskTraceTeamResolutionRecord) error {
 	taskID := binding.NodeTasks[record.NodeID]
 	if taskID == 0 {
 		return nil
 	}
 	base := binding.Base[record.NodeID]
+	value := record.Value
+	if record.Field == "description" || strings.HasPrefix(record.Field, "outstanding:") {
+		var err error
+		value, err = taskTraceTeamLocalResolutionValue(binding, record.NodeID, value)
+		if err != nil {
+			return err
+		}
+	}
 	switch record.Field {
 	case "title":
-		base.Title = record.Value
+		base.Title = value
+	case "description":
+		base.Description = value
 	case "done":
-		base.Done, _ = strconv.ParseBool(record.Value)
+		base.Done, _ = strconv.ParseBool(value)
+		if base.Done {
+			base.Status = TaskStatusDone
+		} else if base.Status == TaskStatusDone || base.Status == "" {
+			base.Status = TaskStatusTodo
+		}
 	case "status":
-		base.Status = TaskStatus(record.Value)
+		base.Status = TaskStatus(value)
+		base.Done = base.Status == TaskStatusDone
 	default:
 		if strings.HasPrefix(record.Field, "outstanding:") {
 			items, order := taskTraceTeamOutstandingItems(base.Outstanding)
 			id := strings.TrimPrefix(record.Field, "outstanding:")
-			if record.Value == "" {
+			if value == "" {
 				delete(items, id)
 			} else {
-				items[id] = record.Value
+				items[id] = value
 			}
 			base.Outstanding = taskTraceTeamOutstandingHTML(items, order)
 		}
 	}
-	binding.Base[record.NodeID] = base
 	if strings.HasPrefix(record.Field, "outstanding:") {
-		return taskTraceTeamUpsertOutstanding(s, a, taskID, record.Value)
+		binding.Base[record.NodeID] = base
+		return taskTraceTeamUpsertOutstanding(s, a, taskID, base.Outstanding)
 	}
 	stored, err := GetTaskByIDSimple(s, taskID)
 	if err != nil {
@@ -1388,14 +1539,24 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 			base.Status = TaskStatusTodo
 		}
 	}
-	return taskTraceTeamApplyTaskFields(s, a, taskID, base.Title, stored.Description, base.Done, base.Status)
+	if record.Field != "description" {
+		base.Description = stored.Description
+	}
+	binding.Base[record.NodeID] = base
+	return taskTraceTeamApplyTaskFields(s, a, taskID, base.Title, base.Description, base.Done, base.Status)
 }
 
 func taskTraceTeamApplyPendingResolutions(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, records map[string]taskTraceTeamResolutionRecord) error {
 	if binding.ResolutionAcks == nil {
 		binding.ResolutionAcks = map[string]string{}
 	}
-	for key, record := range records {
+	keys := make([]string, 0, len(records))
+	for key := range records {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		record := records[key]
 		if binding.ResolutionAcks[key] == record.ID {
 			continue
 		}
@@ -1537,43 +1698,157 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 	return nil
 }
 
+func taskTraceTeamTaskOrderKey(snapshot TaskTraceTeamSnapshot, task TaskTraceTeamTask) string {
+	metadata := task
+	metadata.Comments = nil
+	metadata.Attachments = nil
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return strings.Join([]string{task.NodeID, strings.ToLower(snapshot.Actor), snapshot.DeviceID}, "\x00")
+	}
+	return strings.Join([]string{strings.ToLower(snapshot.Actor), snapshot.DeviceID, string(encoded)}, "\x00")
+}
+
+// taskTraceTeamMissingTaskPlan merges every collaborator snapshot before it
+// creates anything. A single "richest" snapshot is insufficient: a member can
+// add a new child while another member still has more old nodes in their tree.
+func taskTraceTeamMissingTaskPlan(binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot) ([]TaskTraceTeamTask, error) {
+	type candidate struct {
+		task TaskTraceTeamTask
+		key  string
+	}
+	candidates := map[string]candidate{}
+	for _, snapshot := range snapshots {
+		for _, task := range snapshot.Tasks {
+			if strings.TrimSpace(task.NodeID) == "" {
+				return nil, errors.New("shared task contains an empty node id")
+			}
+			if binding.NodeTasks[task.NodeID] != 0 {
+				continue
+			}
+			key := taskTraceTeamTaskOrderKey(snapshot, task)
+			previous, exists := candidates[task.NodeID]
+			if !exists || task.Updated.After(previous.task.Updated) || (task.Updated.Equal(previous.task.Updated) && key > previous.key) {
+				candidates[task.NodeID] = candidate{task: task, key: key}
+			}
+		}
+	}
+
+	state := map[string]uint8{}
+	depth := map[string]int{}
+	plan := make([]TaskTraceTeamTask, 0, len(candidates))
+	var visit func(string) (int, error)
+	visit = func(node string) (int, error) {
+		if state[node] == 1 {
+			return 0, fmt.Errorf("shared task hierarchy contains a cycle at node %s", node)
+		}
+		if state[node] == 2 {
+			return depth[node], nil
+		}
+		entry, exists := candidates[node]
+		if !exists {
+			if binding.NodeTasks[node] != 0 {
+				return 0, nil
+			}
+			return 0, fmt.Errorf("shared task node %s refers to missing parent %s", node, node)
+		}
+		state[node] = 1
+		level := 1
+		parent := entry.task.ParentNode
+		if parent == node {
+			return 0, fmt.Errorf("shared task node %s cannot be its own parent", node)
+		}
+		if parent != "" {
+			if binding.NodeTasks[parent] != 0 {
+				level = 1
+			} else if _, ok := candidates[parent]; ok {
+				parentDepth, err := visit(parent)
+				if err != nil {
+					return 0, err
+				}
+				level = parentDepth + 1
+			} else {
+				return 0, fmt.Errorf("shared task node %s refers to missing parent %s", node, parent)
+			}
+		}
+		if level > MaxTaskHierarchyDepth {
+			return 0, fmt.Errorf("shared task hierarchy exceeds %d levels at node %s", MaxTaskHierarchyDepth, node)
+		}
+		state[node] = 2
+		depth[node] = level
+		plan = append(plan, entry.task)
+		return level, nil
+	}
+
+	nodes := make([]string, 0, len(candidates))
+	for node := range candidates {
+		nodes = append(nodes, node)
+	}
+	sort.Strings(nodes)
+	for _, node := range nodes {
+		if _, err := visit(node); err != nil {
+			return nil, err
+		}
+	}
+	return plan, nil
+}
+
+func taskTraceTeamValidateMissingTaskDepth(s *xorm.Session, binding *TaskTraceTeamBinding, plan []TaskTraceTeamTask) error {
+	planned := make(map[string]TaskTraceTeamTask, len(plan))
+	for _, task := range plan {
+		planned[task.NodeID] = task
+	}
+	for _, task := range plan {
+		chainLength := 1
+		parent := task.ParentNode
+		for parent != "" && binding.NodeTasks[parent] == 0 {
+			parentTask, ok := planned[parent]
+			if !ok {
+				return fmt.Errorf("shared task node %s refers to missing parent %s", task.NodeID, parent)
+			}
+			chainLength++
+			parent = parentTask.ParentNode
+		}
+		above := 0
+		if parent != "" {
+			var err error
+			above, err = taskHierarchySpan(s, binding.NodeTasks[parent], RelationKindParenttask, 1)
+			if err != nil {
+				return err
+			}
+		}
+		if above+chainLength > MaxTaskHierarchyDepth {
+			return fmt.Errorf("shared task hierarchy exceeds %d levels at node %s", MaxTaskHierarchyDepth, task.NodeID)
+		}
+	}
+	return nil
+}
+
 func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot) error {
 	if len(snapshots) == 0 {
 		return nil
 	}
-	var richest TaskTraceTeamSnapshot
-	for _, snapshot := range snapshots {
-		if len(snapshot.Tasks) > len(richest.Tasks) {
-			richest = snapshot
-		}
-	}
 	if binding.NodeTasks == nil {
 		binding.NodeTasks = map[string]int64{}
 	}
-	for pass := 0; pass < MaxTaskHierarchyDepth; pass++ {
-		changed := false
-		for _, shared := range richest.Tasks {
-			if binding.NodeTasks[shared.NodeID] != 0 {
-				continue
-			}
-			if shared.ParentNode != "" && binding.NodeTasks[shared.ParentNode] == 0 {
-				continue
-			}
-			task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, Priority: 7}
-			if err := task.Create(s, a); err != nil {
+	plan, err := taskTraceTeamMissingTaskPlan(binding, snapshots)
+	if err != nil {
+		return err
+	}
+	if err := taskTraceTeamValidateMissingTaskDepth(s, binding, plan); err != nil {
+		return err
+	}
+	for _, shared := range plan {
+		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, Priority: 7}
+		if err := task.Create(s, a); err != nil {
+			return err
+		}
+		binding.NodeTasks[shared.NodeID] = task.ID
+		if shared.ParentNode != "" {
+			relation := &TaskRelation{TaskID: binding.NodeTasks[shared.ParentNode], OtherTaskID: task.ID, RelationKind: RelationKindSubtask}
+			if err := relation.Create(s, a); err != nil {
 				return err
 			}
-			binding.NodeTasks[shared.NodeID] = task.ID
-			if shared.ParentNode != "" {
-				relation := &TaskRelation{TaskID: binding.NodeTasks[shared.ParentNode], OtherTaskID: task.ID, RelationKind: RelationKindSubtask}
-				if err := relation.Create(s, a); err != nil {
-					return err
-				}
-			}
-			changed = true
-		}
-		if !changed {
-			break
 		}
 	}
 	return nil
@@ -1674,8 +1949,31 @@ func taskTraceTeamValidateBinding(binding *TaskTraceTeamBinding, actor string) e
 	return errors.New("you are no longer a member of this team task")
 }
 
+func taskTraceTeamPruneMissingTaskMappings(s *xorm.Session, binding *TaskTraceTeamBinding) error {
+	for node, taskID := range binding.NodeTasks {
+		if _, err := GetTaskByIDSimple(s, taskID); err != nil {
+			if !IsErrTaskDoesNotExist(err) {
+				return err
+			}
+			if taskID == binding.RootTaskID {
+				return errors.New("the collaborative root task was deleted; undo the deletion or import the shared task again")
+			}
+			delete(binding.NodeTasks, node)
+			for key := range binding.LocalAttachments {
+				if strings.HasPrefix(key, node+":") {
+					delete(binding.LocalAttachments, key)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, actor string) error {
 	if err := taskTraceTeamValidateBinding(binding, actor); err != nil {
+		return err
+	}
+	if err := taskTraceTeamPruneMissingTaskMappings(s, binding); err != nil {
 		return err
 	}
 	if root, err := GetTaskByIDSimple(s, binding.RootTaskID); err == nil {
@@ -1757,8 +2055,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if err != nil {
 			return err
 		}
-		title, done, status, outstanding := base.Title, base.Done, base.Status, base.Outstanding
-		fields := []string{"title", "done", "status"}
+		title, description, status := base.Title, base.Description, base.Status
+		fields := []string{"title", "description", "status"}
 		outstandingItems, outstandingOrder := taskTraceTeamOutstandingItems(base.Outstanding)
 		outstandingIDs := map[string]bool{}
 		for id := range outstandingItems {
@@ -1801,8 +2099,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			switch field {
 			case "title":
 				title = value
-			case "done":
-				done, _ = strconv.ParseBool(value)
+			case "description":
+				description = value
 			case "status":
 				status = TaskStatus(value)
 			default:
@@ -1816,7 +2114,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 				}
 			}
 		}
-		outstanding = taskTraceTeamOutstandingHTML(outstandingItems, outstandingOrder)
+		outstanding := taskTraceTeamOutstandingHTML(outstandingItems, outstandingOrder)
 		localPriorities := taskTraceTeamRememberedOutstandingPriorities(binding, node)
 		if hasLocalTask {
 			for id, value := range taskTraceTeamOutstandingPriorities(localTask.Outstanding) {
@@ -1824,22 +2122,17 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, localPriorities)
-		latest := rows[0].task
-		for _, row := range rows[1:] {
-			if row.task.Updated.After(latest.Updated) {
-				latest = row.task
-			}
-		}
 		attachments := taskTraceTeamAllAttachments(rows)
-		description := taskTraceTeamRewriteAttachments(latest.Description, taskID, attachments, binding)
+		description = taskTraceTeamRewriteAttachments(description, taskID, attachments, binding)
 		outstanding = taskTraceTeamRewriteAttachments(outstanding, taskID, attachments, binding)
 		if status == "" {
-			if done {
+			if base.Done {
 				status = TaskStatusDone
 			} else {
 				status = TaskStatusTodo
 			}
 		}
+		done := status == TaskStatusDone
 		if stored.Title != title || stored.Description != description || stored.Done != done || stored.Status != status {
 			if err := taskTraceTeamApplyTaskFields(s, a, taskID, title, description, done, status); err != nil {
 				return err
@@ -1938,6 +2231,11 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 	if len(members) < 2 {
 		return nil, errors.New("at least one other team member is required")
 	}
+	release, err := taskTraceTeamAcquireShareLock(binding)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
 	var manifest TaskTraceTeamManifest
 	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
@@ -2122,13 +2420,14 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 		}
 	}
 	binding.Base = taskTraceTeamBaseFromSnapshot(owner)
-	manifest.Members = binding.Members
-	manifest.Updated = time.Now().UTC()
-	if err := taskTraceTeamWriteJSON(filepath.Join(taskTraceTeamShareDir(repository, link.ShareID), "manifest.json"), &manifest); err != nil {
+	state.Bindings = append(state.Bindings, binding)
+	importedBinding := &state.Bindings[len(state.Bindings)-1]
+	release, err := taskTraceTeamAcquireShareLock(importedBinding)
+	if err != nil {
 		return nil, err
 	}
-	state.Bindings = append(state.Bindings, binding)
-	if err := taskTraceTeamMergeBinding(s, a, &state, &state.Bindings[len(state.Bindings)-1], u.Username); err != nil {
+	defer release()
+	if err := taskTraceTeamMergeBinding(s, a, &state, importedBinding, u.Username); err != nil {
 		return nil, err
 	}
 	if err := taskTraceTeamSaveState(state); err != nil {
@@ -2154,8 +2453,41 @@ func TaskTraceTeamSync(s *xorm.Session, a web.Auth) (*TaskTraceTeamStatus, error
 	}
 	for i := range state.Bindings {
 		binding := &state.Bindings[i]
-		if err := taskTraceTeamMergeBinding(s, a, &state, binding, u.Username); err != nil {
-			binding.LastError = err.Error()
+		backupBytes, cloneErr := json.Marshal(binding)
+		if cloneErr != nil {
+			return nil, cloneErr
+		}
+		var backup TaskTraceTeamBinding
+		if cloneErr = json.Unmarshal(backupBytes, &backup); cloneErr != nil {
+			return nil, cloneErr
+		}
+		release, lockErr := taskTraceTeamAcquireShareLock(binding)
+		if lockErr != nil {
+			binding.LastError = lockErr.Error()
+			continue
+		}
+		savepoint := fmt.Sprintf("tasktrace_team_sync_%d", i)
+		eventCheckpoint := events.PendingCheckpoint(s)
+		if _, err := s.Exec("SAVEPOINT " + savepoint); err != nil {
+			release()
+			return nil, fmt.Errorf("start team task synchronization: %w", err)
+		}
+		mergeErr := taskTraceTeamMergeBinding(s, a, &state, binding, u.Username)
+		release()
+		if mergeErr != nil {
+			if _, rollbackErr := s.Exec("ROLLBACK TO SAVEPOINT " + savepoint); rollbackErr != nil {
+				return nil, fmt.Errorf("rollback failed team task synchronization: %w", rollbackErr)
+			}
+			events.RollbackPendingTo(s, eventCheckpoint)
+			if _, releaseErr := s.Exec("RELEASE SAVEPOINT " + savepoint); releaseErr != nil {
+				return nil, fmt.Errorf("release failed team task synchronization: %w", releaseErr)
+			}
+			*binding = backup
+			binding.LastError = mergeErr.Error()
+			continue
+		}
+		if _, err := s.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
+			return nil, fmt.Errorf("finish team task synchronization: %w", err)
 		}
 	}
 	if err := taskTraceTeamSaveState(state); err != nil {
@@ -2202,6 +2534,11 @@ func TaskTraceTeamResolve(s *xorm.Session, a web.Auth, request TaskTraceTeamReso
 	if binding == nil {
 		return nil, errors.New("team task not found")
 	}
+	release, err := taskTraceTeamAcquireShareLock(binding)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	records, err := taskTraceTeamReadResolutions(binding)
 	if err != nil {
 		return nil, err

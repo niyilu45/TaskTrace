@@ -189,6 +189,15 @@ func TestTaskTraceTeamPermissionsPreventReadOnlySnapshotWrites(t *testing.T) {
 	require.Equal(t, "Original", current.Tasks[0].Title)
 }
 
+func TestTaskTraceTeamPermissionProtectionKeepsEveryAttachmentSource(t *testing.T) {
+	one := TaskTraceTeamAttachment{ID: "same-content", SourceTaskID: 1, SourceAttachmentID: 10}
+	two := TaskTraceTeamAttachment{ID: "same-content", SourceTaskID: 2, SourceAttachmentID: 20}
+
+	merged := taskTraceTeamMergeAttachmentMetadata([]TaskTraceTeamAttachment{one}, []TaskTraceTeamAttachment{two})
+	require.Len(t, merged, 2, "permission filtering must retain each source URL for identical image content")
+	require.ElementsMatch(t, []TaskTraceTeamAttachment{one, two}, merged)
+}
+
 func TestTaskTraceTeamPermissionsReadOnlyMemberCannotBecomeAssigneeOrAddChild(t *testing.T) {
 	manifest := TaskTraceTeamManifest{
 		Owner:   "owner",

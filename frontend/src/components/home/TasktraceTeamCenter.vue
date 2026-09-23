@@ -614,12 +614,12 @@ async function importTask() {
 
 function fieldLabel(field?: string) {
 	if (field?.startsWith('outstanding:')) return `遗留事项 ${field.slice('outstanding:'.length)}`
-	return ({title: '任务名', done: '完成状态', status: '任务状态', outstanding: '遗留事项'} as Record<string, string>)[field || ''] || field || '内容'
+	return ({title: '任务名', description: '任务描述', done: '完成状态', status: '任务状态', outstanding: '遗留事项'} as Record<string, string>)[field || ''] || field || '内容'
 }
 
 function displayValue(field?: string, value?: string) {
 	if (field === 'done') return value === 'true' ? '已完成' : '未完成'
-	if (field?.startsWith('outstanding:')) return value ? value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '含图片的遗留事项' : '删除此条'
+	if (field === 'description' || field?.startsWith('outstanding:')) return value ? value.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || '仅包含图片' : (field === 'description' ? '空' : '删除此条')
 	return value || '空'
 }
 
