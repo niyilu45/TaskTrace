@@ -25,12 +25,35 @@ type taskTraceTeamAccessCacheEntry struct {
 	ready   chan struct{}
 }
 
+var taskTraceWindowsAccessCache taskTraceTeamAccessCache
+
 func taskTraceTeamAccessCacheKey(root string) string {
 	absolute, err := filepath.Abs(root)
 	if err == nil {
 		root = absolute
 	}
 	return strings.ToLower(filepath.Clean(root))
+}
+
+func taskTraceTeamFilterAccessMembers(members []string) []string {
+	result := make([]string, 0, len(members))
+	seen := make(map[string]bool, len(members))
+	for _, member := range members {
+		member = strings.TrimSpace(member)
+		key := strings.ToLower(strings.ReplaceAll(member, "/", `\`))
+		short := key
+		if separator := strings.LastIndex(short, `\`); separator >= 0 {
+			short = short[separator+1:]
+		}
+		if member == "" || strings.HasPrefix(key, `builtin\`) || strings.HasPrefix(key, `nt authority\`) || strings.HasPrefix(key, `creator owner\`) ||
+			short == "administrators" || short == "users" || short == "guests" || short == "power users" ||
+			short == "管理员" || short == "用户" || short == "来宾" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, member)
+	}
+	return result
 }
 
 func (cache *taskTraceTeamAccessCache) currentTime() time.Time {
@@ -86,6 +109,17 @@ func (cache *taskTraceTeamAccessCache) read(root string, load func() ([]string, 
 		cache.mu.Unlock()
 		return slices.Clone(members), err
 	}
+}
+
+func (cache *taskTraceTeamAccessCache) cached(root string) ([]string, bool) {
+	key := taskTraceTeamAccessCacheKey(root)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry := cache.entries[key]
+	if entry == nil || entry.ready != nil || entry.err != nil || !cache.currentTime().Before(entry.expires) {
+		return nil, false
+	}
+	return slices.Clone(entry.members), true
 }
 
 func (cache *taskTraceTeamAccessCache) invalidate(root string) {

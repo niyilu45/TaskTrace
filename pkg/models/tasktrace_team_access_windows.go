@@ -21,8 +21,6 @@ import (
 
 var errTaskTraceTeamAdminRequired = errors.New("设置 teamData 共享读写权限需要 Windows 管理员授权")
 
-var taskTraceWindowsAccessCache taskTraceTeamAccessCache
-
 const taskTraceTeamSearchScript = `$Keyword=$env:TASKTRACE_TEAM_KEYWORD
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
@@ -94,17 +92,27 @@ $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $resolvedRoot=[IO.Path]::GetFullPath($Root).TrimEnd('\')
 $values=@()
+function Test-SystemPrincipal($Identity) {
+  try {
+    $sid=$Identity.Translate([Security.Principal.SecurityIdentifier]).Value
+    if($sid -in @('S-1-5-18','S-1-5-19','S-1-5-20') -or $sid.StartsWith('S-1-5-32-')){return $true}
+  } catch {}
+  $name=[string]$Identity.Value
+  return $name -match '` + taskTraceTeamSystemAccountPattern + `'
+}
 $acl=Get-Acl -LiteralPath $resolvedRoot -ErrorAction Stop
 foreach($entry in $acl.Access){
   if($entry.AccessControlType -ne 'Allow'){continue}
   if(($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq 0){continue}
+  if(Test-SystemPrincipal $entry.IdentityReference){continue}
   $name=$entry.IdentityReference.Value
-  if($name -and $name -notmatch '` + taskTraceTeamSystemAccountPattern + `' -and $name -notin @('Everyone','Authenticated Users')){$values+=$name}
+  if($name -and $name -notin @('Everyone','Authenticated Users')){$values+=$name}
 }
 $share=Get-SmbShare -ErrorAction SilentlyContinue | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $resolvedRoot)} | Select-Object -First 1
 if($null -ne $share){
   foreach($entry in @(Get-SmbShareAccess -Name $share.Name -ErrorAction SilentlyContinue)){
-    if($entry.AccessControlType -eq 'Allow' -and $entry.AccessRight -in @('Change','Full') -and $entry.AccountName -notin @('Everyone','Authenticated Users')){$values+=[string]$entry.AccountName}
+    $identity=[Security.Principal.NTAccount]::new([string]$entry.AccountName)
+    if($entry.AccessControlType -eq 'Allow' -and $entry.AccessRight -in @('Change','Full') -and -not (Test-SystemPrincipal $identity) -and $entry.AccountName -notin @('Everyone','Authenticated Users')){$values+=[string]$entry.AccountName}
   }
 }
 ConvertTo-Json -InputObject ([object[]]@($values | Sort-Object -Unique)) -Compress`

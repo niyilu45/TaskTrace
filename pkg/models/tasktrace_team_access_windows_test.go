@@ -64,6 +64,10 @@ func TestTaskTraceTeamPowerShellScriptsParse(t *testing.T) {
 	}
 }
 
+func TestTaskTraceTeamAccessListFiltersBuiltInSIDs(t *testing.T) {
+	assert.Contains(t, taskTraceTeamListAccessScript, "S-1-5-32-")
+	assert.Contains(t, taskTraceTeamListAccessScript, "Test-SystemPrincipal")
+}
 func TestTaskTraceTeamSystemAccountPattern(t *testing.T) {
 	script := `$ErrorActionPreference='Stop'
 $pattern=$env:TASKTRACE_TEAM_PATTERN

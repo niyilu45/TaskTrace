@@ -298,7 +298,7 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
-import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
+
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
 type DraftBase = {text: string, note: string, imageKeys: string[], priority: number}
@@ -306,7 +306,7 @@ type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, 
 type CachedDraft = {text: string, note?: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string, priority?: number}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
 const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
-const teamStore = useTasktraceTeamStore()
+
 const items = ref<OutstandingItem[]>([])
 const drafts = reactive(new Map<string, Draft>())
 const activeId = ref('')
@@ -628,10 +628,7 @@ async function save() {
 	error.value = ''
 	message.value = ''
 	try {
-		if (!await teamStore.refreshWritePermission(taskId)) {
-			error.value = '当前协作权限为只读，输入和图片已保留。所属人开放写权限后无需关闭窗口，直接再次保存即可。'
-			return
-		}
+
 		const savedNote = await persistProgressImages(savedDraft.note, taskId)
 		for (const picture of savedDraft.images) {
 			if (picture.attachmentId) continue
@@ -680,11 +677,14 @@ async function save() {
 		emit('saved')
 	} catch (cause) {
 		if (taskId !== props.taskId || !mounted) return
-		error.value = cause instanceof Error && cause.message === 'Outstanding item no longer exists'
-			? '这条遗留事项已被移除或移动。输入和图片已保留，请重新读取。'
-			: cause instanceof Error && cause.message === 'Outstanding edit conflict'
-				? '这条遗留事项的同一内容已在其他窗口修改。输入和图片已保留，请重新读取后合并。'
-				: '保存失败，输入和图片已保留，请重试。'
+		const status = (cause as {response?: {status?: number}})?.response?.status
+		error.value = status === 403
+			? '当前协作权限为只读，输入和图片已保留。所属人开放写权限后可直接再次保存。'
+			: cause instanceof Error && cause.message === 'Outstanding item no longer exists'
+				? '这条遗留事项已被移除或移动。输入和图片已保留，请重新读取。'
+				: cause instanceof Error && cause.message === 'Outstanding edit conflict'
+					? '这条遗留事项的同一内容已在其他窗口修改。输入和图片已保留，请重新读取后合并。'
+					: '保存失败，输入和图片已保留，请重试。'
 	} finally {
 		busy.value = false
 	}

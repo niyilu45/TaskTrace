@@ -479,10 +479,7 @@ async function save() {
 	saving.value = true
 	const taskId = props.taskId
 	try {
-		if (!await teamStore.refreshWritePermission(taskId)) {
-			message.value = '当前协作权限为只读，内容已保留。所属人开放写权限后无需关闭窗口，直接再次保存即可。'
-			return
-		}
+
 		const latestHistory = await readTaskHistory(taskId)
 		if (!sharedOutstanding(latestHistory).id) await changeOutstanding(taskId, items => items, undoGroupHeaders())
 		const body = await persistProgressImages(progress.value, taskId)
@@ -522,8 +519,11 @@ async function save() {
 		referenceHistory.value = await readTaskHistory(taskId)
 		message.value = '当天进展已正式保存，可继续修改。'
 		emit('saved')
-	} catch {
-		message.value = '保存失败，内容已保留，请重试。'
+	} catch (cause) {
+		const status = (cause as {response?: {status?: number}})?.response?.status
+		message.value = status === 403
+			? '当前协作权限为只读，内容已保留。所属人开放写权限后可直接再次保存。'
+			: '保存失败，内容已保留，请重试。'
 	} finally {
 		saving.value = false
 	}

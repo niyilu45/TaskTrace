@@ -374,7 +374,7 @@
 						<Description
 							:model-value="task"
 							:can-write="canWrite"
-							:ensure-can-write="ensureCurrentTeamWrite"
+
 							:attachment-upload="attachmentUpload"
 							@update:modelValue="Object.assign(task, $event)"
 						/>
@@ -384,7 +384,6 @@
 						:task-id="taskId"
 						:can-write="canWrite"
 					/>
-					
 					<!-- Reactions -->
 					<Reactions
 						v-model="task.reactions" 
@@ -474,7 +473,6 @@
 						class="content-bottom-marker"
 					/>
 				</div>
-				
 				<!-- Task Actions -->
 				<div
 					v-if="canWrite || isModal"
@@ -507,9 +505,7 @@
 								task.isFavorite ? $t('task.detail.actions.unfavorite') : $t('task.detail.actions.favorite')
 							}}
 						</XButton>
-						
 						<span class="action-heading">{{ $t('task.detail.organization') }}</span>
-						
 						<XButton
 							v-shortcut="SHORTCUTS.taskDetail.labels"
 							variant="secondary"
@@ -542,7 +538,6 @@
 						>
 							{{ $t('task.detail.actions.color') }}
 						</XButton>
-						
 						<span class="action-heading">{{ $t('task.detail.management') }}</span>
 
 						<XButton
@@ -756,7 +751,7 @@ import {useConfigStore} from '@/stores/config'
 import {useTitle} from '@/composables/useTitle'
 import {useTaskDetailShortcuts} from '@/composables/useTaskDetailShortcuts'
 
-import {error, success} from '@/message'
+import {success} from '@/message'
 import type {Action as MessageAction} from '@/message'
 
 const props = defineProps<{
@@ -828,7 +823,6 @@ onBeforeRouteLeave(async () => {
 				stop()
 				resolve()
 			}, 5000) // 5 second timeout
-			
 			const stop = watch(lastProjectOrTaskProject, (p) => {
 				if (p) {
 					clearTimeout(timeout)
@@ -870,17 +864,6 @@ const canEdit = computed(() => (
 const teamCanWrite = computed(() => teamStore.canWriteTask(task.value.id))
 const canWrite = computed(() => canEdit.value)
 
-async function ensureCurrentTeamWrite() {
-	if (!canEdit.value) return false
-	try {
-		const allowed = await teamStore.refreshWritePermission(task.value.id)
-		if (!allowed) error({message: '当前协作权限为只读，修改已保留。所属人开放写权限后可在当前窗口直接重试保存。'})
-		return allowed
-	} catch (cause) {
-		error({message: '无法重新读取协作权限，修改已保留。请检查 teamData 连接后重试。', cause})
-		return false
-	}
-}
 
 const color = computed(() => {
 	const color = task.value.getHexColor
@@ -1169,9 +1152,6 @@ async function saveTask(
 		currentTask = klona(task.value)
 	}
 
-	if (!await ensureCurrentTeamWrite()) {
-		return
-	}
 
 	currentTask.hexColor = taskColor.value
 

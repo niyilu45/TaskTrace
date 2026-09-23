@@ -33,6 +33,20 @@ func TestTaskTraceTeamPermissionsProtectSpecialRoles(t *testing.T) {
 	require.True(t, byUser["reader"].Write)
 }
 
+func TestTaskTraceTeamCanNeverDowngradesOwner(t *testing.T) {
+	manifest := TaskTraceTeamManifest{
+		Owner:   "owner",
+		Members: []string{"owner", "member"},
+		Permissions: map[string][]TaskTraceTeamMemberPermission{"node": {
+			{Username: "owner", Read: false, Write: false},
+			{Username: "member", Read: true},
+		}},
+	}
+
+	require.True(t, taskTraceTeamCan(&manifest, "node", "", "owner", true))
+	require.False(t, taskTraceTeamCan(&manifest, "node", "", "member", true))
+}
+
 func TestTaskTraceTeamPermissionsDefaultMembersToReadOnly(t *testing.T) {
 	permissions := taskTraceTeamNormalizePermissions([]string{"owner", "member"}, "owner", nil, nil)
 	byUser := taskTraceTeamPermissionMap(permissions)

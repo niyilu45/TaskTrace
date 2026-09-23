@@ -159,3 +159,32 @@ func TestTaskTraceTeamAccessCacheEmptyList(t *testing.T) {
 		assert.Empty(t, members)
 	}
 }
+
+func TestTaskTraceTeamFilterAccessMembersRemovesWindowsSystemGroups(t *testing.T) {
+	members := taskTraceTeamFilterAccessMembers([]string{
+		`BUILTIN\Administrators`,
+		`Administrators`,
+		`BUILTIN\管理员`,
+		`NT AUTHORITY\SYSTEM`,
+		`CREATOR OWNER\CREATOR OWNER`,
+		`DOMAIN\alice`,
+		`domain\ALICE`,
+		`DOMAIN\bob`,
+		`DOMAIN\Administrator`,
+	})
+
+	assert.Equal(t, []string{`DOMAIN\alice`, `DOMAIN\bob`, `DOMAIN\Administrator`}, members)
+}
+
+func TestTaskTraceTeamAccessCacheCachedNeverStartsAScan(t *testing.T) {
+	var cache taskTraceTeamAccessCache
+	root := t.TempDir()
+	if members, ok := cache.cached(root); ok || members != nil {
+		t.Fatal("empty cache unexpectedly returned members")
+	}
+	_, err := cache.read(root, func() ([]string, error) { return []string{"DOMAIN\\alice"}, nil })
+	require.NoError(t, err)
+	members, ok := cache.cached(root)
+	require.True(t, ok)
+	assert.Equal(t, []string{"DOMAIN\\alice"}, members)
+}

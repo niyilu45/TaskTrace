@@ -483,6 +483,16 @@ internal sealed partial class FloatingWindow : Form {
         return true;
         } catch { return false; }
     }
+    void WarnIfTeamReadOnly(long taskId, Form dialog, Label feedback) {
+        RefreshTeamWritePermission(taskId).ContinueWith(check => {
+            if(check.Status != TaskStatus.RanToCompletion || check.Result || dialog.IsDisposed) return;
+            try { dialog.BeginInvoke((Action)delegate {
+                if(dialog.IsDisposed) return;
+                feedback.Text="当前协作权限为只读。你可以编辑并保留草稿；所属人开放写权限后无需关闭窗口，直接重试保存即可。";
+                MessageBox.Show(dialog,feedback.Text,"TaskTrace · 只读协作任务",MessageBoxButtons.OK,MessageBoxIcon.Information);
+            }); } catch { }
+        });
+    }
     void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; taskSurface.Enabled=!value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
@@ -588,17 +598,14 @@ internal sealed partial class FloatingWindow : Form {
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,updateDiscarded=false;
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
-                if(!await RefreshTeamWritePermission(id)) {
-                    feedback.Text="当前协作权限为只读。你可以编辑并保留草稿；所属人开放写权限后无需关闭窗口，直接重试保存即可。";
-                    MessageBox.Show(this,feedback.Text,"TaskTrace · 只读协作任务",MessageBoxButtons.OK,MessageBoxIcon.Information);
-                }
+                WarnIfTeamReadOnly(id,dialog,feedback);
                 Action renderImages=delegate { };
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=Plain(progress.Html),images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
                 Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
                     if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
-                    if(!await RefreshTeamWritePermission(id)){feedback.Text="当前协作权限为只读，任务描述已保留；开放写权限后可直接重试。";return false;}
+
                     descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
                     try {
                         var latest=await Api("GET","/tasks/"+id,null);string latestDescription=latest.ContainsKey("description")?Convert.ToString(latest["description"]):"";if(latestDescription!=originalDescription)throw new Exception("任务描述已在其他窗口修改，请重新打开后合并。");
@@ -681,7 +688,7 @@ internal sealed partial class FloatingWindow : Form {
                 Func<bool,Task<bool>> write=async delegate(bool finish) {
                     if(submitting || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
                     if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return true;}
-                    if(!await RefreshTeamWritePermission(id)){feedback.Text="当前协作权限为只读，进展草稿已保留；开放写权限后可直接重试。";return false;}
+
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);
                     try {
                         using(BeginUndoGroup()) {

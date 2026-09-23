@@ -145,6 +145,11 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 	if manifest == nil || nodeID == "" || username == "" {
 		return false
 	}
+	// The collaboration owner is an immutable read-write role. A stale or
+	// partially written permission list must never downgrade the owner.
+	if strings.EqualFold(manifest.Owner, username) {
+		return true
+	}
 	key := taskTraceTeamPermissionKey(nodeID, outstandingID)
 	permissions := manifest.Permissions[key]
 	if len(permissions) == 0 && outstandingID != "" {
@@ -173,8 +178,9 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 }
 
 // taskTraceTeamCanWriteLocalTask checks the shared manifest on every write.
-// The manifest lives in teamData, so a permission granted by another computer
-// becomes effective without restarting TaskTrace or reopening an editor.
+// The state and manifest files are atomically replaced, so this read must not
+// wait on taskTraceTeamMu: collaboration sync may be blocked on a slow network
+// share, and ordinary task saves still need a bounded permission decision.
 func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 	if !taskTraceTeamEnabled() {
 		return true, nil
@@ -183,8 +189,6 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	taskTraceTeamMu.Lock()
-	defer taskTraceTeamMu.Unlock()
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
 		return false, err
@@ -194,6 +198,11 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 		nodeID := taskTraceTeamNodeForTask(binding, taskID)
 		if nodeID == "" {
 			continue
+		}
+		// The local binding is authoritative for the collaboration owner and is
+		// available even while the network share is reconnecting.
+		if strings.EqualFold(binding.Owner, u.Username) {
+			return true, nil
 		}
 		var manifest TaskTraceTeamManifest
 		manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
@@ -436,9 +445,7 @@ func taskTraceTeamPermissionTargets(s *xorm.Session, binding *TaskTraceTeamBindi
 			title = task.Title
 		}
 		permissions := manifest.Permissions[taskTraceTeamPermissionKey(node, "")]
-		if len(permissions) == 0 {
-			permissions = taskTraceTeamNormalizePermissions(manifest.Members, manifest.Owner, nil, nil)
-		}
+		permissions = taskTraceTeamNormalizePermissions(manifest.Members, taskTraceTeamPermissionOwner(permissions, manifest.Owner), taskTraceTeamPermissionAssignees(permissions), permissions)
 		canManage := strings.EqualFold(manifest.Owner, username) || strings.EqualFold(taskTraceTeamPermissionOwner(permissions, manifest.Owner), username)
 		result = append(result, TaskTraceTeamPermissionTarget{NodeID: node, TaskID: taskID, Kind: "task", Title: title, CanManage: canManage, Permissions: permissions})
 		base := binding.Base[node]
@@ -453,8 +460,9 @@ func taskTraceTeamPermissionTargets(s *xorm.Session, binding *TaskTraceTeamBindi
 			}
 			outstandingPermissions := manifest.Permissions[taskTraceTeamPermissionKey(node, outstandingID)]
 			if len(outstandingPermissions) == 0 {
-				outstandingPermissions = taskTraceTeamNormalizePermissions(manifest.Members, taskTraceTeamPermissionOwner(permissions, manifest.Owner), taskTraceTeamPermissionAssignees(permissions), permissions)
+				outstandingPermissions = permissions
 			}
+			outstandingPermissions = taskTraceTeamNormalizePermissions(manifest.Members, taskTraceTeamPermissionOwner(outstandingPermissions, taskTraceTeamPermissionOwner(permissions, manifest.Owner)), taskTraceTeamPermissionAssignees(outstandingPermissions), outstandingPermissions)
 			result = append(result, TaskTraceTeamPermissionTarget{
 				NodeID: node, TaskID: taskID, OutstandingID: outstandingID, Kind: "outstanding", Title: itemTitle,
 				CanManage: canManage, Permissions: outstandingPermissions,
@@ -715,6 +723,6 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }

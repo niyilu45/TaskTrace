@@ -173,7 +173,7 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 	if err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	if err == nil && len(taskTraceTeamUnassignedMembers(state, []string{resolved}, u.Username)) > 0 {
 		if !slices.ContainsFunc(status.Repository.Candidates, func(member string) bool { return taskTraceTeamMembersEqual(member, resolved) }) {
 			status.Repository.Candidates = append(status.Repository.Candidates, resolved)
@@ -215,7 +215,7 @@ func TaskTraceTeamRemoveMemberAccess(s *xorm.Session, a web.Auth, accountName st
 	if err := taskTraceTeamRemoveWindowsAccessWithElevation(taskTraceTeamRoot(), accountName, elevate); err != nil {
 		return nil, fmt.Errorf("无法删除 %s 的 teamData 权限：%w", accountName, err)
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	if err == nil {
 		taskTraceTeamRemoveMemberFromStatus(&status, accountName)
 	}
@@ -275,7 +275,7 @@ func TaskTraceTeamImportMembers(s *xorm.Session, a web.Auth, request TaskTraceTe
 	if err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	if err != nil {
 		return nil, err
 	}

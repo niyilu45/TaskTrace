@@ -343,7 +343,15 @@ func taskTraceTeamRepositoryMetadata(root string) TaskTraceTeamRepositoryInfo {
 func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
 	info := taskTraceTeamRepositoryMetadata(root)
 	if candidates, err := taskTraceTeamListWindowsAccess(root); err == nil {
-		info.Candidates = candidates
+		info.Candidates = taskTraceTeamFilterAccessMembers(candidates)
+	}
+	return info
+}
+
+func taskTraceTeamRepositoryInfoCached(root string) TaskTraceTeamRepositoryInfo {
+	info := taskTraceTeamRepositoryMetadata(root)
+	if candidates, ok := taskTraceWindowsAccessCache.cached(root); ok {
+		info.Candidates = taskTraceTeamFilterAccessMembers(candidates)
 	}
 	return info
 }
@@ -365,6 +373,10 @@ func taskTraceTeamNormalizeMembers(members []string, owner string) []string {
 	seen := map[string]bool{}
 	result := make([]string, 0, len(members)+1)
 	for _, member := range append([]string{owner}, members...) {
+		isOwner := owner != "" && taskTraceTeamMembersEqual(member, owner)
+		if !isOwner && len(taskTraceTeamFilterAccessMembers([]string{member})) == 0 {
+			continue
+		}
 		member = taskTraceTeamMembershipName(member)
 		if member == "" {
 			continue
@@ -1662,7 +1674,7 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1746,7 +1758,7 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1834,7 +1846,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1861,7 +1873,7 @@ func TaskTraceTeamSync(s *xorm.Session, a web.Auth) (*TaskTraceTeamStatus, error
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1887,7 +1899,7 @@ func TaskTraceTeamConfigure(s *xorm.Session, a web.Auth, request TaskTraceTeamCo
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1954,7 +1966,7 @@ func TaskTraceTeamResolve(s *xorm.Session, a web.Auth, request TaskTraceTeamReso
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -1989,7 +2001,7 @@ func TaskTraceTeamNotificationsRead(s *xorm.Session, a web.Auth, request TaskTra
 			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
-	status, err := taskTraceTeamStatusLocked(s, a, state)
+	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
 }
 
@@ -2103,12 +2115,24 @@ func taskTraceTeamMergeProfile(current, incoming TaskTraceTeamMemberProfile) Tas
 }
 
 func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamState) (TaskTraceTeamStatus, error) {
+	return taskTraceTeamStatusLockedWithAccessScan(s, a, state, true)
+}
+
+func taskTraceTeamStatusLockedFast(s *xorm.Session, a web.Auth, state taskTraceTeamState) (TaskTraceTeamStatus, error) {
+	return taskTraceTeamStatusLockedWithAccessScan(s, a, state, false)
+}
+
+func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state taskTraceTeamState, scanAccess bool) (TaskTraceTeamStatus, error) {
 	u, err := user.GetFromAuth(a)
 	if err != nil {
 		return TaskTraceTeamStatus{}, err
 	}
 	root := taskTraceTeamRoot()
-	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: taskTraceTeamRepositoryInfo(root), UnassignedMembers: []string{}, Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
+	repository := taskTraceTeamRepositoryInfoCached(root)
+	if scanAccess {
+		repository = taskTraceTeamRepositoryInfo(root)
+	}
+	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: repository, UnassignedMembers: []string{}, Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
 	status.UnassignedMembers = taskTraceTeamUnassignedMembers(state, status.Repository.Candidates, u.Username)
 	profiles := map[string]TaskTraceTeamMemberProfile{
 		taskTraceTeamProfileKey(u.Username): {Username: u.Username, DisplayName: u.Name, Email: u.Email, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
@@ -2118,6 +2142,7 @@ func taskTraceTeamStatusLocked(s *xorm.Session, a web.Auth, state taskTraceTeamS
 		if manifestErr := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest); manifestErr != nil {
 			manifest = TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
 		}
+		manifest.Members = taskTraceTeamNormalizeMembers(manifest.Members, manifest.Owner)
 		ids := make([]int64, 0, len(binding.NodeTasks))
 		for _, id := range binding.NodeTasks {
 			ids = append(ids, id)
