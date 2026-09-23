@@ -46,6 +46,16 @@ it('keeps comment revisions but only shows each member final same-day version in
 	expect(aliceEditor.mergedIds).toEqual([1])
 })
 
+it('loads progress into the same member editor across domain and email account forms', () => {
+	const history = [
+		{id: 1, created: '2026-09-20T08:00:00Z', comment: daily('2026-09-20', 'first') + serializeTeamCommentMarker({id: 'one', author: 'CHINA\\12345'})},
+		{id: 2, created: '2026-09-20T09:00:00Z', comment: daily('2026-09-20', 'final') + serializeTeamCommentMarker({id: 'two', author: '12345@china.example'})},
+	]
+	expect(finalProgressNotes(history).map(note => note.id)).toEqual([2])
+	expect(mergedDay(history, '2026-09-20', '12345').text).toBe('final')
+	expect(mergedDay(history, '2026-09-20', 'CHINA\\12345').mergedIds).toEqual([1])
+})
+
 it('hides revisions absorbed by stable team ids even when local database ids differ', () => {
 	const first = {id: 41, created: '2026-09-20T08:00:00Z', comment: daily('2026-09-20', 'first') + serializeTeamCommentMarker({id: 'shared-first', author: 'alice'})}
 	const final = {id: 99, created: '2026-09-20T09:00:00Z', comment: '<h3 data-tasktrace-team-merged="shared-first">每日进展 · 2026-09-20</h3><p>final</p>' + serializeTeamCommentMarker({id: 'shared-final', author: 'alice'})}

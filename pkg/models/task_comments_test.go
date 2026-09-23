@@ -19,6 +19,7 @@ package models
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"code.vikunja.io/api/pkg/db"
@@ -172,6 +173,34 @@ func TestTaskComment_Delete(t *testing.T) {
 		can, err := tc.CanDelete(s, &user.User{ID: 2})
 		require.NoError(t, err)
 		assert.False(t, can)
+	})
+	t.Run("collaboration task owner can edit every comment but cannot delete another author's comment", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		root := t.TempDir()
+		dataRoot := t.TempDir()
+		t.Setenv("TASKTRACE_TEAM_ROOT", root)
+		t.Setenv("TASKTRACE_DATA_ROOT", dataRoot)
+		require.NoError(t, taskTraceTeamWriteJSON(filepath.Join(dataRoot, "team-sync.json"), &taskTraceTeamState{
+			Schema: taskTraceTeamSchema,
+			Bindings: []TaskTraceTeamBinding{{
+				ShareID: "comment-owner", Repository: root, Owner: `CHINA\user1`, RootTaskID: 1,
+				NodeTasks: map[string]int64{"root": 1},
+			}},
+		}))
+
+		s := db.NewSession()
+		defer s.Close()
+		comment := &TaskComment{ID: 1001, TaskID: 1, AuthorID: 2, Comment: "another member"}
+		_, err := s.Insert(comment)
+		require.NoError(t, err)
+
+		owner := &user.User{ID: 1, Username: "user1"}
+		can, err := (&TaskComment{ID: comment.ID, TaskID: comment.TaskID}).CanUpdate(s, owner)
+		require.NoError(t, err)
+		require.True(t, can)
+		can, err = (&TaskComment{ID: comment.ID, TaskID: comment.TaskID}).CanDelete(s, owner)
+		require.NoError(t, err)
+		require.False(t, can)
 	})
 }
 

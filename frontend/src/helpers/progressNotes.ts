@@ -1,6 +1,7 @@
 import type {TaskComment} from '@/client/generated'
 import {splitProgressReferences, normalizeProgressReferences} from './progressReferences'
 import {readTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
+import {teamMemberKey} from './tasktraceTeamMembers'
 import {deduplicateHtmlImages} from './tasktraceImages'
 import {isOutstandingComment} from './tasktraceCommentTypes'
 
@@ -32,6 +33,10 @@ export function parseProgressNote(note: TaskComment) {
 	return {id: note.id, date, daily: !!match, progress, ownProgress, references, outstanding, author: teamCommentAuthor(note.comment || '', fallbackAuthor), teamId: teamMarker?.id || '', created: Number.isNaN(+created) ? 0 : +created}
 }
 
+function progressAuthorKey(author: string) {
+	return teamMemberKey(author) || author.trim().toLocaleLowerCase()
+}
+
 function mergedAttribute(comment: string, name: string) {
 	const heading = new DOMParser().parseFromString(comment || '', 'text/html').querySelector('h3')
 	return (heading?.getAttribute(name) || '').split(',').map(value => value.trim()).filter(Boolean)
@@ -45,15 +50,15 @@ export function sortProgressNotes(notes: TaskComment[]) {
 	const absorbedTeam = new Set<string>()
 	for (const source of entries) {
 		if (!source.parsed.daily) continue
-		const lineage = `${source.parsed.date}\u0000${source.parsed.author.trim().toLowerCase()}`
+		const lineage = `${source.parsed.date}\u0000${progressAuthorKey(source.parsed.author)}`
 		for (const value of mergedAttribute(source.raw.comment || '', 'data-tasktrace-merged')) {
 			const id = Number(value)
 			const target = byId.get(id)
-			if (id > 0 && id !== source.raw.id && target?.parsed.daily && `${target.parsed.date}\u0000${target.parsed.author.trim().toLowerCase()}` === lineage) absorbed.add(id)
+			if (id > 0 && id !== source.raw.id && target?.parsed.daily && `${target.parsed.date}\u0000${progressAuthorKey(target.parsed.author)}` === lineage) absorbed.add(id)
 		}
 		for (const id of mergedAttribute(source.raw.comment || '', 'data-tasktrace-team-merged')) {
 			const target = byTeamId.get(id)
-			if (id !== source.parsed.teamId && target?.parsed.daily && `${target.parsed.date}\u0000${target.parsed.author.trim().toLowerCase()}` === lineage) absorbedTeam.add(id)
+			if (id !== source.parsed.teamId && target?.parsed.daily && `${target.parsed.date}\u0000${progressAuthorKey(target.parsed.author)}` === lineage) absorbedTeam.add(id)
 		}
 	}
 	return entries.filter(entry => !absorbed.has(entry.raw.id || 0) && (!entry.parsed.teamId || !absorbedTeam.has(entry.parsed.teamId)))
@@ -66,7 +71,7 @@ export function finalProgressNotes(notes: TaskComment[]) {
 	const seen = new Set<string>()
 	return sortProgressNotes(notes).filter(note => {
 		if (!note.daily) return true
-		const key = `${note.date}\u0000${note.author.trim().toLowerCase()}`
+		const key = `${note.date}\u0000${progressAuthorKey(note.author)}`
 		if (seen.has(key)) return false
 		seen.add(key)
 		return true
@@ -109,7 +114,8 @@ export function progressBacklinks(history: TaskComment[]): Record<number, Progre
 	return result
 }
 export function mergedDay(history: TaskComment[], date: string, author?: string) {
-	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date && (!author || note.author.toLowerCase() === author.toLowerCase())).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
+	const authorKey = author ? progressAuthorKey(author) : ''
+	const notes = sortProgressNotes(history).filter(note => note.daily && note.date === date && (!authorKey || progressAuthorKey(note.author) === authorKey)).sort((a, b) => a.created - b.created || (a.id || 0) - (b.id || 0))
 	const primaryNote = notes.reduce<(typeof notes)[number] | undefined>((latest, note) => !latest || note.created > latest.created || (note.created === latest.created && (note.id || 0) > (latest.id || 0)) ? note : latest, undefined)
 	const primary = primaryNote?.id
 	const primaryTeamId = primaryNote?.teamId || ''

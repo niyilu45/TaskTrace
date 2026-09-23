@@ -642,8 +642,9 @@ internal sealed partial class FloatingWindow : Form {
                     selectedDay=day.Value.ToString("yyyy-MM-dd");
                     var allRecords=DailyHistory(history).Where(note=>DayOf(note)==selectedDay).OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
                     collaborativeProgress=history.Any(note=>ReadFloatingTeamMarker((string)note["comment"])!=null);
-                    var records=(collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker==null || String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}):allRecords).ToList();
-                    var otherRecords=collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker!=null && !String.Equals(marker.author,Environment.UserName,StringComparison.OrdinalIgnoreCase);}).ToList():new List<Dictionary<string,object>>();
+                    string localProgressAuthor=TeamIdentityName(Environment.UserName);
+                    var records=(collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker==null || String.Equals(TeamIdentityName(marker.author),localProgressAuthor,StringComparison.OrdinalIgnoreCase);}):allRecords).ToList();
+                    var otherRecords=collaborativeProgress?allRecords.Where(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);return marker!=null && !String.Equals(TeamIdentityName(marker.author),localProgressAuthor,StringComparison.OrdinalIgnoreCase);}).ToList():new List<Dictionary<string,object>>();
                     collaboratorProgress.Text=String.Join("\r\n\r\n",otherRecords.Select(note=>{var marker=ReadFloatingTeamMarker((string)note["comment"]);string value=Plain(ProgressBody((string)note["comment"],id));return (String.IsNullOrWhiteSpace(marker.author)?"协作成员":marker.author)+"："+(String.IsNullOrWhiteSpace(value)?"（包含图片或引用，请在历史进展中查看）":value);}));
                     collaboratorGroup.Visible=otherRecords.Count>0;layout.RowStyles[4].Height=otherRecords.Count>0?112:0;
                     commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));

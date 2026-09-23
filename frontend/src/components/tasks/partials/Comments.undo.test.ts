@@ -7,7 +7,7 @@ const getAll = vi.hoisted(() => vi.fn(async () => [{id: 2, comment: 'old', autho
 vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: true}))
 vi.mock('vue-i18n', () => ({useI18n: () => ({t: (key: string) => key})}))
 vi.mock('vue-router', () => ({useRoute: () => ({hash: ''})}))
-vi.mock('@/components/input/AsyncEditor', () => ({default: {props: ['modelValue'], emits: ['update:modelValue'], template: '<textarea :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'}}))
+vi.mock('@/components/input/AsyncEditor', () => ({default: {props: ['modelValue', 'isEditEnabled'], emits: ['update:modelValue'], template: '<textarea :value="modelValue" :data-edit-enabled="String(isEditEnabled)" @input="$emit(\'update:modelValue\', $event.target.value)" />'}}))
 vi.mock('./DailyProgress.vue', () => ({default: {template: '<span />', methods: {refreshHistory: vi.fn()}}}))
 vi.mock('@/components/misc/CustomTransition.vue', () => ({default: {template: '<span><slot /></span>'}}))
 vi.mock('@/components/input/Reactions.vue', () => ({default: {template: '<span />'}}))
@@ -16,10 +16,11 @@ vi.mock('@/components/misc/PaginationEmit.vue', () => ({default: {template: '<sp
 vi.mock('@/services/taskComment', () => ({default: class {loading = false; totalPages = 1; resultCount = 1; update = update; getAll = getAll}}))
 vi.mock('@/models/taskComment', () => ({default: class {constructor(data: object = {}) {Object.assign(this, data)}}}))
 vi.mock('@/stores/config', () => ({useConfigStore: () => ({taskCommentsEnabled: true, maxItemsPerPage: 100, frontendUrl: 'http://localhost/'})}))
-vi.mock('@/stores/auth', () => ({useAuthStore: () => ({info: {id: 1}, settings: {frontendSettings: {commentSortOrder: 'asc'}}})}))
+vi.mock('@/stores/auth', () => ({useAuthStore: () => ({info: {id: 1, username: 'user1'}, settings: {frontendSettings: {commentSortOrder: 'asc'}}})}))
 vi.mock('@/stores/tasktraceTeam', () => ({useTasktraceTeamStore: () => ({
 	loaded: true,
-	status: {profiles: []},
+	status: {username: 'user1', profiles: []},
+	bindingForTask: vi.fn(() => ({owner: 'CHINA\\user1'})),
 	refresh: vi.fn(),
 	avatarFor: vi.fn(() => ''),
 	displayNameFor: vi.fn((username: string) => username),
@@ -33,11 +34,15 @@ vi.mock('@/composables/useCopyToClipboard', () => ({useCopyToClipboard: () => vi
 let wrapper: VueWrapper
 beforeEach(() => { vi.clearAllMocks(); vi.useFakeTimers(); undoInProgress.value = false })
 afterEach(() => { wrapper?.unmount(); vi.useRealTimers(); undoInProgress.value = false })
-async function open() {
-	wrapper = mount(Comments, {props: {taskId: 1, projectId: 1, initialComments: [{id: 2, comment: 'old', author: {id: 1}, created: new Date(), updated: new Date()}] as never}, global: {mocks: {$t: (key: string) => key}, directives: {tooltip: () => {}}, stubs: {Icon: true, Modal: true, XButton: true}}})
+async function open(author = {id: 1, username: 'user1'}) {
+	wrapper = mount(Comments, {props: {taskId: 1, projectId: 1, initialComments: [{id: 2, comment: 'old', author, created: new Date(), updated: new Date()}] as never}, global: {mocks: {$t: (key: string) => key}, directives: {tooltip: () => {}}, stubs: {Icon: true, Modal: true, XButton: true}}})
 	await flushPromises()
 }
 describe('comment Undo protection', () => {
+	it('lets the collaboration task owner edit another member comment', async () => {
+		await open({id: 2, username: 'user2'})
+		expect(wrapper.findAll('textarea')[0].attributes('data-edit-enabled')).toBe('true')
+	})
 	it('guards new and delayed existing comment drafts, and flushes them on normal navigation', async () => {
 		await open()
 		await wrapper.findAll('textarea')[1].setValue('new draft')

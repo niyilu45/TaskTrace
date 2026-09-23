@@ -149,20 +149,21 @@
 							</span>
 						</CustomTransition>
 					</div>
-					<template v-if="referencedDates[c.id]">
+					<template v-if="progressDatesByComment[c.id]">
 						<ReadonlyRichText :html="c.comment" />
 						<div
-							v-if="canWrite && commentOwnedByCurrent(c)"
+							v-if="commentCanEdit(c)"
 							class="reference-comment-actions d-print-none"
 						>
 							<button
 								type="button"
 								class="button is-small"
-								@click="editDailyProgress(referencedDates[c.id])"
+								@click="editDailyProgress(progressDatesByComment[c.id], commentProgressAuthor(c))"
 							>
 								编辑当天进展
 							</button>
 							<button
+								v-if="commentOwnedByCurrent(c)"
 								type="button"
 								class="button is-small"
 								@click="toggleDelete(c.id)"
@@ -174,7 +175,7 @@
 					<Editor
 						v-else
 						v-model="c.comment"
-						:is-edit-enabled="canWrite && commentOwnedByCurrent(c)"
+						:is-edit-enabled="commentCanEdit(c)"
 						:upload-callback="attachmentUpload"
 						:upload-enabled="true"
 						:bottom-actions="actions[c.id]"
@@ -344,14 +345,19 @@ const dailyProgress = ref<InstanceType<typeof DailyProgress> | null>(null)
 const linkedComment = ref<TaskComment | null>(null)
 const sourceMessage = ref('')
 let sourceRequest = 0
-const referencedDates = computed<Record<number, string>>(() => Object.fromEntries(comments.value.flatMap(comment => {
+const progressDatesByComment = computed<Record<number, string>>(() => Object.fromEntries(comments.value.flatMap(comment => {
 	const note = parseProgressNote({comment: comment.comment})
-	return note.daily && note.references.length ? [[comment.id, note.date]] : []
+	return note.daily ? [[comment.id, note.date]] : []
 })))
 const progressBacklinkMap = computed(() => progressBacklinks(comments.value as unknown as TaskComment[]))
-async function editDailyProgress(date: string) {
+async function editDailyProgress(date: string, author: string) {
 	if (!await dailyProgress.value?.switchDate(date)) return
-	const input = document.getElementById(`progress-text-${props.taskId}`)
+	await nextTick()
+	const targetAuthor = teamMemberKey(author)
+	const current = teamMemberKey(authStore.info?.username || teamStore.status.username || '')
+	const input = targetAuthor === current
+		? document.getElementById(`progress-text-${props.taskId}`)
+		: [...document.querySelectorAll<HTMLElement>('[data-progress-author-key]')].find(element => element.dataset.progressAuthorKey === targetAuthor)
 	input?.scrollIntoView({block: 'center', behavior: 'smooth'})
 	input?.focus({preventScroll: true})
 }
@@ -400,11 +406,20 @@ const commentProgressEditTitle = (comment: ITaskComment) => {
 const commentAvatar = (comment: ITaskComment) => {
 	return teamStore.avatarFor(commentAuthorIdentity(comment))
 }
+const commentProgressAuthor = (comment: ITaskComment) => {
+	return readTeamCommentMarker(comment.comment || '')?.author || comment.author.username || commentAuthorIdentity(comment)
+}
+const taskOwnedByCurrent = computed(() => {
+	const binding = teamStore.bindingForTask?.(props.taskId)
+	const current = authStore.info?.username || teamStore.status.username || ''
+	return !!binding?.owner && teamMemberKey(binding.owner) === teamMemberKey(current)
+})
 const commentOwnedByCurrent = (comment: ITaskComment) => {
 	const marker = readTeamCommentMarker(comment.comment || '')
 	const current = authStore.info?.username || teamStore.status.username || ''
 	return marker ? teamMemberKey(commentAuthorIdentity(comment)) === teamMemberKey(current) : comment.author.id === currentUserId.value
 }
+const commentCanEdit = (comment: ITaskComment) => props.canWrite && (commentOwnedByCurrent(comment) || taskOwnedByCurrent.value)
 const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
 const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
 const savedComments = reactive(new Map<number, string>())

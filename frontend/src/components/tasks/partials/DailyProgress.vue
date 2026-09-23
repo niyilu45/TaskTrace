@@ -71,6 +71,7 @@
 					:author="author"
 					:editor="currentUsername"
 					:history="referenceHistory"
+					:data-progress-author-key="teamMemberKey(author)"
 					@saved="memberSaved"
 				/>
 			</section>

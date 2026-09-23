@@ -147,7 +147,7 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 	}
 	// The collaboration owner is an immutable read-write role. A stale or
 	// partially written permission list must never downgrade the owner.
-	if strings.EqualFold(manifest.Owner, username) {
+	if taskTraceTeamMembersEqual(manifest.Owner, username) {
 		return true
 	}
 	key := taskTraceTeamPermissionKey(nodeID, outstandingID)
@@ -157,8 +157,8 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 	}
 	if len(permissions) == 0 {
 		for _, member := range manifest.Members {
-			if strings.EqualFold(member, username) {
-				if strings.EqualFold(manifest.Owner, username) {
+			if taskTraceTeamMembersEqual(member, username) {
+				if taskTraceTeamMembersEqual(manifest.Owner, username) {
 					return true
 				}
 				return !write
@@ -167,7 +167,7 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 		return false
 	}
 	for _, permission := range permissions {
-		if strings.EqualFold(permission.Username, username) {
+		if taskTraceTeamMembersEqual(permission.Username, username) {
 			if write {
 				return permission.Write
 			}
@@ -201,7 +201,7 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 		}
 		// The local binding is authoritative for the collaboration owner and is
 		// available even while the network share is reconnecting.
-		if strings.EqualFold(binding.Owner, u.Username) {
+		if taskTraceTeamMembersEqual(binding.Owner, u.Username) {
 			return true, nil
 		}
 		var manifest TaskTraceTeamManifest
@@ -214,6 +214,31 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 		return taskTraceTeamCan(&manifest, nodeID, "", u.Username, true), nil
 	}
 	return true, nil
+}
+
+// taskTraceTeamOwnsLocalTask reports whether the authenticated user owns the
+// collaboration binding containing taskID. The local binding remains
+// authoritative while teamData is temporarily unavailable.
+func taskTraceTeamOwnsLocalTask(a web.Auth, taskID int64) (bool, error) {
+	if !taskTraceTeamEnabled() {
+		return false, nil
+	}
+	u, err := user.GetFromAuth(a)
+	if err != nil {
+		return false, nil
+	}
+	state, err := taskTraceTeamLoadState()
+	if err != nil {
+		return false, err
+	}
+	for index := range state.Bindings {
+		binding := &state.Bindings[index]
+		if taskTraceTeamNodeForTask(binding, taskID) == "" {
+			continue
+		}
+		return taskTraceTeamMembersEqual(binding.Owner, u.Username), nil
+	}
+	return false, nil
 }
 
 func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTraceTeamBinding, manifest *TaskTraceTeamManifest, snapshot TaskTraceTeamSnapshot, actor string) (bool, error) {
