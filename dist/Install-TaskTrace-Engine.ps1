@@ -3,7 +3,7 @@ param(
     [switch]$CheckOnly,
     [switch]$SkipFrontend,
     [switch]$Interactive,
-    [string]$Version = 'v0.1.0-beta.11'
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -199,7 +199,7 @@ try {
     if (![Environment]::Is64BitOperatingSystem) {
         Add-DependencyIssue '当前不是 64 位 Windows，TaskTrace 目前只生成 Windows x64 程序。' '请在 64 位 Windows 10/11 上运行此工具。'
     }
-    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1', 'portable\DependencyBootstrap.ps1')) {
+    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1', 'portable\DependencyBootstrap.ps1', 'portable\SourceBuildVersion.ps1')) {
         if (!(Test-Path -LiteralPath (Join-Path $root $requiredFile))) {
             Add-DependencyIssue ('源码不完整，缺少：' + $requiredFile) '请重新下载或解压完整的 TaskTrace 源码。'
         }
@@ -357,6 +357,9 @@ try {
     $stage = '生成免安装程序'
     Write-InstallLine ''
 	Write-InstallLine '环境检查通过，开始生成免安装程序。' Green
+    . (Join-Path $root 'portable\SourceBuildVersion.ps1')
+    $Version = Resolve-TaskTraceSourceBuildVersion $Version 'niyilu45/TaskTrace' $env:TASKTRACE_NPM_PROXY
+    Write-InstallLine ('源码构建版本：' + $Version) Cyan
     $buildScript = Join-Path $root 'portable\Build-Local.ps1'
     $buildArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-PackageDirectory', 'dist/TaskTrace-local', '-Version', $Version, '-SkipArchive')
     if ($SkipFrontend) { $buildArguments += '-SkipFrontend' }
