@@ -1,4 +1,11 @@
-$TaskTraceSourceFallbackVersion = 'v0.1.0-beta.12'
+$TaskTraceSourceFallbackVersion = 'v0.1.0-beta.14'
+$TaskTraceSourceVersionFile = Join-Path $PSScriptRoot 'LATEST-RELEASE.txt'
+if (Test-Path -LiteralPath $TaskTraceSourceVersionFile -PathType Leaf) {
+    $bundledReleaseVersion = ([IO.File]::ReadAllText($TaskTraceSourceVersionFile)).Trim()
+    if ($bundledReleaseVersion -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+        $TaskTraceSourceFallbackVersion = $bundledReleaseVersion
+    }
+}
 
 function ConvertTo-TaskTraceVersionParts([string]$Value) {
     $text = $Value.Trim().TrimStart('v', 'V')
@@ -58,6 +65,15 @@ function Select-TaskTraceLatestReleaseVersion([object[]]$Releases, [string]$Fall
     return $latest
 }
 
+function Select-TaskTraceLatestReleaseVersionFromFeed([string]$Content, [string]$FallbackVersion = $TaskTraceSourceFallbackVersion) {
+    $latest = $FallbackVersion
+    foreach ($match in [regex]::Matches($Content, '(?i)/releases/tag/(?<tag>v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)')) {
+        $tag = [Uri]::UnescapeDataString($match.Groups['tag'].Value)
+        if ((Compare-TaskTraceVersion $tag $latest) -gt 0) { $latest = $tag }
+    }
+    return $latest
+}
+
 function New-TaskTraceSourceBuildVersion([string]$ReleaseVersion, [DateTime]$BuiltAtUtc = [DateTime]::UtcNow, [string]$Commit = '') {
     $base = $ReleaseVersion.Trim()
     if (!$base.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { $base = 'v' + $base }
@@ -69,6 +85,7 @@ function New-TaskTraceSourceBuildVersion([string]$ReleaseVersion, [DateTime]$Bui
 function Resolve-TaskTraceSourceBuildVersion([string]$ExplicitVersion, [string]$Repository, [string]$Proxy = '') {
     if (![string]::IsNullOrWhiteSpace($ExplicitVersion)) { return $ExplicitVersion.Trim() }
     $releaseVersion = $TaskTraceSourceFallbackVersion
+    $releaseLookupSucceeded = $false
     try {
         $request = @{
             Uri = ('https://api.github.com/repos/' + $Repository + '/releases?per_page=30')
@@ -81,8 +98,29 @@ function Resolve-TaskTraceSourceBuildVersion([string]$ExplicitVersion, [string]$
             $request.ProxyUseDefaultCredentials = $true
         }
         $releaseVersion = Select-TaskTraceLatestReleaseVersion @(Invoke-RestMethod @request) $releaseVersion
+        $releaseLookupSucceeded = $true
     } catch {
-        Write-InstallLog ('GitHub Release lookup failed; using source fallback ' + $releaseVersion + ': ' + $_.Exception.Message)
+        Write-InstallLog ('GitHub Release API lookup failed; trying the public Release feed: ' + $_.Exception.Message)
+    }
+    if (!$releaseLookupSucceeded) {
+        try {
+            $feedRequest = @{
+                Uri = ('https://github.com/' + $Repository + '/releases.atom')
+                Headers = @{ 'User-Agent' = 'TaskTrace-Source-Builder/1.0' }
+                TimeoutSec = 20
+                UseBasicParsing = $true
+                ErrorAction = 'Stop'
+            }
+            if (![string]::IsNullOrWhiteSpace($Proxy) -and $Proxy -ne '__TASKTRACE_DIRECT__') {
+                $feedRequest.Proxy = $Proxy
+                $feedRequest.ProxyUseDefaultCredentials = $true
+            }
+            $feed = Invoke-WebRequest @feedRequest
+            $releaseVersion = Select-TaskTraceLatestReleaseVersionFromFeed ([string]$feed.Content) $releaseVersion
+            $releaseLookupSucceeded = $true
+        } catch {
+            Write-InstallLog ('GitHub Release feed lookup failed; using bundled Release baseline ' + $releaseVersion + ': ' + $_.Exception.Message)
+        }
     }
     $commit = ''
     try {

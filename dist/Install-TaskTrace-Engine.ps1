@@ -199,7 +199,7 @@ try {
     if (![Environment]::Is64BitOperatingSystem) {
         Add-DependencyIssue '当前不是 64 位 Windows，TaskTrace 目前只生成 Windows x64 程序。' '请在 64 位 Windows 10/11 上运行此工具。'
     }
-    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1', 'portable\DependencyBootstrap.ps1', 'portable\SourceBuildVersion.ps1')) {
+    foreach ($requiredFile in @('go.mod', 'frontend\package.json', 'frontend\pnpm-lock.yaml', 'portable\Build-Local.ps1', 'portable\DependencyBootstrap.ps1', 'portable\SourceBuildVersion.ps1', 'portable\LATEST-RELEASE.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $root $requiredFile))) {
             Add-DependencyIssue ('源码不完整，缺少：' + $requiredFile) '请重新下载或解压完整的 TaskTrace 源码。'
         }

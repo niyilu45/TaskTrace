@@ -8,6 +8,10 @@ function Assert-Version([bool]$Condition, [string]$Message) {
     if (!$Condition) { throw $Message }
 }
 
+Assert-Version ($TaskTraceSourceFallbackVersion -eq 'v0.1.0-beta.14') 'Bundled Release baseline is stale.'
+$feedVersion = Select-TaskTraceLatestReleaseVersionFromFeed '<entry><link href="https://github.com/niyilu45/TaskTrace/releases/tag/v0.1.0-beta.15" /></entry>' $TaskTraceSourceFallbackVersion
+Assert-Version ($feedVersion -eq 'v0.1.0-beta.15') 'Release feed fallback did not select the newest version.'
+
 $releases = @(
     [pscustomobject]@{ tag_name = 'v0.1.0-beta.11'; draft = $false },
     [pscustomobject]@{ tag_name = 'v0.1.0-beta.12'; draft = $false },
