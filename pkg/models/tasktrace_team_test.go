@@ -296,6 +296,19 @@ func TestTaskTraceTeamCommentDeletionEventsSurviveRefreshAndAllowRestore(t *test
 	require.Equal(t, restoredAt, latest.Tasks[0].Comments[0].Updated)
 }
 
+func TestTaskTraceTeamCommentDeletionWinsTimestampTie(t *testing.T) {
+	updated := time.Date(2026, 9, 24, 8, 0, 0, 0, time.UTC)
+	active := TaskTraceTeamSnapshot{Actor: "member", Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{{ID: "progress", Body: "<p>member progress</p>", Author: "member", Updated: updated}}}}}
+	deleted := TaskTraceTeamSnapshot{Actor: "owner", Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{{ID: "progress", Author: "member", Updated: updated, Deleted: true}}}}}
+
+	for _, snapshots := range [][]TaskTraceTeamSnapshot{{active, deleted}, {deleted, active}} {
+		latest := taskTraceTeamLatestCommentEventSnapshot(snapshots)
+		require.Len(t, latest.Tasks, 1)
+		require.Len(t, latest.Tasks[0].Comments, 1)
+		require.True(t, latest.Tasks[0].Comments[0].Deleted, "the owner's deletion must not depend on snapshot read order")
+	}
+}
+
 func TestTaskTraceTeamMergeCommentDeletionDoesNotRecreateOnRefresh(t *testing.T) {
 	db.LoadAndAssertFixtures(t)
 	s := db.NewSession()

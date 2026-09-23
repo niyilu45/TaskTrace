@@ -1034,7 +1034,7 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 		for _, task := range tasks {
 			comments := map[string]TaskTraceTeamComment{}
 			for _, comment := range task.Comments {
-				if previous, ok := comments[comment.ID]; !ok || comment.Updated.After(previous.Updated) {
+				if previous, ok := comments[comment.ID]; !ok || taskTraceTeamCommentEventSupersedes(comment, previous) {
 					comments[comment.ID] = comment
 				}
 			}
@@ -1067,6 +1067,14 @@ func taskTraceTeamTaskMap(snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTe
 		result[task.NodeID] = task
 	}
 	return result
+}
+
+// taskTraceTeamCommentEventSupersedes resolves concurrent snapshots of the
+// same shared comment. A deletion must win a timestamp tie; otherwise an older
+// actor snapshot can recreate a progress entry which the task owner deleted.
+func taskTraceTeamCommentEventSupersedes(candidate, current TaskTraceTeamComment) bool {
+	return candidate.Updated.After(current.Updated) ||
+		(candidate.Updated.Equal(current.Updated) && candidate.Deleted && !current.Deleted)
 }
 
 // taskTraceTeamReconcileLocalCommentEvents turns comments which disappeared
@@ -1123,7 +1131,7 @@ func taskTraceTeamLatestCommentEventSnapshot(snapshots []TaskTraceTeamSnapshot) 
 			}
 			for _, comment := range task.Comments {
 				previous, exists := tasks[task.NodeID][comment.ID]
-				if !exists || comment.Updated.After(previous.Updated) {
+				if !exists || taskTraceTeamCommentEventSupersedes(comment, previous) {
 					tasks[task.NodeID][comment.ID] = comment
 				}
 			}
@@ -1846,7 +1854,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		for _, row := range rows {
 			for _, comment := range row.task.Comments {
 				comment.Body = taskTraceTeamRewriteAttachments(comment.Body, taskID, row.task.Attachments, binding)
-				if previous, ok := commentByID[comment.ID]; !ok || comment.Updated.After(previous.Updated) {
+				if previous, ok := commentByID[comment.ID]; !ok || taskTraceTeamCommentEventSupersedes(comment, previous) {
 					commentByID[comment.ID] = comment
 				}
 			}
