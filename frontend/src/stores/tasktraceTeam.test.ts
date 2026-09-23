@@ -151,6 +151,39 @@ describe('TaskTrace team bindings', () => {
 		expect(vi.mocked(tasktraceTeamMembersSearch).mock.calls.some(([request]) => request?.query?.q === '654321')).toBe(false)
 	})
 
+	it('reads the maximum teamData permission from the repository status', () => {
+		const store = useTasktraceTeamStore()
+		store.status = {
+			enabled: true,
+			username: 'current',
+			repository: {members: [
+				{account_name: 'CHINA\\reader', access: 'read'},
+				{account_name: 'CHINA\\writer', access: 'write'},
+			]},
+			bindings: [], conflicts: [], notifications: [],
+		}
+
+		expect(store.maximumAccessFor('reader')).toBe('read')
+		expect(store.maximumAccessFor('CHINA\\writer')).toBe('write')
+		expect(store.maximumAccessFor('current')).toBe('write')
+	})
+
+	it('serializes team mutations made in quick succession', async () => {
+		let finishFirst!: (value: Awaited<ReturnType<typeof tasksTeamShare>>) => void
+		vi.mocked(tasksTeamShare)
+			.mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+			.mockResolvedValueOnce({data: {enabled: true, bindings: [], conflicts: [], notifications: []}} as unknown as Awaited<ReturnType<typeof tasksTeamShare>>)
+		const store = useTasktraceTeamStore()
+		const first = store.share(1, ['alice'])
+		const second = store.share(2, ['bob'])
+		await Promise.resolve()
+		await Promise.resolve()
+		expect(tasksTeamShare).toHaveBeenCalledTimes(1)
+		finishFirst({data: {enabled: true, bindings: [], conflicts: [], notifications: []}} as unknown as Awaited<ReturnType<typeof tasksTeamShare>>)
+		await Promise.all([first, second])
+		expect(tasksTeamShare).toHaveBeenCalledTimes(2)
+	})
+
 	it('persists a resolved identity for an existing teamData member', async () => {
 		const unresolvedStatus = {
 			enabled: true,

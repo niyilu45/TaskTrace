@@ -19,7 +19,7 @@ type taskTraceTeamAccessCache struct {
 }
 
 type taskTraceTeamAccessCacheEntry struct {
-	members []string
+	members []TaskTraceTeamRepositoryMember
 	err     error
 	expires time.Time
 	ready   chan struct{}
@@ -56,6 +56,33 @@ func taskTraceTeamFilterAccessMembers(members []string) []string {
 	return result
 }
 
+func taskTraceTeamFilterRepositoryMembers(members []TaskTraceTeamRepositoryMember) []TaskTraceTeamRepositoryMember {
+	allowed := taskTraceTeamFilterAccessMembers(taskTraceTeamRepositoryMemberNames(members))
+	result := make([]TaskTraceTeamRepositoryMember, 0, len(allowed))
+	for _, account := range allowed {
+		for _, member := range members {
+			if !strings.EqualFold(account, strings.TrimSpace(member.AccountName)) {
+				continue
+			}
+			access := strings.ToLower(strings.TrimSpace(member.Access))
+			if access != TaskTraceTeamAccessRead {
+				access = TaskTraceTeamAccessWrite
+			}
+			result = append(result, TaskTraceTeamRepositoryMember{AccountName: account, Access: access})
+			break
+		}
+	}
+	return result
+}
+
+func taskTraceTeamRepositoryMemberNames(members []TaskTraceTeamRepositoryMember) []string {
+	result := make([]string, 0, len(members))
+	for _, member := range members {
+		result = append(result, member.AccountName)
+	}
+	return result
+}
+
 func (cache *taskTraceTeamAccessCache) currentTime() time.Time {
 	if cache.now != nil {
 		return cache.now()
@@ -63,7 +90,7 @@ func (cache *taskTraceTeamAccessCache) currentTime() time.Time {
 	return time.Now()
 }
 
-func (cache *taskTraceTeamAccessCache) read(root string, load func() ([]string, error)) ([]string, error) {
+func (cache *taskTraceTeamAccessCache) read(root string, load func() ([]TaskTraceTeamRepositoryMember, error)) ([]TaskTraceTeamRepositoryMember, error) {
 	key := taskTraceTeamAccessCacheKey(root)
 	for {
 		cache.mu.Lock()
@@ -111,7 +138,7 @@ func (cache *taskTraceTeamAccessCache) read(root string, load func() ([]string, 
 	}
 }
 
-func (cache *taskTraceTeamAccessCache) cached(root string) ([]string, bool) {
+func (cache *taskTraceTeamAccessCache) cached(root string) ([]TaskTraceTeamRepositoryMember, bool) {
 	key := taskTraceTeamAccessCacheKey(root)
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

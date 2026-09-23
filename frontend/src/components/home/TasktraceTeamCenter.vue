@@ -18,9 +18,9 @@
 			<section class="team-management-section">
 				<div class="team-management-heading">
 					<div>
-						<h3>未分配人员</h3>
+						<h3>所有协作人员</h3>
 						<p class="has-text-grey">
-							这些账户有 teamData 读写权限，但还不属于任何协作团队。
+							这里设置 teamData 的最高权限；具体任务和遗留事项仍可单独设为只读或无权限。
 						</p>
 					</div>
 					<XButton
@@ -37,30 +37,54 @@
 					@select="grantMember"
 				/>
 				<div
-					v-if="teamStore.status.unassigned_members?.length"
+					v-if="allMembers.length"
 					class="team-unassigned-list"
 				>
 					<div
-						v-for="member in teamStore.status.unassigned_members"
-						:key="member"
+						v-for="member in allMembers"
+						:key="teamStore.memberKey(member.username)"
 						class="team-unassigned-row"
 					>
-						<TeamMemberIdentity :username="member" />
-						<XButton
-							variant="secondary"
-							:loading="removingMember === member"
-							:disabled="!!removingMember"
-							@click="requestRemoveMember(member)"
-						>
-							删除权限
-						</XButton>
+						<div class="team-member-summary">
+							<TeamMemberIdentity :username="member.username" />
+							<span
+								v-if="member.isCurrent"
+								class="tag is-primary is-light"
+							>本机用户</span>
+						</div>
+						<div class="team-member-actions">
+							<label :for="`team-access-${teamStore.memberKey(member.username)}`">最高权限</label>
+							<select
+								:id="`team-access-${teamStore.memberKey(member.username)}`"
+								class="select"
+								:value="member.access"
+								:disabled="member.isCurrent || changingMember === member.username"
+								@change="changeMemberAccess(member.username, ($event.target as HTMLSelectElement).value as 'read' | 'write')"
+							>
+								<option value="read">
+									仅读
+								</option>
+								<option value="write">
+									读写
+								</option>
+							</select>
+							<XButton
+								v-if="member.unassigned"
+								variant="secondary"
+								:loading="removingMember === member.username"
+								:disabled="!!removingMember || !!changingMember"
+								@click="requestRemoveMember(member.username)"
+							>
+								删除权限
+							</XButton>
+						</div>
 					</div>
 				</div>
 				<p
 					v-else
 					class="team-empty-state"
 				>
-					当前没有未分配人员。
+					当前没有协作人员。
 				</p>
 				<p
 					v-if="memberActionError"
@@ -385,13 +409,21 @@ const memberLink = ref('')
 const memberImportResult = ref<TaskTraceTeamMemberImportResult | null>(null)
 const pendingRemoval = ref('')
 const removingMember = ref('')
+const changingMember = ref('')
 const memberActionError = ref('')
 useVisiblePolling(poll, 15_000, {enabled: () => activityHost.value})
 
 const knownMembers = computed(() => [
 	teamStore.status.username || '',
-	...(teamStore.status.repository?.candidates ?? []),
+	...teamStore.memberRoster,
 ])
+
+const allMembers = computed(() => teamStore.memberRoster.map(username => ({
+	username,
+	access: teamStore.maximumAccessFor(username) ?? 'read',
+	isCurrent: teamStore.memberKey(username) === teamStore.memberKey(teamStore.status.username || ''),
+	unassigned: (teamStore.status.unassigned_members ?? []).some(member => teamStore.memberKey(member) === teamStore.memberKey(username)),
+})))
 
 function avatarFor(username: string, preferred = '') {
 	return preferred || teamStore.avatarFor(username)
@@ -469,6 +501,32 @@ async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	}
 	addingMember.value = false
 	success({message: `已为 ${accountName} 设置 teamData 读写权限。`})
+}
+
+async function setMaximumAccess(member: string, access: 'read' | 'write', elevate = false) {
+	return teamStore.setMemberAccess(member, access, elevate)
+}
+
+async function changeMemberAccess(member: string, access: 'read' | 'write') {
+	if (changingMember.value || teamStore.maximumAccessFor(member) === access) return
+	changingMember.value = member
+	memberActionError.value = ''
+	try {
+		try {
+			await setMaximumAccess(member, access)
+		} catch (cause) {
+			if (!needsAdministratorAuthorization(cause)) throw cause
+			const confirmed = window.confirm(`修改 ${member} 的 teamData ${access === 'write' ? '读写' : '仅读'}权限需要 Windows 管理员授权。\n\n继续后只会为本次操作短暂提升权限，TaskTrace 仍以普通权限运行。`)
+			if (!confirmed) return
+			await setMaximumAccess(member, access, true)
+		}
+		success({message: `已将 ${member} 的最高权限设置为${access === 'write' ? '读写' : '仅读'}。`})
+	} catch (cause) {
+		memberActionError.value = getErrorText(cause)
+		error(cause)
+	} finally {
+		changingMember.value = ''
+	}
 }
 
 function requestRemoveMember(member: string) {
@@ -675,6 +733,27 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 	overflow-wrap: anywhere;
 }
 
+.team-member-summary,
+.team-member-actions {
+	display: flex;
+	align-items: center;
+	gap: .6rem;
+}
+
+.team-member-actions label {
+	color: var(--grey-600);
+	font-size: .8rem;
+}
+
+.team-member-actions select {
+	min-inline-size: 6rem;
+	padding: .45rem .6rem;
+	border: 1px solid var(--grey-300);
+	border-radius: 6px;
+	background: var(--white);
+	color: var(--text);
+}
+
 .team-member-names {
 	display: flex;
 	flex-wrap: wrap;
@@ -810,7 +889,8 @@ async function openNotification(notice: TaskTraceTeamNotification) {
 
 @media screen and (max-width: $tablet) {
 	.team-management-heading,
-	.team-binding-card {
+	.team-binding-card,
+	.team-unassigned-row {
 		align-items: flex-start;
 		flex-direction: column;
 	}

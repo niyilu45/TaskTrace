@@ -91,7 +91,8 @@ const taskTraceTeamListAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $resolvedRoot=[IO.Path]::GetFullPath($Root).TrimEnd('\')
-$values=@()
+$fileAccess=@{}
+$shareAccess=@{}
 function Test-SystemPrincipal($Identity) {
   try {
     $sid=$Identity.Translate([Security.Principal.SecurityIdentifier]).Value
@@ -103,22 +104,44 @@ function Test-SystemPrincipal($Identity) {
 $acl=Get-Acl -LiteralPath $resolvedRoot -ErrorAction Stop
 foreach($entry in $acl.Access){
   if($entry.AccessControlType -ne 'Allow'){continue}
-  if(($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq 0 -and ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq 0){continue}
   if(Test-SystemPrincipal $entry.IdentityReference){continue}
   $name=$entry.IdentityReference.Value
-  if($name -and $name -notin @('Everyone','Authenticated Users')){$values+=$name}
+  if(-not $name -or $name -in @('Everyone','Authenticated Users')){continue}
+  $write=(($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -ne 0 -or ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -ne 0 -or ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne 0)
+  $read=$write -or (($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) -ne 0 -or ($entry.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Read) -ne 0)
+  if($read){
+    $level=if($write){'write'}else{'read'}
+    if(-not $fileAccess.ContainsKey($name) -or $level -eq 'write'){$fileAccess[$name]=$level}
+  }
 }
 $share=Get-SmbShare -ErrorAction SilentlyContinue | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $resolvedRoot)} | Select-Object -First 1
 if($null -ne $share){
   foreach($entry in @(Get-SmbShareAccess -Name $share.Name -ErrorAction SilentlyContinue)){
     $identity=[Security.Principal.NTAccount]::new([string]$entry.AccountName)
-    if($entry.AccessControlType -eq 'Allow' -and $entry.AccessRight -in @('Change','Full') -and -not (Test-SystemPrincipal $identity) -and $entry.AccountName -notin @('Everyone','Authenticated Users')){$values+=[string]$entry.AccountName}
+    if($entry.AccessControlType -ne 'Allow' -or (Test-SystemPrincipal $identity) -or $entry.AccountName -in @('Everyone','Authenticated Users')){continue}
+    $name=[string]$entry.AccountName
+    $level=if($entry.AccessRight -in @('Change','Full')){'write'}else{'read'}
+    if(-not $shareAccess.ContainsKey($name) -or $level -eq 'write'){$shareAccess[$name]=$level}
   }
 }
-ConvertTo-Json -InputObject ([object[]]@($values | Sort-Object -Unique)) -Compress`
+$values=@()
+if($null -ne $share){
+  foreach($name in @($shareAccess.Keys | Sort-Object)){
+    $access=$shareAccess[$name]
+    if($fileAccess.ContainsKey($name) -and $fileAccess[$name] -eq 'read'){$access='read'}
+    $values+=[ordered]@{account_name=$name;access=$access}
+  }
+} else {
+  foreach($name in @($fileAccess.Keys | Sort-Object)){
+    $values+=[ordered]@{account_name=$name;access=$fileAccess[$name]}
+  }
+}
+ConvertTo-Json -InputObject ([object[]]@($values)) -Compress`
 
 const taskTraceTeamGrantAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $Member=$env:TASKTRACE_TEAM_MEMBER
+$Access=([string]$env:TASKTRACE_TEAM_ACCESS).ToLowerInvariant()
+if($Access -ne 'read'){$Access='write'}
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.Encoding]::UTF8
 $rootPath=[IO.Path]::GetFullPath($Root).TrimEnd('\')
@@ -128,28 +151,27 @@ $separator=$canonical.LastIndexOf([char]92)
 $username=if($separator -ge 0){$canonical.Substring($separator+1)}else{$canonical}
 $share=Get-SmbShare -ErrorAction Stop | Where-Object {$_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -ieq $rootPath)} | Select-Object -First 1
 if($null -eq $share){throw 'teamData 尚未创建 Windows 文件共享'}
-$existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in @('Change','Full')})
 $directory=[IO.DirectoryInfo]::new($rootPath)
 $legacyAclApi=@($directory.PSObject.Methods.Name) -contains 'GetAccessControl'
 $acl=if($legacyAclApi){$directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)}else{[IO.FileSystemAclExtensions]::GetAccessControl($directory,[Security.AccessControl.AccessControlSections]::Access)}
-$aclExisting=@($acl.Access | Where-Object {
-  $entrySid=$null
-  try {$entrySid=$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier])} catch {}
-  $entrySid -eq $sid -and $_.AccessControlType -eq 'Allow' -and (($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -ne 0)
-})
-if($existing.Count -gt 0 -and $aclExisting.Count -gt 0){[ordered]@{account_name=$canonical;username=$username} | ConvertTo-Json -Compress;exit 0}
-$shareAdded=$false
+$existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical})
+$previousRight=if($existing.AccessRight -contains 'Full'){'Full'}elseif($existing.AccessRight -contains 'Change'){'Change'}elseif($existing.Count -gt 0){'Read'}else{''}
 try {
-  if($existing.Count -eq 0){Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight Change -Force -ErrorAction Stop | Out-Null;$shareAdded=$true}
+  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop}
+  $shareRight=if($Access -eq 'read'){'Read'}else{'Change'}
+  Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight $shareRight -Force -ErrorAction Stop | Out-Null
   $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
-  $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::Modify,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
-  $acl.SetAccessRule($rule)
+  $rights=if($Access -eq 'read'){[Security.AccessControl.FileSystemRights]::ReadAndExecute}else{[Security.AccessControl.FileSystemRights]::Modify}
+  $acl.PurgeAccessRules($sid)
+  $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+  [void]$acl.AddAccessRule($rule)
   if($legacyAclApi){$directory.SetAccessControl($acl)}else{[IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}
 } catch {
-  if($shareAdded){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue}
+  Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue
+  if($previousRight){Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight $previousRight -Force -ErrorAction SilentlyContinue | Out-Null}
   throw
 }
-[ordered]@{account_name=$canonical;username=$username} | ConvertTo-Json -Compress`
+[ordered]@{account_name=$canonical;username=$username;access=$Access} | ConvertTo-Json -Compress`
 
 const taskTraceTeamRemoveAccessScript = `$Root=$env:TASKTRACE_TEAM_ROOT
 $Member=$env:TASKTRACE_TEAM_MEMBER
@@ -218,18 +240,18 @@ func taskTraceTeamSearchWindowsMembers(ctx context.Context, query string, quick 
 	return result, nil
 }
 
-func taskTraceTeamListWindowsAccess(root string) ([]string, error) {
-	return taskTraceWindowsAccessCache.read(root, func() ([]string, error) {
+func taskTraceTeamListWindowsAccess(root string) ([]TaskTraceTeamRepositoryMember, error) {
+	return taskTraceWindowsAccessCache.read(root, func() ([]TaskTraceTeamRepositoryMember, error) {
 		return taskTraceTeamReadWindowsAccess(root)
 	})
 }
 
-func taskTraceTeamReadWindowsAccess(root string) ([]string, error) {
+func taskTraceTeamReadWindowsAccess(root string) ([]TaskTraceTeamRepositoryMember, error) {
 	output, err := taskTraceTeamPowerShell(taskTraceTeamListAccessScript, "TASKTRACE_TEAM_ROOT="+root)
 	if err != nil {
 		return nil, err
 	}
-	result := []string{}
+	result := []TaskTraceTeamRepositoryMember{}
 	if len(strings.TrimSpace(string(output))) > 0 {
 		if err := json.Unmarshal(output, &result); err != nil {
 			return nil, fmt.Errorf("parse teamData access list: %w", err)
@@ -239,7 +261,7 @@ func taskTraceTeamReadWindowsAccess(root string) ([]string, error) {
 }
 
 func taskTraceTeamGrantWindowsAccess(root, member string) (string, error) {
-	return taskTraceTeamGrantWindowsAccessWithElevation(root, member, false)
+	return taskTraceTeamSetWindowsAccessWithElevation(root, member, TaskTraceTeamAccessWrite, false)
 }
 
 func taskTraceTeamAccessNeedsElevation(err error) bool {
@@ -260,10 +282,18 @@ func IsTaskTraceTeamAdminRequired(err error) bool {
 }
 
 func taskTraceTeamGrantWindowsAccessWithElevation(root, member string, elevate bool) (string, error) {
-	if elevate {
-		return taskTraceTeamGrantWindowsAccessElevated(root, member)
+	return taskTraceTeamSetWindowsAccessWithElevation(root, member, TaskTraceTeamAccessWrite, elevate)
+}
+
+func taskTraceTeamSetWindowsAccessWithElevation(root, member, access string, elevate bool) (string, error) {
+	access = strings.ToLower(strings.TrimSpace(access))
+	if access != TaskTraceTeamAccessRead {
+		access = TaskTraceTeamAccessWrite
 	}
-	output, err := taskTraceTeamPowerShell(taskTraceTeamGrantAccessScript, "TASKTRACE_TEAM_ROOT="+root, "TASKTRACE_TEAM_MEMBER="+member)
+	if elevate {
+		return taskTraceTeamGrantWindowsAccessElevated(root, member, access)
+	}
+	output, err := taskTraceTeamPowerShell(taskTraceTeamGrantAccessScript, "TASKTRACE_TEAM_ROOT="+root, "TASKTRACE_TEAM_MEMBER="+member, "TASKTRACE_TEAM_ACCESS="+access)
 	if err != nil {
 		if taskTraceTeamAccessNeedsElevation(err) {
 			return "", fmt.Errorf("%w：Windows 拒绝了共享权限修改（系统错误 5）", errTaskTraceTeamAdminRequired)
@@ -287,6 +317,7 @@ try {
   $request=Get-Content -LiteralPath $args[0] -Raw -Encoding UTF8 | ConvertFrom-Json
   $env:TASKTRACE_TEAM_ROOT=[string]$request.root
   $env:TASKTRACE_TEAM_MEMBER=[string]$request.member
+  $env:TASKTRACE_TEAM_ACCESS=[string]$request.access
   $value=& {
 ` + taskTraceTeamGrantAccessScript + `
   }
@@ -315,7 +346,7 @@ try {
 $result | ConvertTo-Json -Compress | Set-Content -LiteralPath $args[1] -Encoding UTF8`
 }
 
-func taskTraceTeamRunWindowsAccessElevated(root, member, scriptName, wrapper string) (string, error) {
+func taskTraceTeamRunWindowsAccessElevated(root, member, access, scriptName, wrapper string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "tasktrace-team-access-")
 	if err != nil {
 		return "", fmt.Errorf("创建管理员授权请求失败：%w", err)
@@ -325,7 +356,7 @@ func taskTraceTeamRunWindowsAccessElevated(root, member, scriptName, wrapper str
 	inputPath := filepath.Join(tempDir, "request.json")
 	outputPath := filepath.Join(tempDir, "result.json")
 	scriptPath := filepath.Join(tempDir, scriptName)
-	payload, _ := json.Marshal(map[string]string{"root": root, "member": member})
+	payload, _ := json.Marshal(map[string]string{"root": root, "member": member, "access": access})
 	if err := os.WriteFile(inputPath, payload, 0600); err != nil {
 		return "", fmt.Errorf("写入管理员授权请求失败：%w", err)
 	}
@@ -369,8 +400,8 @@ func taskTraceTeamRunWindowsAccessElevated(root, member, scriptName, wrapper str
 	return "", errors.New("Windows 管理员授权超时，请重试")
 }
 
-func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error) {
-	result, err := taskTraceTeamRunWindowsAccessElevated(root, member, "grant-team-access.ps1", taskTraceTeamGrantElevatedScript())
+func taskTraceTeamGrantWindowsAccessElevated(root, member, access string) (string, error) {
+	result, err := taskTraceTeamRunWindowsAccessElevated(root, member, access, "grant-team-access.ps1", taskTraceTeamGrantElevatedScript())
 	if err != nil {
 		return "", err
 	}
@@ -386,7 +417,7 @@ func taskTraceTeamGrantWindowsAccessElevated(root, member string) (string, error
 
 func taskTraceTeamRemoveWindowsAccessWithElevation(root, member string, elevate bool) error {
 	if elevate {
-		_, err := taskTraceTeamRunWindowsAccessElevated(root, member, "remove-team-access.ps1", taskTraceTeamRemoveElevatedScript())
+		_, err := taskTraceTeamRunWindowsAccessElevated(root, member, "", "remove-team-access.ps1", taskTraceTeamRemoveElevatedScript())
 		if err == nil {
 			taskTraceWindowsAccessCache.invalidate(root)
 		}

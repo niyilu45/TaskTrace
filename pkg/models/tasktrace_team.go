@@ -35,11 +35,22 @@ const taskTraceTeamSchema = 1
 var taskTraceTeamMu sync.Mutex
 
 type TaskTraceTeamRepositoryInfo struct {
-	Path       string   `json:"path"`
-	Paths      []string `json:"-"`
-	Computer   string   `json:"computer,omitempty"`
-	Candidates []string `json:"candidates"`
-	Shared     bool     `json:"shared"`
+	Path       string                          `json:"path"`
+	Paths      []string                        `json:"-"`
+	Computer   string                          `json:"computer,omitempty"`
+	Candidates []string                        `json:"candidates"`
+	Members    []TaskTraceTeamRepositoryMember `json:"members" readOnly:"true" doc:"Windows accounts with access to teamData and their maximum access level."`
+	Shared     bool                            `json:"shared"`
+}
+
+const (
+	TaskTraceTeamAccessRead  = "read"
+	TaskTraceTeamAccessWrite = "write"
+)
+
+type TaskTraceTeamRepositoryMember struct {
+	AccountName string `json:"account_name" readOnly:"true"`
+	Access      string `json:"access" readOnly:"true" enum:"read,write"`
 }
 
 type TaskTraceTeamManifest struct {
@@ -225,7 +236,7 @@ type TaskTraceTeamStatus struct {
 	Enabled           bool                         `json:"enabled"`
 	Username          string                       `json:"username"`
 	Repository        TaskTraceTeamRepositoryInfo  `json:"repository"`
-	UnassignedMembers []string                     `json:"unassigned_members" readOnly:"true" doc:"Accounts with teamData read/write access that do not belong to any collaboration team."`
+	UnassignedMembers []string                     `json:"unassigned_members" readOnly:"true" doc:"Accounts with teamData access that do not belong to any collaboration team."`
 	Bindings          []TaskTraceTeamBindingStatus `json:"bindings"`
 	Conflicts         []TaskTraceTeamConflict      `json:"conflicts"`
 	Notifications     []TaskTraceTeamNotification  `json:"notifications"`
@@ -325,7 +336,7 @@ func taskTraceTeamAppendRepository(paths []string, value string) []string {
 }
 
 func taskTraceTeamRepositoryMetadata(root string) TaskTraceTeamRepositoryInfo {
-	info := TaskTraceTeamRepositoryInfo{Path: root, Paths: []string{}, Candidates: []string{}}
+	info := TaskTraceTeamRepositoryInfo{Path: root, Paths: []string{}, Candidates: []string{}, Members: []TaskTraceTeamRepositoryMember{}}
 	path := filepath.Join(root, "repository-info.json")
 	_ = taskTraceTeamReadJSON(path, &info)
 	var aliases struct {
@@ -342,16 +353,18 @@ func taskTraceTeamRepositoryMetadata(root string) TaskTraceTeamRepositoryInfo {
 
 func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
 	info := taskTraceTeamRepositoryMetadata(root)
-	if candidates, err := taskTraceTeamListWindowsAccess(root); err == nil {
-		info.Candidates = taskTraceTeamFilterAccessMembers(candidates)
+	if members, err := taskTraceTeamListWindowsAccess(root); err == nil {
+		info.Members = taskTraceTeamFilterRepositoryMembers(members)
+		info.Candidates = taskTraceTeamRepositoryMemberNames(info.Members)
 	}
 	return info
 }
 
 func taskTraceTeamRepositoryInfoCached(root string) TaskTraceTeamRepositoryInfo {
 	info := taskTraceTeamRepositoryMetadata(root)
-	if candidates, ok := taskTraceWindowsAccessCache.cached(root); ok {
-		info.Candidates = taskTraceTeamFilterAccessMembers(candidates)
+	if members, ok := taskTraceWindowsAccessCache.cached(root); ok {
+		info.Members = taskTraceTeamFilterRepositoryMembers(members)
+		info.Candidates = taskTraceTeamRepositoryMemberNames(info.Members)
 	}
 	return info
 }

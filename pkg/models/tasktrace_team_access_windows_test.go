@@ -67,6 +67,15 @@ func TestTaskTraceTeamPowerShellScriptsParse(t *testing.T) {
 func TestTaskTraceTeamAccessListFiltersBuiltInSIDs(t *testing.T) {
 	assert.Contains(t, taskTraceTeamListAccessScript, "S-1-5-32-")
 	assert.Contains(t, taskTraceTeamListAccessScript, "Test-SystemPrincipal")
+	assert.Contains(t, taskTraceTeamListAccessScript, "account_name=$name;access=$access")
+}
+
+func TestTaskTraceTeamAccessSupportsReadAndWriteMaximums(t *testing.T) {
+	assert.Contains(t, taskTraceTeamGrantAccessScript, "TASKTRACE_TEAM_ACCESS")
+	assert.Contains(t, taskTraceTeamGrantAccessScript, "AccessRight $shareRight")
+	assert.Contains(t, taskTraceTeamGrantAccessScript, "ReadAndExecute")
+	assert.Contains(t, taskTraceTeamGrantAccessScript, "PurgeAccessRules")
+	assert.Contains(t, taskTraceTeamGrantAccessScript, "previousRight")
 }
 func TestTaskTraceTeamSystemAccountPattern(t *testing.T) {
 	script := `$ErrorActionPreference='Stop'

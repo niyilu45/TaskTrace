@@ -38,6 +38,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	let activeRead: Promise<TaskTraceTeamStatus> | null = null
 	let activeSync: Promise<TaskTraceTeamStatus> | null = null
 	const mutations = new Set<Promise<TaskTraceTeamStatus>>()
+	let writeTail: Promise<unknown> = Promise.resolve()
 	let lastReadAt = -Infinity
 	const profileRetryAfter = new Map<string, number>()
 	let pending = 0
@@ -75,7 +76,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		const sequence = ++requestSequence
 		pending++
 		loading.value = true
-		const operation = Promise.resolve().then(request).then(result => apply(result.data, sequence)).finally(() => {
+		const start = kind === 'read' ? Promise.resolve() : writeTail.catch(() => undefined)
+		const operation = start.then(request).then(result => apply(result.data, sequence)).finally(() => {
 			mutations.delete(operation)
 			pending--
 			loading.value = pending > 0
@@ -83,6 +85,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			if (activeSync === operation) activeSync = null
 		})
 		if (kind !== 'read') mutations.add(operation)
+		if (kind !== 'read') writeTail = operation.then(() => undefined, () => undefined)
 		if (kind === 'read') activeRead = operation
 		if (kind === 'sync') activeSync = operation
 		return operation
@@ -190,7 +193,19 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		].some(candidate => teamMemberKey(candidate) === key)
 	}
 
-	function memberAccessOptions(member: TaskTraceTeamMemberCandidate | string, elevate = false) {
+	type TeamAccessLevel = 'read' | 'write'
+	type RepositoryAccessMember = {account_name?: string, access?: TeamAccessLevel}
+
+	function repositoryAccessMembers(): RepositoryAccessMember[] {
+		return ((status.value.repository as (typeof status.value.repository & {members?: RepositoryAccessMember[]}) | undefined)?.members ?? [])
+	}
+
+	function maximumAccessFor(member: string): TeamAccessLevel | undefined {
+		if (teamMemberKey(member) === teamMemberKey(status.value.username)) return 'write'
+		return repositoryAccessMembers().find(item => teamMemberKey(item.account_name) === teamMemberKey(member))?.access
+	}
+
+	function memberAccessOptions(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write') {
 		const candidate = typeof member === 'string' ? memberProfile(member) : member
 		const accountName = candidate.account_name || candidate.username
 		if (!accountName) throw new Error('缺少 Windows 账户名，无法设置 teamData 权限。')
@@ -200,6 +215,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				username: candidate.username,
 				display_name: candidate.display_name,
 				email: candidate.email,
+				access,
 			},
 			headers: elevate ? {'X-TaskTrace-Elevate': true as const} : undefined,
 		}
@@ -219,17 +235,19 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				.then(async candidates => {
 					const candidate = candidates.find(item => teamMemberKey(item.account_name || item.username || item.email) === key)
 					if (!candidate || !hasKnownTeamDataAccess(member)) return
-					const sequence = ++requestSequence
-					const result = await tasktraceTeamMembersAccessCreate(memberAccessOptions(candidate))
-					apply(result.data, sequence)
+					await run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(candidate, false, maximumAccessFor(member) ?? 'write')))
 				})
 				.catch(() => undefined)
 				.finally(() => hydratingProfiles.delete(key))
 		}
 	}
 
-	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false) {
-		return run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(member, elevate)))
+	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write') {
+		return run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(member, elevate, access)))
+	}
+
+	async function setMemberAccess(member: TaskTraceTeamMemberCandidate | string, access: TeamAccessLevel, elevate = false) {
+		return grantMember(member, elevate, access)
 	}
 
 	async function removeMember(accountName: string, elevate = false) {
@@ -307,9 +325,10 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			}
 		}
 		for (const member of status.value.repository?.candidates ?? []) add(member)
+		for (const member of repositoryAccessMembers()) add(member.account_name)
 		for (const member of status.value.unassigned_members ?? []) add(member)
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
 	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, setMemberAccess, maximumAccessFor, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
 })

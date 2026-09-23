@@ -36,6 +36,7 @@ type TaskTraceTeamMemberAccessRequest struct {
 	Username    string `json:"username,omitempty" doc:"The account's short Windows username."`
 	DisplayName string `json:"display_name,omitempty" doc:"The display name returned by Windows directory search."`
 	Email       string `json:"email,omitempty" doc:"The email address returned by Windows directory search."`
+	Access      string `json:"access,omitempty" enum:"read,write" default:"write" doc:"The maximum access granted through the teamData Windows share."`
 }
 
 type TaskTraceTeamMemberImportRequest struct {
@@ -145,9 +146,16 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 	if taskTraceTeamMembersEqual(request.AccountName, u.Username) {
 		return nil, errors.New("当前用户已经拥有 teamData 权限")
 	}
-	resolved, err := taskTraceTeamGrantWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, elevate)
+	access := strings.ToLower(strings.TrimSpace(request.Access))
+	if access == "" {
+		access = TaskTraceTeamAccessWrite
+	}
+	if access != TaskTraceTeamAccessRead && access != TaskTraceTeamAccessWrite {
+		return nil, errors.New("teamData 权限必须是 read 或 write")
+	}
+	resolved, err := taskTraceTeamSetWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, access, elevate)
 	if err != nil {
-		return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", request.AccountName, err)
+		return nil, fmt.Errorf("无法为 %s 设置 teamData 权限：%w", request.AccountName, err)
 	}
 	candidate := TaskTraceTeamMemberCandidate{Username: request.Username, AccountName: resolved, DisplayName: request.DisplayName, Email: request.Email}
 	if candidate.Username == "" {
@@ -187,6 +195,22 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 				return strings.ToLower(status.UnassignedMembers[i]) < strings.ToLower(status.UnassignedMembers[j])
 			})
 		}
+	}
+	if err == nil {
+		updated := false
+		for index := range status.Repository.Members {
+			if taskTraceTeamMembersEqual(status.Repository.Members[index].AccountName, resolved) {
+				status.Repository.Members[index].Access = access
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			status.Repository.Members = append(status.Repository.Members, TaskTraceTeamRepositoryMember{AccountName: resolved, Access: access})
+		}
+		sort.Slice(status.Repository.Members, func(i, j int) bool {
+			return strings.ToLower(status.Repository.Members[i].AccountName) < strings.ToLower(status.Repository.Members[j].AccountName)
+		})
 	}
 	return &status, err
 }
@@ -228,6 +252,9 @@ func taskTraceTeamRemoveMemberFromStatus(status *TaskTraceTeamStatus, accountNam
 	})
 	status.UnassignedMembers = slices.DeleteFunc(status.UnassignedMembers, func(member string) bool {
 		return taskTraceTeamMembersEqual(member, accountName)
+	})
+	status.Repository.Members = slices.DeleteFunc(status.Repository.Members, func(member TaskTraceTeamRepositoryMember) bool {
+		return taskTraceTeamMembersEqual(member.AccountName, accountName)
 	})
 }
 
