@@ -4,6 +4,11 @@ import {serializeProgressReferences, type ProgressReference} from './progressRef
 import {serializeTeamCommentMarker} from './tasktraceTeam'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
+	it('never exposes an outstanding note as daily progress when its heading was rewritten', () => {
+		const outstanding = {id: 7, comment: '<h3 data-tasktrace-comment-type="outstanding">已改写标题</h3><ul><li data-id="one"><aside data-tasktrace-outstanding-note="true" hidden><p>遗留备注</p></aside></li></ul>'}
+		expect(sortProgressNotes([outstanding])).toEqual([])
+	})
+
 	it('sorts by entered dates even when older progress was entered later', () => {
 		const notes = sortProgressNotes([{id: 1, created: '2026-09-20T10:00:00Z', comment: daily('2026-09-19', 'new')}, {id: 2, created: '2026-09-21T10:00:00Z', comment: daily('2026-09-16', 'old')}])
 		expect(notes.map(note => note.id)).toEqual([1, 2])

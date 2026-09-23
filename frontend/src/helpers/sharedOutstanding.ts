@@ -2,8 +2,9 @@ import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, type TaskComment} from '@/client/generated'
 import {sortProgressNotes} from './progressNotes'
 import {deduplicateHtmlImages} from './tasktraceImages'
+import {isOutstandingComment, outstandingHeading, outstandingType, outstandingTypeAttribute} from './tasktraceCommentTypes'
 
-export const sharedHeading = 'TaskTrace 遗留事项清单'
+export const sharedHeading = outstandingHeading
 export type OutstandingItem = {
 	id: string
 	html: string
@@ -32,6 +33,7 @@ function serializeOutstandingNote(note?: string) {
 }
 
 function priority(value: string | null | undefined) {
+	if (value == null || value.trim() === '') return 9
 	const parsed = Number(value)
 	return Number.isInteger(parsed) ? Math.max(0, Math.min(9, parsed)) : 9
 }
@@ -41,10 +43,10 @@ function attribute(value: string) {
 }
 
 export function sharedOutstanding(history: TaskComment[]) {
-	const record = [...history].sort((a, b) => (b.id || 0) - (a.id || 0)).find(note => new DOMParser().parseFromString(note.comment || '', 'text/html').querySelector('h3')?.textContent === sharedHeading)
+	const record = [...history].sort((a, b) => (b.id || 0) - (a.id || 0)).find(note => isOutstandingComment(note.comment || ''))
 	if (record) {
 		const doc = new DOMParser().parseFromString(record.comment || '', 'text/html')
-		const list = doc.querySelector('h3 + ul')
+		const list = doc.querySelector('h3 + ul') || Array.from(doc.querySelectorAll('ul')).find(candidate => candidate.querySelector(':scope > li[data-id]'))
 		const entries = list ? Array.from(list.children).filter(child => child.tagName === 'LI') : []
 		return {
 			id: record.id,
@@ -90,7 +92,7 @@ export async function readTaskHistory(taskId: number) {
 export async function changeOutstanding(taskId: number, change: (items: OutstandingItem[]) => OutstandingItem[], headers = undoGroupHeaders()) {
 	const current = sharedOutstanding(await readTaskHistory(taskId))
 	const items = change(current.items)
-	const comment = `<h3>${sharedHeading}</h3><ul>${items.map(item => {
+	const comment = `<h3 ${outstandingTypeAttribute}="${outstandingType}">${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
 		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
 		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? 9))}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`

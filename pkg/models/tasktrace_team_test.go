@@ -55,6 +55,49 @@ func TestTaskTraceTeamFieldMergeAndConflict(t *testing.T) {
 	require.Len(t, options, 2)
 }
 
+func TestTaskTraceTeamFieldMergeTreatsEquivalentContentAsEqual(t *testing.T) {
+	base := `<p class="note" data-kind="text">同一内容 <strong>加粗</strong><img src="/api/v1/tasks/10/attachments/20"></p>`
+	alice := TaskTraceTeamSnapshot{Actor: "alice", Tasks: []TaskTraceTeamTask{{
+		NodeID:      "node",
+		Title:       " 相同标题 ",
+		Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one" data-priority="2"><p data-kind="text" class="note">同一内容   <strong>加粗</strong><img src="/api/v1/tasks/11/attachments/21"></p></li></ul>`,
+		Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 11, SourceAttachmentID: 21}},
+	}}}
+	bob := TaskTraceTeamSnapshot{Actor: "bob", Tasks: []TaskTraceTeamTask{{
+		NodeID:      "node",
+		Title:       "相同标题",
+		Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one" data-priority="8"><p class="note" data-kind="text">同一内容 <strong>加粗</strong><img src="/api/v2/tasks/12/attachments/22"></p></li></ul>`,
+		Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 12, SourceAttachmentID: 22}},
+	}}}
+	baseSnapshot := TaskTraceTeamSnapshot{Actor: "local", Tasks: []TaskTraceTeamTask{{
+		NodeID:      "node",
+		Title:       "相同标题",
+		Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">` + base + `</li></ul>`,
+		Attachments: []TaskTraceTeamAttachment{{ID: "same-image", SourceTaskID: 10, SourceAttachmentID: 20}},
+	}}}
+
+	value, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{alice, bob, baseSnapshot}, "node", "title", "相同标题", "", baseSnapshot.Tasks[0])
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, "相同标题", value)
+
+	value, options, conflict = taskTraceTeamFindField([]TaskTraceTeamSnapshot{alice, bob, baseSnapshot}, "node", "outstanding:one", base, "", baseSnapshot.Tasks[0])
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, base, value)
+}
+
+func TestTaskTraceTeamFieldMergeStillConflictsForDifferentImages(t *testing.T) {
+	base := `<img src="/api/v1/tasks/10/attachments/20">`
+	one := TaskTraceTeamSnapshot{Actor: "alice", Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one"><img src="/api/v1/tasks/11/attachments/21"></li></ul>`, Attachments: []TaskTraceTeamAttachment{{ID: "image-a", SourceTaskID: 11, SourceAttachmentID: 21}}}}}
+	two := TaskTraceTeamSnapshot{Actor: "bob", Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one"><img src="/api/v1/tasks/12/attachments/22"></li></ul>`, Attachments: []TaskTraceTeamAttachment{{ID: "image-b", SourceTaskID: 12, SourceAttachmentID: 22}}}}}
+	baseSnapshot := TaskTraceTeamSnapshot{Actor: "local", Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">` + base + `</li></ul>`, Attachments: []TaskTraceTeamAttachment{{ID: "base-image", SourceTaskID: 10, SourceAttachmentID: 20}}}}}
+
+	_, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{one, two, baseSnapshot}, "node", "outstanding:one", base, "", baseSnapshot.Tasks[0])
+	require.True(t, conflict)
+	require.Len(t, options, 2)
+}
+
 func TestTaskTraceTeamCombinesComputersWithSameUsername(t *testing.T) {
 	now := time.Now().UTC()
 	older := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "one", Updated: now, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "old", Updated: now, Comments: []TaskTraceTeamComment{{ID: "first", Body: "one", Created: now}}}}}

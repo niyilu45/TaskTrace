@@ -2,6 +2,7 @@ import type {TaskComment} from '@/client/generated'
 import {splitProgressReferences, normalizeProgressReferences} from './progressReferences'
 import {readTeamCommentMarker, teamCommentAuthor} from './tasktraceTeam'
 import {deduplicateHtmlImages} from './tasktraceImages'
+import {isOutstandingComment} from './tasktraceCommentTypes'
 
 export function parseProgressNote(note: TaskComment) {
 	// Parse in an inert document; all returned HTML is sanitized by ReadonlyRichText before rendering.
@@ -56,7 +57,7 @@ export function sortProgressNotes(notes: TaskComment[]) {
 		}
 	}
 	return entries.filter(entry => !absorbed.has(entry.raw.id || 0) && (!entry.parsed.teamId || !absorbedTeam.has(entry.parsed.teamId)))
-		.filter(entry => new DOMParser().parseFromString(entry.raw.comment || '', 'text/html').querySelector('h3')?.textContent !== 'TaskTrace 遗留事项清单')
+		.filter(entry => !isOutstandingComment(entry.raw.comment || ''))
 		.map(entry => entry.parsed)
 		.sort((a, b) => (b.date === '日期未知' ? '' : b.date).localeCompare(a.date === '日期未知' ? '' : a.date) || b.created - a.created || (b.id || 0) - (a.id || 0))
 }

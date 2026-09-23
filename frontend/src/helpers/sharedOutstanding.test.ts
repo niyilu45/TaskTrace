@@ -2,6 +2,11 @@ import {describe, it, expect, vi} from 'vitest'
 vi.mock('@/client/generated', () => ({}))
 import {sharedOutstanding, outstandingHtml} from './sharedOutstanding'
 describe('shared outstanding', () => {
+	it('recognizes the stable type marker when an editor rewrites the heading', () => {
+		const marked = {id: 4, comment: '<h3 data-tasktrace-comment-type="outstanding">已改写标题</h3><ul><li data-id="a"><p>事项</p><aside data-tasktrace-outstanding-note="true" hidden><p>备注</p></aside></li></ul>'}
+		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 9, completedAt: undefined, reminderAt: undefined}])
+	})
+
 	it('uses the shared list regardless of progress dates and retains empty lists', () => {
 		const old = {id: 1, comment: '<h3>每日进展 · 2026-09-20</h3><p>x</p><p><strong>遗留问题 / 下一步</strong></p><p>legacy</p>'}
 		const shared = {id: 2, comment: '<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="a">one</li><li data-id="b">two</li></ul>'}

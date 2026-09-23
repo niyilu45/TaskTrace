@@ -39,7 +39,11 @@ import (
 	"xorm.io/xorm"
 )
 
-const taskTraceOutstandingHeading = "TaskTrace 遗留事项清单"
+const (
+	taskTraceOutstandingHeading       = "TaskTrace 遗留事项清单"
+	taskTraceOutstandingTypeAttribute = "data-tasktrace-comment-type"
+	taskTraceOutstandingType          = "outstanding"
+)
 
 // ErrTaskTraceOutstandingMove means a move cannot be applied to the current lists.
 type ErrTaskTraceOutstandingMove struct{ Reason string }
@@ -148,6 +152,9 @@ func taskTraceFirstHeading(doc *html.Node) *html.Node {
 }
 
 func taskTraceOutstandingListNode(heading *html.Node) *html.Node {
+	if heading == nil {
+		return nil
+	}
 	for node := heading.NextSibling; node != nil; node = node.NextSibling {
 		if node.Type == html.ElementNode {
 			if node.Data == "ul" {
@@ -157,6 +164,40 @@ func taskTraceOutstandingListNode(heading *html.Node) *html.Node {
 		}
 	}
 	return nil
+}
+
+func taskTraceIsOutstandingDocument(doc *html.Node) bool {
+	found := false
+	taskTraceWalk(doc, func(node *html.Node) {
+		if found || node.Type != html.ElementNode {
+			return
+		}
+		if taskTraceAttribute(node, taskTraceOutstandingTypeAttribute) == taskTraceOutstandingType ||
+			(node.Data == "h3" && strings.TrimSpace(taskTraceText(node)) == taskTraceOutstandingHeading) ||
+			(node.Data == "aside" && taskTraceAttribute(node, "data-tasktrace-outstanding-note") != "") {
+			found = true
+		}
+	})
+	return found
+}
+
+func taskTraceOutstandingListInDocument(doc, heading *html.Node) *html.Node {
+	if list := taskTraceOutstandingListNode(heading); list != nil {
+		return list
+	}
+	var result *html.Node
+	taskTraceWalk(doc, func(node *html.Node) {
+		if result != nil || node.Type != html.ElementNode || node.Data != "ul" {
+			return
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == html.ElementNode && child.Data == "li" && taskTraceAttribute(child, "data-id") != "" {
+				result = node
+				return
+			}
+		}
+	})
+	return result
 }
 
 var taskTraceDailyHeading = regexp.MustCompile(`^每日进展\s*[·:：]\s*(\d{4}-\d{2}-\d{2})$`)
@@ -186,13 +227,10 @@ func taskTraceParseOutstanding(comments []*TaskComment) (*taskTraceOutstandingLi
 			return nil, err
 		}
 		heading := taskTraceFirstHeading(doc)
-		if heading == nil {
-			continue
-		}
-		if taskTraceText(heading) == taskTraceOutstandingHeading {
+		if taskTraceIsOutstandingDocument(doc) {
 			result.comment = comment
 			result.original = comment.Comment
-			list := taskTraceOutstandingListNode(heading)
+			list := taskTraceOutstandingListInDocument(doc, heading)
 			if list == nil {
 				return result, nil
 			}
@@ -207,6 +245,9 @@ func taskTraceParseOutstanding(comments []*TaskComment) (*taskTraceOutstandingLi
 				result.items = append(result.items, taskTraceOutstandingItem{id, taskTraceInnerHTML(item), taskTraceOutstandingMetadata(item)})
 			}
 			return result, nil
+		}
+		if heading == nil {
+			continue
 		}
 		for _, idText := range strings.Split(taskTraceAttribute(heading, "data-tasktrace-merged"), ",") {
 			id, _ := strconv.ParseInt(idText, 10, 64)
@@ -379,7 +420,7 @@ func (m *TaskTraceOutstandingMove) Create(s *xorm.Session, a web.Auth) error {
 }
 func taskTraceWriteOutstanding(s *xorm.Session, a web.Auth, doer *user.User, task Task, list *taskTraceOutstandingList) (int64, error) {
 	var out strings.Builder
-	out.WriteString("<h3>" + taskTraceOutstandingHeading + "</h3><ul>")
+	out.WriteString(`<h3 ` + taskTraceOutstandingTypeAttribute + `="` + taskTraceOutstandingType + `">` + taskTraceOutstandingHeading + "</h3><ul>")
 	for _, item := range list.items {
 		out.WriteString(`<li data-id="` + html.EscapeString(item.id) + `"` + item.metadata + `>` + item.content + "</li>")
 	}

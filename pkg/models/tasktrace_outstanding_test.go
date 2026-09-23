@@ -273,3 +273,13 @@ func TestTaskTraceOutstandingLegacyParsing(t *testing.T) {
 	assert.Empty(t, parsed.items)
 	assert.True(t, strings.Contains(parsed.original, taskTraceOutstandingHeading))
 }
+
+func TestTaskTraceOutstandingStableTypeKeepsNotesOutOfProgress(t *testing.T) {
+	comments := []*TaskComment{{ID: 20, Comment: `<h3 data-tasktrace-comment-type="outstanding">编辑器改写后的标题</h3><ul><li data-id="one"><p>遗留事项</p><aside data-tasktrace-outstanding-note="true" hidden><p>只属于遗留事项的备注</p></aside></li></ul>`}}
+	parsed, err := taskTraceParseOutstanding(comments)
+	require.NoError(t, err)
+	require.Equal(t, int64(20), parsed.comment.ID)
+	require.Len(t, parsed.items, 1)
+	require.Contains(t, parsed.items[0].content, "只属于遗留事项的备注")
+	require.True(t, taskTraceTeamIsOutstanding(comments[0].Comment))
+}

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"code.vikunja.io/api/pkg/modules/avatar"
 	"code.vikunja.io/api/pkg/user"
@@ -565,7 +566,8 @@ func taskTraceTeamAddMarker(body, id, author string) string {
 }
 
 func taskTraceTeamIsOutstanding(body string) bool {
-	return strings.Contains(body, "<h3>TaskTrace 遗留事项清单</h3>")
+	doc, err := html.Parse(strings.NewReader(body))
+	return err == nil && taskTraceIsOutstandingDocument(doc)
 }
 
 func taskTraceTeamOutstandingNodes(body string) (*html.Node, []*html.Node) {
@@ -630,7 +632,7 @@ func taskTraceTeamOutstandingHTML(items map[string]string, order []string) strin
 	sort.Strings(extra)
 	ids = append(ids, extra...)
 	var body strings.Builder
-	body.WriteString("<h3>TaskTrace 遗留事项清单</h3><ul>")
+	body.WriteString(`<h3 ` + taskTraceOutstandingTypeAttribute + `="` + taskTraceOutstandingType + `">TaskTrace 遗留事项清单</h3><ul>`)
 	for _, id := range ids {
 		body.WriteString(`<li data-id="`)
 		body.WriteString(id)
@@ -1059,14 +1061,122 @@ func taskTraceTeamBaseValue(base TaskTraceTeamBase, field string) string {
 	return ""
 }
 
+func taskTraceTeamNormalizeText(value string) string {
+	var normalized strings.Builder
+	normalized.Grow(len(value))
+	inWhitespace := false
+	for _, r := range strings.ReplaceAll(value, "\r\n", "\n") {
+		if unicode.IsSpace(r) {
+			if !inWhitespace {
+				normalized.WriteByte(' ')
+				inWhitespace = true
+			}
+			continue
+		}
+		inWhitespace = false
+		normalized.WriteRune(r)
+	}
+	return normalized.String()
+}
+
+func taskTraceTeamCanonicalHTML(value string, attachments []TaskTraceTeamAttachment) string {
+	for _, attachment := range attachments {
+		if attachment.ID == "" {
+			continue
+		}
+		canonical := "tasktrace-team-attachment:" + attachment.ID
+		for _, version := range []string{"v1", "v2"} {
+			source := fmt.Sprintf("/api/%s/tasks/%d/attachments/%d", version, attachment.SourceTaskID, attachment.SourceAttachmentID)
+			value = strings.ReplaceAll(value, source, canonical)
+		}
+	}
+	doc, err := html.Parse(strings.NewReader("<div>" + value + "</div>"))
+	if err != nil {
+		return strings.TrimSpace(taskTraceTeamNormalizeText(value))
+	}
+	var root *html.Node
+	taskTraceWalk(doc, func(node *html.Node) {
+		if root == nil && node.Type == html.ElementNode && node.Data == "div" {
+			root = node
+		}
+	})
+	if root == nil {
+		return strings.TrimSpace(taskTraceTeamNormalizeText(value))
+	}
+	var normalize func(*html.Node, bool)
+	normalize = func(node *html.Node, preserveWhitespace bool) {
+		if node.Type == html.ElementNode {
+			preserveWhitespace = preserveWhitespace || node.Data == "pre" || node.Data == "code"
+			attributes := node.Attr[:0]
+			for _, attribute := range node.Attr {
+				if attribute.Key == "data-priority" {
+					continue
+				}
+				attributes = append(attributes, attribute)
+			}
+			node.Attr = attributes
+			sort.Slice(node.Attr, func(i, j int) bool {
+				if node.Attr[i].Namespace != node.Attr[j].Namespace {
+					return node.Attr[i].Namespace < node.Attr[j].Namespace
+				}
+				if node.Attr[i].Key != node.Attr[j].Key {
+					return node.Attr[i].Key < node.Attr[j].Key
+				}
+				return node.Attr[i].Val < node.Attr[j].Val
+			})
+		}
+		for child := node.FirstChild; child != nil; {
+			next := child.NextSibling
+			if child.Type == html.CommentNode {
+				node.RemoveChild(child)
+			} else {
+				if child.Type == html.TextNode && !preserveWhitespace {
+					child.Data = taskTraceTeamNormalizeText(child.Data)
+				}
+				normalize(child, preserveWhitespace)
+			}
+			child = next
+		}
+	}
+	normalize(root, false)
+	return strings.TrimSpace(taskTraceInnerHTML(root))
+}
+
+func taskTraceTeamCanonicalFieldValue(task TaskTraceTeamTask, field, value string) string {
+	if strings.HasPrefix(field, "outstanding:") {
+		return taskTraceTeamCanonicalHTML(value, task.Attachments)
+	}
+	if field == "title" {
+		return strings.TrimSpace(strings.ReplaceAll(value, "\r\n", "\n"))
+	}
+	return value
+}
+
 func taskTraceTeamConflictID(shareID, node, field string, options []TaskTraceTeamConflictOption) string {
 	b, _ := json.Marshal(options)
 	sum := sha256.Sum256(append([]byte(shareID+"\x00"+node+"\x00"+field+"\x00"), b...))
 	return hex.EncodeToString(sum[:16])
 }
 
-func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field string, base string, requiredResolution string) (string, []TaskTraceTeamConflictOption, bool) {
-	values := map[string][]string{}
+func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field string, base string, requiredResolution string, localTasks ...TaskTraceTeamTask) (string, []TaskTraceTeamConflictOption, bool) {
+	type fieldValue struct {
+		value  string
+		actors []string
+	}
+	values := map[string]*fieldValue{}
+	baseTask := TaskTraceTeamTask{}
+	if len(localTasks) > 0 {
+		baseTask = localTasks[0]
+	} else {
+		for _, snapshot := range snapshots {
+			task, ok := taskTraceTeamTaskMap(snapshot)[node]
+			if ok && taskTraceTeamFieldValue(task, field) == base {
+				baseTask = task
+				break
+			}
+		}
+	}
+	baseValue := taskTraceTeamCanonicalFieldValue(baseTask, field, base)
 	key := node + ":" + field
 	for _, snapshot := range snapshots {
 		if requiredResolution != "" && snapshot.ResolutionAcks[key] != requiredResolution {
@@ -1077,22 +1187,26 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 			continue
 		}
 		value := taskTraceTeamFieldValue(task, field)
-		if value != base {
-			values[value] = append(values[value], snapshot.Actor)
+		canonical := taskTraceTeamCanonicalFieldValue(task, field, value)
+		if canonical != baseValue {
+			if values[canonical] == nil {
+				values[canonical] = &fieldValue{value: value}
+			}
+			values[canonical].actors = append(values[canonical].actors, snapshot.Actor)
 		}
 	}
 	if len(values) == 0 {
 		return base, nil, false
 	}
 	if len(values) == 1 {
-		for value := range values {
-			return value, nil, false
+		for _, grouped := range values {
+			return grouped.value, nil, false
 		}
 	}
 	options := make([]TaskTraceTeamConflictOption, 0, len(values))
-	for value, actors := range values {
-		sort.Strings(actors)
-		options = append(options, TaskTraceTeamConflictOption{Author: strings.Join(actors, "、"), Value: value})
+	for _, grouped := range values {
+		sort.Strings(grouped.actors)
+		options = append(options, TaskTraceTeamConflictOption{Author: strings.Join(grouped.actors, "、"), Value: grouped.value})
 	}
 	sort.Slice(options, func(i, j int) bool { return options[i].Author < options[j].Author })
 	return base, options, true
@@ -1484,6 +1598,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			continue
 		}
 		base := binding.Base[node]
+		localTask, hasLocalTask := taskTraceTeamTaskMap(local)[node]
 		stored, err := GetTaskByIDSimple(s, taskID)
 		if err != nil {
 			return err
@@ -1524,7 +1639,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			if resolution, ok := resolutions[key]; ok {
 				required = resolution.ID
 			}
-			value, options, conflict := taskTraceTeamFindField(snapshots, node, field, taskTraceTeamBaseValue(base, field), required)
+			value, options, conflict := taskTraceTeamFindField(snapshots, node, field, taskTraceTeamBaseValue(base, field), required, localTask)
 			if conflict {
 				conflicts = append(conflicts, TaskTraceTeamConflict{ID: taskTraceTeamConflictID(binding.ShareID, node, field, options), ShareID: binding.ShareID, NodeID: node, TaskID: taskID, TaskTitle: stored.Title, Field: field, Base: taskTraceTeamBaseValue(base, field), Options: options})
 				continue
@@ -1548,7 +1663,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		outstanding = taskTraceTeamOutstandingHTML(outstandingItems, outstandingOrder)
-		if localTask, ok := taskTraceTeamTaskMap(local)[node]; ok {
+		if hasLocalTask {
 			outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, taskTraceTeamOutstandingPriorities(localTask.Outstanding))
 		}
 		latest := rows[0].task

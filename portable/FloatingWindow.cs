@@ -70,6 +70,7 @@ internal sealed partial class FloatingWindow : Form {
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
     sealed class SharedItemMarkup { public string Attrs, Body; }
     const string SharedHeading = "TaskTrace 遗留事项清单";
+    const string SharedTypeMarker = "data-tasktrace-comment-type=\"outstanding\"";
     static readonly Regex OutstandingNotePattern = new Regex(@"<aside\b[^>]*\bdata-tasktrace-outstanding-note(?:\s*=\s*[""']?true[""']?)?[^>]*>(?<note>.*?)</aside\s*>",RegexOptions.Singleline|RegexOptions.IgnoreCase);
 
     static IEnumerable<SharedItemMarkup> SharedItemMarkups(string html) {
@@ -291,12 +292,16 @@ internal sealed partial class FloatingWindow : Form {
         foreach(string value in DailyHistory(notes).Select(note=>DayOf(note)).Distinct())if(DateTime.TryParseExact(value,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))dates.Add(date.Date);
         return dates;
     }
+    static bool IsSharedComment(string html) {
+        html=html??"";
+        return Regex.IsMatch(html,"\\bdata-tasktrace-comment-type\\s*=\\s*(['\\\"]?)outstanding\\1",RegexOptions.IgnoreCase) || html.Contains(SharedHeading) || Regex.IsMatch(html,"\\bdata-tasktrace-outstanding-note\\s*=",RegexOptions.IgnoreCase);
+    }
     static string ProgressBody(string html,long taskId=0) {
         return ProgressDisplayBody(SplitProgressReferences(html,taskId).Body);
     }
     static SharedList ReadShared(List<Dictionary<string,object>> notes) {
         var list = new SharedList();
-        var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => ((string)note["comment"]).Contains("<h3>"+SharedHeading+"</h3>"));
+        var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => IsSharedComment(Convert.ToString(note["comment"])));
         if(record != null) {
             list.CommentId = Convert.ToInt64(record["id"]);
             foreach(var match in SharedItemMarkups((string)record["comment"])) {
@@ -322,7 +327,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3>"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
+        string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }

@@ -130,9 +130,9 @@ internal sealed partial class FloatingWindow {
         // Small/legacy tasks keep their one-page read. Large histories only need the current
         // shared list, never the daily progress, attachments or audit comments around it.
         if(commentCount>100) {
-            var matching=await ReadOutstandingPages(id,"&q="+Uri.EscapeDataString("<h3>"+SharedHeading+"</h3>"),read,current);
+            var matching=await ReadOutstandingPages(id,"&q="+Uri.EscapeDataString(SharedHeading),read,current);
             if(matching==null)return null;
-            if(matching.Any(note=>Convert.ToString(note["comment"]).Contains("<h3>"+SharedHeading+"</h3>")))return ReadShared(matching);
+            if(matching.Any(note=>IsSharedComment(Convert.ToString(note["comment"]))))return ReadShared(matching);
         }
         var history=await ReadOutstandingPages(id,"",read,current);
         return history==null?null:ReadShared(history);
