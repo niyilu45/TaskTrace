@@ -2306,7 +2306,9 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 		}
 		if resolved == "" {
 			var err error
+			taskTraceTeamMemberAccessMu.Lock()
 			resolved, err = taskTraceTeamGrantWindowsAccess(binding.Repository, member)
+			taskTraceTeamMemberAccessMu.Unlock()
 			if err != nil {
 				return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, err)
 			}
@@ -2387,7 +2389,9 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		if taskTraceTeamMembersEqual(member, u.Username) {
 			continue
 		}
+		taskTraceTeamMemberAccessMu.Lock()
 		resolved, grantErr := taskTraceTeamGrantWindowsAccess(root, member)
+		taskTraceTeamMemberAccessMu.Unlock()
 		if grantErr != nil {
 			return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, grantErr)
 		}
@@ -2926,11 +2930,12 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 }
 
 func TaskTraceTeamReadStatus(s *xorm.Session, a web.Auth) (TaskTraceTeamStatus, error) {
-	taskTraceTeamMu.Lock()
-	defer taskTraceTeamMu.Unlock()
 	if !taskTraceTeamEnabled() {
 		return TaskTraceTeamStatus{Enabled: false}, nil
 	}
+	// State and shared manifests are replaced atomically. Reading a snapshot does
+	// not need the mutation lock, and must remain available while a slow network
+	// share or Windows administrator prompt is delaying a write operation.
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
 		return TaskTraceTeamStatus{}, err

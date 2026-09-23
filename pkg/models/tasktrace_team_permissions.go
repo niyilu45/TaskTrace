@@ -275,7 +275,10 @@ func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTra
 			if strings.EqualFold(member, actor) || taskTraceTeamContainsMember(knownBindingMembers, member) {
 				continue
 			}
-			if _, err := taskTraceTeamGrantWindowsAccess(binding.Repository, member); err != nil {
+			taskTraceTeamMemberAccessMu.Lock()
+			_, err := taskTraceTeamGrantWindowsAccess(binding.Repository, member)
+			taskTraceTeamMemberAccessMu.Unlock()
+			if err != nil {
 				return changed, fmt.Errorf("无法为受理人或团队成员 %s 设置 teamData 读写权限: %w", member, err)
 			}
 		}

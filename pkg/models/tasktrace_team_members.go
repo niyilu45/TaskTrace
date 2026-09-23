@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"code.vikunja.io/api/pkg/user"
@@ -19,6 +20,10 @@ import (
 )
 
 const taskTraceTeamMembersLinkPrefix = "tasktrace-team-members://import/"
+
+// Windows share and ACL edits must remain serialized, but they must not hold
+// taskTraceTeamMu because an administrator prompt can wait for user input.
+var taskTraceTeamMemberAccessMu sync.Mutex
 
 type TaskTraceTeamMemberCandidate struct {
 	Username    string `json:"username" readOnly:"true" doc:"The account's short Windows username used as the TaskTrace collaboration identity."`
@@ -137,8 +142,6 @@ func taskTraceTeamUnassignedMembers(state taskTraceTeamState, candidates []strin
 }
 
 func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberAccessRequest, elevate bool) (*TaskTraceTeamStatus, error) {
-	taskTraceTeamMu.Lock()
-	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)
 	if err != nil {
 		return nil, err
@@ -153,7 +156,9 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 	if access != TaskTraceTeamAccessRead && access != TaskTraceTeamAccessWrite {
 		return nil, errors.New("teamData 权限必须是 read 或 write")
 	}
+	taskTraceTeamMemberAccessMu.Lock()
 	resolved, err := taskTraceTeamSetWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, access, elevate)
+	taskTraceTeamMemberAccessMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("无法为 %s 设置 teamData 权限：%w", request.AccountName, err)
 	}
@@ -216,8 +221,6 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 }
 
 func TaskTraceTeamRemoveMemberAccess(s *xorm.Session, a web.Auth, accountName string, elevate bool) (*TaskTraceTeamStatus, error) {
-	taskTraceTeamMu.Lock()
-	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)
 	if err != nil {
 		return nil, err
@@ -225,19 +228,30 @@ func TaskTraceTeamRemoveMemberAccess(s *xorm.Session, a web.Auth, accountName st
 	if taskTraceTeamMembersEqual(accountName, u.Username) {
 		return nil, errors.New("不能移除当前用户的 teamData 权限")
 	}
+	// Keep the shared state lock only while checking membership. Windows may
+	// display a UAC prompt for up to two minutes; holding the lock while waiting
+	// would stall every collaboration sync and status request in the process.
+	taskTraceTeamMu.Lock()
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
+		taskTraceTeamMu.Unlock()
 		return nil, err
 	}
 	for _, binding := range state.Bindings {
 		for _, member := range append([]string{binding.Owner}, binding.Members...) {
 			if taskTraceTeamMembersEqual(accountName, member) {
+				taskTraceTeamMu.Unlock()
 				return nil, errors.New("该成员仍属于团队，请先从所有团队中移除")
 			}
 		}
 	}
-	if err := taskTraceTeamRemoveWindowsAccessWithElevation(taskTraceTeamRoot(), accountName, elevate); err != nil {
-		return nil, fmt.Errorf("无法删除 %s 的 teamData 权限：%w", accountName, err)
+	taskTraceTeamMu.Unlock()
+	taskTraceTeamMemberAccessMu.Lock()
+	removeErr := taskTraceTeamRemoveWindowsAccessWithElevation(taskTraceTeamRoot(), accountName, elevate)
+	taskTraceTeamMemberAccessMu.Unlock()
+	if removeErr != nil {
+		//nolint:gosmopolitan // This message is displayed directly in the Chinese local UI.
+		return nil, fmt.Errorf("无法删除 %s 的 teamData 权限：%w", accountName, removeErr)
 	}
 	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	if err == nil {
@@ -285,8 +299,6 @@ func taskTraceTeamImportMemberNames(members []string, current string, grant func
 }
 
 func TaskTraceTeamImportMembers(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberImportRequest) (*TaskTraceTeamMemberImportResult, error) {
-	taskTraceTeamMu.Lock()
-	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)
 	if err != nil {
 		return nil, err
@@ -295,9 +307,11 @@ func TaskTraceTeamImportMembers(s *xorm.Session, a web.Auth, request TaskTraceTe
 	if err != nil {
 		return nil, err
 	}
+	taskTraceTeamMemberAccessMu.Lock()
 	added, skipped, failed := taskTraceTeamImportMemberNames(members, u.Username, func(member string) (string, error) {
 		return taskTraceTeamGrantWindowsAccess(taskTraceTeamRoot(), member)
 	})
+	taskTraceTeamMemberAccessMu.Unlock()
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
 		return nil, err

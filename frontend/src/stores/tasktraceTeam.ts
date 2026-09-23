@@ -30,6 +30,29 @@ import {
 	teamMemberVerification,
 } from '@/helpers/tasktraceTeamMembers'
 
+const TEAM_READ_TIMEOUT = 30_000
+const TEAM_WRITE_TIMEOUT = 90_000
+const TEAM_ELEVATED_ACCESS_TIMEOUT = 150_000
+
+async function withRequestTimeout<T>(
+	request: (signal: AbortSignal) => Promise<T>,
+	timeoutMs: number,
+): Promise<T> {
+	const controller = new AbortController()
+	let timeout: ReturnType<typeof setTimeout> | undefined
+	const expired = new Promise<never>((_resolve, reject) => {
+		timeout = setTimeout(() => {
+			reject(new Error('协作操作等待超时，请检查团队共享目录或网络连接后重试。'))
+			controller.abort()
+		}, timeoutMs)
+	})
+	try {
+		return await Promise.race([request(controller.signal), expired])
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
+
 export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const status = ref<TaskTraceTeamStatus>({enabled: false, bindings: [], conflicts: [], notifications: []})
 	const loading = ref(false)
@@ -37,7 +60,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	const directoryProfiles = ref<Record<string, TaskTraceTeamMemberCandidate>>({})
 	let activeRead: Promise<TaskTraceTeamStatus> | null = null
 	let activeSync: Promise<TaskTraceTeamStatus> | null = null
-	const mutations = new Set<Promise<TaskTraceTeamStatus>>()
+	const mutations = new Set<Promise<unknown>>()
 	let writeTail: Promise<unknown> = Promise.resolve()
 	let lastReadAt = -Infinity
 	const profileRetryAfter = new Map<string, number>()
@@ -64,7 +87,11 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return status.value
 	}
 
-	async function run(request: () => Promise<{data: TaskTraceTeamStatus}>, kind: 'read' | 'sync' | 'write' = 'write'): Promise<TaskTraceTeamStatus> {
+	async function run(
+		request: (signal: AbortSignal) => Promise<{data: TaskTraceTeamStatus}>,
+		kind: 'read' | 'sync' | 'write' = 'write',
+		timeoutMs = kind === 'read' ? TEAM_READ_TIMEOUT : TEAM_WRITE_TIMEOUT,
+	): Promise<TaskTraceTeamStatus> {
 		// A status read started during a write must see the completed mutation.
 		if (kind === 'read' && mutations.size) {
 			await Promise.allSettled([...mutations])
@@ -77,13 +104,16 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		pending++
 		loading.value = true
 		const start = kind === 'read' ? Promise.resolve() : writeTail.catch(() => undefined)
-		const operation = start.then(request).then(result => apply(result.data, sequence)).finally(() => {
-			mutations.delete(operation)
-			pending--
-			loading.value = pending > 0
-			if (activeRead === operation) activeRead = null
-			if (activeSync === operation) activeSync = null
-		})
+		const operation = start
+			.then(() => withRequestTimeout(request, timeoutMs))
+			.then(result => apply(result.data, sequence))
+			.finally(() => {
+				mutations.delete(operation)
+				pending--
+				loading.value = pending > 0
+				if (activeRead === operation) activeRead = null
+				if (activeSync === operation) activeSync = null
+			})
 		if (kind !== 'read') mutations.add(operation)
 		if (kind !== 'read') writeTail = operation.then(() => undefined, () => undefined)
 		if (kind === 'read') activeRead = operation
@@ -93,40 +123,40 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 
 	async function refresh(force = false) {
 		if (!force && loaded.value && Date.now() - lastReadAt < 2000 && pending === 0) return status.value
-		return run(() => tasktraceTeamStatus(), 'read')
+		return run(signal => tasktraceTeamStatus({signal}), 'read')
 	}
 
 	async function sync() {
-		return run(() => tasktraceTeamSync(), 'sync')
+		return run(signal => tasktraceTeamSync({signal}), 'sync')
 	}
 
 	async function share(taskId: number, members: string[]) {
-		return run(() => tasksTeamShare({path: {task: taskId}, body: {members}}))
+		return run(signal => tasksTeamShare({path: {task: taskId}, body: {members}, signal}))
 	}
 
 	async function importLink(link: string, projectId: number, repository = '') {
-		return run(() => tasktraceTeamImport({body: {link: overrideTeamLinkRepository(link, repository), project_id: projectId}}))
+		return run(signal => tasktraceTeamImport({body: {link: overrideTeamLinkRepository(link, repository), project_id: projectId}, signal}))
 	}
 
 	async function configure(shareId: string, notify: boolean) {
-		return run(() => tasktraceTeamConfigure({body: {share_id: shareId, notify}}))
+		return run(signal => tasktraceTeamConfigure({body: {share_id: shareId, notify}, signal}))
 	}
 
 	async function configurePermissions(shareId: string, taskId: number, outstandingId: string, permissions: TaskTraceTeamPermissionUpdate[]) {
-		return run(() => tasktraceTeamPermissionsConfigure({body: {
+		return run(signal => tasktraceTeamPermissionsConfigure({body: {
 			share_id: shareId,
 			task_id: taskId,
 			outstanding_id: outstandingId,
 			permissions,
-		}}))
+		}, signal}))
 	}
 
 	async function resolve(shareId: string, resolutions: TaskTraceTeamResolution[]) {
-		return run(() => tasktraceTeamResolve({body: {share_id: shareId, resolutions}}))
+		return run(signal => tasktraceTeamResolve({body: {share_id: shareId, resolutions}, signal}))
 	}
 
 	async function dismissNotifications(ids: string[] = []) {
-		return run(() => tasktraceTeamNotificationsRead({body: {ids}}))
+		return run(signal => tasktraceTeamNotificationsRead({body: {ids}, signal}))
 	}
 
 	async function searchMembers(query: string, signal?: AbortSignal, quick = false): Promise<TaskTraceTeamMemberCandidate[]> {
@@ -235,7 +265,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				.then(async candidates => {
 					const candidate = candidates.find(item => teamMemberKey(item.account_name || item.username || item.email) === key)
 					if (!candidate || !hasKnownTeamDataAccess(member)) return
-					await run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(candidate, false, maximumAccessFor(member) ?? 'write')))
+					await run(signal => tasktraceTeamMembersAccessCreate({...memberAccessOptions(candidate, false, maximumAccessFor(member) ?? 'write'), signal}))
 				})
 				.catch(() => undefined)
 				.finally(() => hydratingProfiles.delete(key))
@@ -243,7 +273,11 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write') {
-		return run(() => tasktraceTeamMembersAccessCreate(memberAccessOptions(member, elevate, access)))
+		return run(
+			signal => tasktraceTeamMembersAccessCreate({...memberAccessOptions(member, elevate, access), signal}),
+			'write',
+			elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT : TEAM_WRITE_TIMEOUT,
+		)
 	}
 
 	async function setMemberAccess(member: TaskTraceTeamMemberCandidate | string, access: TeamAccessLevel, elevate = false) {
@@ -251,21 +285,32 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function removeMember(accountName: string, elevate = false) {
-		return run(() => tasktraceTeamMembersAccessDelete({
+		return run(signal => tasktraceTeamMembersAccessDelete({
 			path: {member: accountName},
 			headers: elevate ? {'X-TaskTrace-Elevate': true} : undefined,
-		}))
+			signal,
+		}), 'write', elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT : TEAM_WRITE_TIMEOUT)
 	}
 
 	async function importMembers(link: string): Promise<TaskTraceTeamMemberImportResult> {
 		const sequence = ++requestSequence
+		lastReadAt = -Infinity
+		activeRead = null
 		pending++
 		loading.value = true
+		const start = writeTail.catch(() => undefined)
+		const operation = start.then(() => withRequestTimeout(
+			signal => tasktraceTeamMembersImport({body: {link}, signal}),
+			TEAM_WRITE_TIMEOUT,
+		))
+		mutations.add(operation)
+		writeTail = operation.then(() => undefined, () => undefined)
 		try {
-			const result = await tasktraceTeamMembersImport({body: {link}})
+			const result = await operation
 			if (result.data.status) apply(result.data.status, sequence)
 			return result.data
 		} finally {
+			mutations.delete(operation)
 			pending--
 			loading.value = pending > 0
 		}
@@ -298,11 +343,11 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function configureAssignees(shareId: string, taskId: number, assignees: string[]) {
-		return run(() => tasktraceTeamPermissionsConfigure({body: {
+		return run(signal => tasktraceTeamPermissionsConfigure({body: {
 			share_id: shareId,
 			task_id: taskId,
 			assignees,
-		}}))
+		}, signal}))
 	}
 
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)

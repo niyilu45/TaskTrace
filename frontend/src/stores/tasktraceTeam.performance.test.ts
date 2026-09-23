@@ -24,6 +24,7 @@ describe('collaboration refresh work', () => {
 		const save = store.share(1, ['other'])
 		const read = store.refresh(true)
 		await Promise.resolve()
+		await Promise.resolve()
 		expect(tasktraceTeamStatus).not.toHaveBeenCalled()
 		const next = {...snapshot(), bindings: [{share_id: 'new', members: ['me', 'other']}]}
 		vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: next} as never)
@@ -80,5 +81,29 @@ describe('collaboration refresh work', () => {
 		finish({data: snapshot()} as never)
 		await read
 		expect(store.status.bindings?.[0].share_id).toBe('new')
+	})
+	it('abandons a stuck collaboration write and continues the write queue', async () => {
+		vi.useFakeTimers()
+		try {
+			let firstSignal: AbortSignal | null | undefined
+			vi.mocked(tasksTeamShare).mockImplementationOnce(options => {
+				firstSignal = options.signal
+				return new Promise<never>(() => undefined)
+			})
+			const store = useTasktraceTeamStore()
+			const first = store.share(1, ['stuck-member'])
+			const rejected = expect(first).rejects.toThrow('协作操作等待超时')
+			await vi.advanceTimersByTimeAsync(90_000)
+			await rejected
+			expect(firstSignal?.aborted).toBe(true)
+			expect(store.loading).toBe(false)
+
+			vi.mocked(tasksTeamShare).mockResolvedValueOnce({data: snapshot()} as never)
+			await store.share(2, ['next-member'])
+			expect(tasksTeamShare).toHaveBeenCalledTimes(2)
+			expect(store.loading).toBe(false)
+		} finally {
+			vi.useRealTimers()
+		}
 	})
 })
