@@ -81,7 +81,12 @@ func (t *Task) canDoTask(s *xorm.Session, a web.Auth) (bool, error) {
 		}
 	}
 
-	// A user can do a task if it has write acces to its project
+	// A user can do a task if it has write access to its project and, for a
+	// TaskTrace collaboration task, the live shared manifest grants write access.
 	l := &Project{ID: ot.ProjectID}
-	return l.CanWrite(s, a)
+	canWriteProject, err := l.CanWrite(s, a)
+	if err != nil || !canWriteProject {
+		return canWriteProject, err
+	}
+	return taskTraceTeamCanWriteLocalTask(a, ot.ID)
 }

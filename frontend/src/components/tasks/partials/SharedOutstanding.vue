@@ -298,6 +298,7 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
+import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
 type DraftBase = {text: string, note: string, imageKeys: string[], priority: number}
@@ -305,6 +306,7 @@ type Draft = {text: string, note: string, images: ImageDraft[], itemId: string, 
 type CachedDraft = {text: string, note?: string, images: Array<{attachmentId?: number, data?: string, name?: string, type?: string}>, itemId: string, priority?: number}
 const props = defineProps<{taskId: number, disabled?: boolean}>()
 const emit = defineEmits<{saved: [], busy: [value: boolean]}>()
+const teamStore = useTasktraceTeamStore()
 const items = ref<OutstandingItem[]>([])
 const drafts = reactive(new Map<string, Draft>())
 const activeId = ref('')
@@ -626,6 +628,10 @@ async function save() {
 	error.value = ''
 	message.value = ''
 	try {
+		if (!await teamStore.refreshWritePermission(taskId)) {
+			error.value = '当前协作权限为只读，输入和图片已保留。所属人开放写权限后无需关闭窗口，直接再次保存即可。'
+			return
+		}
 		const savedNote = await persistProgressImages(savedDraft.note, taskId)
 		for (const picture of savedDraft.images) {
 			if (picture.attachmentId) continue

@@ -28,6 +28,13 @@
 				@update:task="Object.assign(task, $event)"
 				@close="$emit('close')"
 			/>
+			<div
+				v-if="canEdit && !teamCanWrite"
+				class="notification is-warning is-light"
+				role="status"
+			>
+				当前协作权限为只读。你可以编辑并保留草稿；保存时会重新检查权限，所属人开放写权限后无需关闭此窗口即可保存。
+			</div>
 			<nav
 				v-if="project?.id"
 				aria-label="Breadcrumb"
@@ -367,6 +374,7 @@
 						<Description
 							:model-value="task"
 							:can-write="canWrite"
+							:ensure-can-write="ensureCurrentTeamWrite"
 							:attachment-upload="attachmentUpload"
 							@update:modelValue="Object.assign(task, $event)"
 						/>
@@ -748,7 +756,7 @@ import {useConfigStore} from '@/stores/config'
 import {useTitle} from '@/composables/useTitle'
 import {useTaskDetailShortcuts} from '@/composables/useTaskDetailShortcuts'
 
-import {success} from '@/message'
+import {error, success} from '@/message'
 import type {Action as MessageAction} from '@/message'
 
 const props = defineProps<{
@@ -855,11 +863,24 @@ const projectRoute = computed(() => ({
 	hash: route.hash,
 }))
 
-const canWrite = computed(() => (
+const canEdit = computed(() => (
 	task.value.maxPermission !== null &&
-	task.value.maxPermission > PERMISSIONS.READ &&
-	teamStore.canWriteTask(task.value.id)
+	task.value.maxPermission > PERMISSIONS.READ
 ))
+const teamCanWrite = computed(() => teamStore.canWriteTask(task.value.id))
+const canWrite = computed(() => canEdit.value)
+
+async function ensureCurrentTeamWrite() {
+	if (!canEdit.value) return false
+	try {
+		const allowed = await teamStore.refreshWritePermission(task.value.id)
+		if (!allowed) error({message: '当前协作权限为只读，修改已保留。所属人开放写权限后可在当前窗口直接重试保存。'})
+		return allowed
+	} catch (cause) {
+		error({message: '无法重新读取协作权限，修改已保留。请检查 teamData 连接后重试。', cause})
+		return false
+	}
+}
 
 const color = computed(() => {
 	const color = task.value.getHexColor
@@ -1148,7 +1169,7 @@ async function saveTask(
 		currentTask = klona(task.value)
 	}
 
-	if (!canWrite.value) {
+	if (!await ensureCurrentTeamWrite()) {
 		return
 	}
 

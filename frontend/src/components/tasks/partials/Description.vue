@@ -73,6 +73,7 @@ const props = defineProps<{
 	modelValue: ITask,
 	attachmentUpload: AttachmentUploadFunction,
 	canWrite: boolean,
+	ensureCanWrite?: () => Promise<boolean>,
 }>()
 
 const emit = defineEmits<{
@@ -189,6 +190,7 @@ async function save() {
 	if (undoInProgress.value || !hasChanges.value || saving.value || !props.canWrite) {
 		return
 	}
+	if (props.ensureCanWrite && !await props.ensureCanWrite()) return
 
 	const submitted = description.value
 	saved.value = false

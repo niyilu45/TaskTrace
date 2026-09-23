@@ -33,6 +33,7 @@ internal sealed partial class FloatingWindow {
         string source="v0.1.0-beta.12.source.20260923153000.g756bffd7b3a1";
         if(CompareVersions(source,"v0.1.0-beta.12")<=0)throw new Exception("Desktop updater considered the source build older than beta.12");
         if(CompareVersions("v0.1.0-beta.13",source)<=0)throw new Exception("Desktop updater did not consider beta.13 newer than the source build");
+		if(!IsUpdateTimeout(new System.Threading.Tasks.TaskCanceledException("request timed out")))throw new Exception("Desktop updater did not recognize a download timeout");
     }
 }
 internal static class SourceVersionTests {

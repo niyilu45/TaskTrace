@@ -443,7 +443,9 @@ internal sealed partial class FloatingWindow : Form {
                 }
                 string responseBody = await response.Content.ReadAsStringAsync();
                 if(!response.IsSuccessStatusCode) {
-                    string message = "操作未保存（" + (int)response.StatusCode + "），请刷新后重试。";
+                    string message = response.StatusCode == HttpStatusCode.Forbidden
+                        ? "当前不具备写权限，修改已保留。所属人开放写权限后无需关闭窗口，直接重试保存即可。"
+                        : "操作未保存（" + (int)response.StatusCode + "），请刷新后重试。";
                     if(path == "/tasktrace/undo") try { var problem = ReadObject(responseBody); object detail; if(problem.TryGetValue("detail", out detail) || problem.TryGetValue("message", out detail)) message = Convert.ToString(detail); } catch { }
                     throw new Exception(message);
                 }
@@ -452,6 +454,34 @@ internal sealed partial class FloatingWindow : Form {
                 return result;
             }
         }
+    }
+    static string TeamIdentityName(string value) {
+        value=(value??"").Trim();int slash=value.LastIndexOf('\\');if(slash>=0)value=value.Substring(slash+1);int at=value.IndexOf('@');if(at>0)value=value.Substring(0,at);return value;
+    }
+    async Task<bool> RefreshTeamWritePermission(long taskId) {
+        try {
+        var state=await Api("GET","/tasktrace/team",null);
+        object enabledValue;if(state.TryGetValue("enabled",out enabledValue)&&!Convert.ToBoolean(enabledValue))return true;
+        string username=TeamIdentityName(state.ContainsKey("username")?Convert.ToString(state["username"]):Environment.UserName);
+        object bindingValues;if(!state.TryGetValue("bindings",out bindingValues))return true;
+        foreach(object rawBinding in (IEnumerable)bindingValues) {
+            var binding=rawBinding as Dictionary<string,object>;if(binding==null)continue;
+            bool match=binding.ContainsKey("root_task_id")&&Convert.ToInt64(binding["root_task_id"])==taskId;
+            object ids;if(!match&&binding.TryGetValue("task_ids",out ids))foreach(object id in (IEnumerable)ids)if(Convert.ToInt64(id)==taskId){match=true;break;}
+            if(!match)continue;
+            object targets;if(binding.TryGetValue("permission_targets",out targets))foreach(object rawTarget in (IEnumerable)targets) {
+                var target=rawTarget as Dictionary<string,object>;if(target==null||!target.ContainsKey("task_id")||Convert.ToInt64(target["task_id"])!=taskId)continue;
+                object permissions;if(!target.TryGetValue("permissions",out permissions))break;
+                foreach(object rawPermission in (IEnumerable)permissions) {
+                    var permission=rawPermission as Dictionary<string,object>;if(permission==null)continue;
+                    if(!String.Equals(TeamIdentityName(Convert.ToString(permission["username"])),username,StringComparison.OrdinalIgnoreCase))continue;
+                    object write;return permission.TryGetValue("write",out write)&&Convert.ToBoolean(write);
+                }
+            }
+            return binding.ContainsKey("owner")&&String.Equals(TeamIdentityName(Convert.ToString(binding["owner"])),username,StringComparison.OrdinalIgnoreCase);
+        }
+        return true;
+        } catch { return false; }
     }
     void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; taskSurface.Enabled=!value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
     async Task Reload() {
@@ -558,12 +588,17 @@ internal sealed partial class FloatingWindow : Form {
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,updateDiscarded=false;
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
+                if(!await RefreshTeamWritePermission(id)) {
+                    feedback.Text="当前协作权限为只读。你可以编辑并保留草稿；所属人开放写权限后无需关闭窗口，直接重试保存即可。";
+                    MessageBox.Show(this,feedback.Text,"TaskTrace · 只读协作任务",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                }
                 Action renderImages=delegate { };
                 Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=Plain(progress.Html),images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
                 Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
                     if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
+                    if(!await RefreshTeamWritePermission(id)){feedback.Text="当前协作权限为只读，任务描述已保留；开放写权限后可直接重试。";return false;}
                     descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
                     try {
                         var latest=await Api("GET","/tasks/"+id,null);string latestDescription=latest.ContainsKey("description")?Convert.ToString(latest["description"]):"";if(latestDescription!=originalDescription)throw new Exception("任务描述已在其他窗口修改，请重新打开后合并。");
@@ -646,6 +681,7 @@ internal sealed partial class FloatingWindow : Form {
                 Func<bool,Task<bool>> write=async delegate(bool finish) {
                     if(submitting || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
                     if(snapshot()==lastSaved && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return true;}
+                    if(!await RefreshTeamWritePermission(id)){feedback.Text="当前协作权限为只读，进展草稿已保留；开放写权限后可直接重试。";return false;}
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);
                     try {
                         using(BeginUndoGroup()) {

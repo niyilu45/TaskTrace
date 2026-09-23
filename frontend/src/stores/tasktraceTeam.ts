@@ -272,6 +272,13 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return teamMemberKey(binding.owner) === teamMemberKey(status.value.username)
 	}
 
+	async function refreshWritePermission(taskId: number) {
+		if (!loaded.value) await refresh(true)
+		if (!bindingForTask(taskId)) return true
+		await refresh(true)
+		return canWriteTask(taskId)
+	}
+
 	async function configureAssignees(shareId: string, taskId: number, assignees: string[]) {
 		return run(() => tasktraceTeamPermissionsConfigure({body: {
 			share_id: shareId,
@@ -304,5 +311,5 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
 	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
+	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
 })

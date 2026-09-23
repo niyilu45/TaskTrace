@@ -253,7 +253,8 @@ internal sealed partial class FloatingWindow {
                         if(File.Exists(archive)) File.Delete(archive);
                         File.Move(temporaryArchive, archive);
                         completed = true;
-                    } catch(OperationCanceledException) {
+                    } catch(OperationCanceledException e) {
+                        if(!progress.Token.IsCancellationRequested) failure=e;
                     } catch(Exception e) { failure = e; }
                     finally { progress.Finish(); }
                 };
@@ -272,8 +273,8 @@ internal sealed partial class FloatingWindow {
             Environment.ExitCode = 10; allowExit = true; Close();
         } catch(Exception e) {
             TryDelete(temporaryArchive);
-            var state = ReadUpdateState(); state["status"] = "error"; state["error"] = FriendlyUpdateError(e); WriteUpdateState(state);
-            MessageBox.Show(FriendlyUpdateError(e), "TaskTrace · 更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            var state = ReadUpdateState(); state["status"] = "error"; state["error"] = FriendlyUpdateError(e,true); WriteUpdateState(state);
+            MessageBox.Show(FriendlyUpdateError(e,true), "TaskTrace · 更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally { updateBusy = false; }
     }
 
@@ -374,13 +375,17 @@ internal sealed partial class FloatingWindow {
     static string DisplayReleaseDate(string value) { DateTime date;return DateTime.TryParse(value,CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out date)?date.ToLocalTime().ToString("yyyy-MM-dd HH:mm"):"未知"; }
     static string SafeVersion(string value) { return new string(value.Where(c=>char.IsLetterOrDigit(c)||c=='.'||c=='-').ToArray()); }
     static void TryDelete(string path) { try{File.Delete(path);}catch{} }
-    static string FriendlyUpdateError(Exception e) {
+    static string FriendlyUpdateError(Exception e,bool downloading=false) {
+		if(IsUpdateTimeout(e)) {
+			return (downloading?"下载新版本超时。":"检查更新超时。")+"请检查网络连接和 Windows 系统代理设置后重试。\r\n\r\n"+e.Message;
+		}
         if(!(e is HttpRequestException) && !(e is WebException) && !(e is TaskCanceledException))return e.Message;
         Uri github=new Uri("https://api.github.com");string route="直连";
         try { var proxy=WebRequest.DefaultWebProxy;var resolved=proxy==null?github:proxy.GetProxy(github);if(proxy!=null&&!proxy.IsBypassed(github)&&resolved!=github)route="Windows 系统代理 "+resolved.Scheme+"://"+resolved.Host+":"+resolved.Port; } catch {}
         var messages=new List<string>();for(Exception current=e;current!=null;current=current.InnerException)if(!String.IsNullOrWhiteSpace(current.Message)&&!messages.Contains(current.Message))messages.Add(current.Message);
         return "无法连接 GitHub Releases。\r\n已使用："+route+"（TLS 1.2）\r\n\r\n"+String.Join("\r\n",messages);
     }
+    static bool IsUpdateTimeout(Exception e) { return e is TaskCanceledException || e is TimeoutException; }
     static string ParseExpectedChecksum(string content,string fileName) { foreach(string line in content.Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries)){string trimmed=line.Trim();if(trimmed.EndsWith(fileName,StringComparison.OrdinalIgnoreCase)){string[] parts=trimmed.Split((char[])null,StringSplitOptions.RemoveEmptyEntries);if(parts.Length>0&&parts[0].Length==64)return parts[0];}}return ""; }
     static string Sha256(string path) { using(var stream=File.OpenRead(path))using(var hash=SHA256.Create())return BitConverter.ToString(hash.ComputeHash(stream)).Replace("-","").ToLowerInvariant(); }
 

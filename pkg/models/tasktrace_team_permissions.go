@@ -172,6 +172,41 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 	return false
 }
 
+// taskTraceTeamCanWriteLocalTask checks the shared manifest on every write.
+// The manifest lives in teamData, so a permission granted by another computer
+// becomes effective without restarting TaskTrace or reopening an editor.
+func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
+	if !taskTraceTeamEnabled() {
+		return true, nil
+	}
+	u, err := user.GetFromAuth(a)
+	if err != nil {
+		return false, err
+	}
+	taskTraceTeamMu.Lock()
+	defer taskTraceTeamMu.Unlock()
+	state, err := taskTraceTeamLoadState()
+	if err != nil {
+		return false, err
+	}
+	for index := range state.Bindings {
+		binding := &state.Bindings[index]
+		nodeID := taskTraceTeamNodeForTask(binding, taskID)
+		if nodeID == "" {
+			continue
+		}
+		var manifest TaskTraceTeamManifest
+		manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
+		if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+			// A collaboration task must not silently fall back to ordinary project
+			// write access when teamData is temporarily unavailable.
+			return false, nil
+		}
+		return taskTraceTeamCan(&manifest, nodeID, "", u.Username, true), nil
+	}
+	return true, nil
+}
+
 func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTraceTeamBinding, manifest *TaskTraceTeamManifest, snapshot TaskTraceTeamSnapshot, actor string) (bool, error) {
 	if manifest.Permissions == nil {
 		manifest.Permissions = map[string][]TaskTraceTeamMemberPermission{}

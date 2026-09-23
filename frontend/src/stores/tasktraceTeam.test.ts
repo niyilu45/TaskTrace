@@ -83,6 +83,36 @@ describe('TaskTrace team bindings', () => {
 		expect(store.canWriteTask(42)).toBe(true)
 	})
 
+	it('rechecks a changed write permission without recreating the store', async () => {
+		const readOnly = {
+			enabled: true,
+			username: 'reader',
+			bindings: [{
+				share_id: 'shared', root_task_id: 42, task_ids: [42], owner: 'owner', members: ['owner', 'reader'],
+				permission_targets: [{kind: 'task', task_id: 42, permissions: [
+					{username: 'owner', read: true, write: true, owner: true},
+					{username: 'reader', read: true, write: false},
+				]}],
+			}],
+			conflicts: [], notifications: [],
+		}
+		vi.mocked(tasktraceTeamStatus)
+			.mockResolvedValueOnce({data: readOnly} as unknown as Awaited<ReturnType<typeof tasktraceTeamStatus>>)
+			.mockResolvedValueOnce({data: {
+				...readOnly,
+				bindings: [{...readOnly.bindings[0], permission_targets: [{kind: 'task', task_id: 42, permissions: [
+					{username: 'owner', read: true, write: true, owner: true},
+					{username: 'reader', read: true, write: true},
+				]}]}],
+			}} as unknown as Awaited<ReturnType<typeof tasktraceTeamStatus>>)
+
+		const store = useTasktraceTeamStore()
+		await store.refresh()
+		expect(store.canWriteTask(42)).toBe(false)
+		expect(await store.refreshWritePermission(42)).toBe(true)
+		expect(store.canWriteTask(42)).toBe(true)
+	})
+
 	it('shares one deduplicated active member roster without retaining profile-only accounts', () => {
 		const store = useTasktraceTeamStore()
 		store.status = {
