@@ -482,7 +482,8 @@ async function save() {
 	try {
 
 		const latestHistory = await readTaskHistory(taskId)
-		if (!sharedOutstanding(latestHistory).id) await changeOutstanding(taskId, items => items, undoGroupHeaders())
+		const outstanding = sharedOutstanding(latestHistory)
+		if (!outstanding.id && outstanding.items.length > 0) await changeOutstanding(taskId, items => items, undoGroupHeaders())
 		const body = await persistProgressImages(progress.value, taskId)
 		const author = currentUsername.value
 		const latestSelected = mergedDay(latestHistory, date.value, author)

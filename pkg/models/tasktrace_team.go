@@ -617,6 +617,9 @@ func taskTraceTeamOutstandingItems(body string) (map[string]string, []string) {
 }
 
 func taskTraceTeamOutstandingHTML(items map[string]string, order []string) string {
+	if len(items) == 0 {
+		return ""
+	}
 	seen := map[string]bool{}
 	ids := make([]string, 0, len(items))
 	for _, id := range order {
@@ -740,7 +743,6 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		binding.LocalAttachments = map[string]int64{}
 	}
 	result := make([]TaskTraceTeamAttachment, 0, len(attachments))
-	seen := map[string]bool{}
 	for _, attachment := range attachments {
 		if attachment.File == nil {
 			continue
@@ -755,11 +757,10 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		}
 		sum := sha256.Sum256(content)
 		id := hex.EncodeToString(sum[:])
-		if seen[id] {
-			continue
+		key := taskTraceTeamLocalAttachmentKey(nodeID, id)
+		if binding.LocalAttachments[key] == 0 {
+			binding.LocalAttachments[key] = attachment.ID
 		}
-		seen[id] = true
-		binding.LocalAttachments[taskTraceTeamLocalAttachmentKey(nodeID, id)] = attachment.ID
 		path := taskTraceTeamAttachmentBlobPath(binding, id)
 		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -778,9 +779,14 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		} else if statErr != nil {
 			return nil, statErr
 		}
+		// Keep every source id even when multiple attachments have identical
+		// bytes. HTML may reference any of them and every source must be
+		// rewritten to the one local attachment selected above.
 		result = append(result, TaskTraceTeamAttachment{ID: id, Name: attachment.File.Name, Mime: attachment.File.Mime, Size: uint64(len(content)), SourceTaskID: taskID, SourceAttachmentID: attachment.ID})
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	sort.Slice(result, func(i, j int) bool {
+		return taskTraceTeamAttachmentSourceKey(result[i]) < taskTraceTeamAttachmentSourceKey(result[j])
+	})
 	return result, nil
 }
 
@@ -1039,7 +1045,7 @@ func taskTraceTeamLatestActorSnapshots(snapshots []TaskTraceTeamSnapshot) []Task
 			sort.Slice(task.Comments, func(i, j int) bool { return task.Comments[i].Created.Before(task.Comments[j].Created) })
 			attachments := map[string]TaskTraceTeamAttachment{}
 			for _, attachment := range task.Attachments {
-				attachments[attachment.ID] = attachment
+				attachments[taskTraceTeamAttachmentSourceKey(attachment)] = attachment
 			}
 			task.Attachments = task.Attachments[:0]
 			for _, attachment := range attachments {
@@ -1410,17 +1416,34 @@ func taskTraceTeamUpsertOutstanding(s *xorm.Session, a web.Auth, taskID int64, b
 	if err := s.Where("task_id = ?", taskID).OrderBy("id desc").Find(&comments); err != nil {
 		return err
 	}
+	var current *TaskComment
 	for _, comment := range comments {
-		if taskTraceTeamIsOutstanding(comment.Comment) {
-			if comment.Comment == body {
-				return nil
-			}
-			comment.Comment = body
-			return comment.Update(s, a)
+		if !taskTraceTeamIsOutstanding(comment.Comment) {
+			continue
+		}
+		if current == nil {
+			current = comment
+			continue
+		}
+		// Only one canonical list belongs to a task. Old releases and concurrent
+		// syncs could leave additional empty or stale list comments behind.
+		if _, err := s.ID(comment.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+			return err
 		}
 	}
 	if strings.TrimSpace(body) == "" {
+		if current != nil {
+			_, err := s.ID(current.ID).NoAutoCondition().Delete(&TaskComment{})
+			return err
+		}
 		return nil
+	}
+	if current != nil {
+		if current.Comment == body {
+			return nil
+		}
+		current.Comment = body
+		return current.Update(s, a)
 	}
 	return (&TaskComment{TaskID: taskID, Comment: body}).Create(s, a)
 }
@@ -1601,20 +1624,27 @@ func taskTraceTeamRewriteAttachments(body string, taskID int64, attachments []Ta
 	return body
 }
 
+func taskTraceTeamAttachmentSourceKey(attachment TaskTraceTeamAttachment) string {
+	return attachment.ID + ":" + strconv.FormatInt(attachment.SourceTaskID, 10) + ":" + strconv.FormatInt(attachment.SourceAttachmentID, 10)
+}
+
 func taskTraceTeamAllAttachments(rows []struct {
 	actor string
 	task  TaskTraceTeamTask
 }) []TaskTraceTeamAttachment {
-	byContent := map[string]TaskTraceTeamAttachment{}
+	bySource := map[string]TaskTraceTeamAttachment{}
 	for _, row := range rows {
 		for _, attachment := range row.task.Attachments {
-			byContent[attachment.ID] = attachment
+			bySource[taskTraceTeamAttachmentSourceKey(attachment)] = attachment
 		}
 	}
-	result := make([]TaskTraceTeamAttachment, 0, len(byContent))
-	for _, attachment := range byContent {
+	result := make([]TaskTraceTeamAttachment, 0, len(bySource))
+	for _, attachment := range bySource {
 		result = append(result, attachment)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return taskTraceTeamAttachmentSourceKey(result[i]) < taskTraceTeamAttachmentSourceKey(result[j])
+	})
 	return result
 }
 
@@ -1807,10 +1837,10 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 				return err
 			}
 		}
-		if taskTraceTeamBaseValue(base, "outstanding") != outstanding || outstanding != "" {
-			if err := taskTraceTeamUpsertOutstanding(s, a, taskID, outstanding); err != nil {
-				return err
-			}
+		// This is deliberately idempotent: it also removes empty/duplicate list
+		// comments left by older builds without producing another edit record.
+		if err := taskTraceTeamUpsertOutstanding(s, a, taskID, outstanding); err != nil {
+			return err
 		}
 		commentByID := map[string]TaskTraceTeamComment{}
 		for _, row := range rows {

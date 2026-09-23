@@ -34,8 +34,8 @@ vi.mock('@/composables/useCopyToClipboard', () => ({useCopyToClipboard: () => vi
 let wrapper: VueWrapper
 beforeEach(() => { vi.clearAllMocks(); vi.useFakeTimers(); undoInProgress.value = false })
 afterEach(() => { wrapper?.unmount(); vi.useRealTimers(); undoInProgress.value = false })
-async function open(author = {id: 1, username: 'user1'}) {
-	wrapper = mount(Comments, {props: {taskId: 1, projectId: 1, initialComments: [{id: 2, comment: 'old', author, created: new Date(), updated: new Date()}] as never}, global: {mocks: {$t: (key: string) => key}, directives: {tooltip: () => {}}, stubs: {Icon: true, Modal: true, XButton: true}}})
+async function open(author = {id: 1, username: 'user1'}, comment = 'old') {
+	wrapper = mount(Comments, {props: {taskId: 1, projectId: 1, initialComments: [{id: 2, comment, author, created: new Date(), updated: new Date()}] as never}, global: {mocks: {$t: (key: string) => key}, directives: {tooltip: () => {}}, stubs: {Icon: true, Modal: true, XButton: true}}})
 	await flushPromises()
 }
 describe('comment Undo protection', () => {
@@ -43,6 +43,13 @@ describe('comment Undo protection', () => {
 		await open({id: 2, username: 'user2'})
 		expect(wrapper.findAll('textarea')[0].attributes('data-edit-enabled')).toBe('true')
 		expect(wrapper.text()).toContain('misc.delete')
+	})
+	it('keeps the internal outstanding-list record out of the comment feed', async () => {
+		const internal = '<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul></ul>'
+		getAll.mockResolvedValueOnce([{id: 2, comment: internal, author: {id: 1, username: 'user1'}, created: new Date(), updated: new Date()}])
+		await open({id: 1, username: 'user1'}, internal)
+		expect(wrapper.text()).not.toContain('TaskTrace 遗留事项清单')
+		expect(wrapper.findAll('textarea')).toHaveLength(1)
 	})
 	it('guards new and delayed existing comment drafts, and flushes them on normal navigation', async () => {
 		await open()

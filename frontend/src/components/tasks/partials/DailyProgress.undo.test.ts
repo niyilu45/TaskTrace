@@ -3,7 +3,7 @@ import {createPinia, setActivePinia} from 'pinia'
 import {mount, flushPromises, type VueWrapper} from '@vue/test-utils'
 import DailyProgress from './DailyProgress.vue'
 import {taskCommentsCreate} from '@/client/generated'
-import {readTaskHistory, sharedOutstanding} from '@/helpers/sharedOutstanding'
+import {changeOutstanding, readTaskHistory, sharedOutstanding} from '@/helpers/sharedOutstanding'
 import {readTeamCommentMarker, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {undoBlockReason, undoInProgress} from '@/helpers/tasktraceUndo'
@@ -74,6 +74,18 @@ describe('daily progress Undo drafts', () => {
 		await flushPromises()
 		expect(wrapper.get<HTMLInputElement>('input[type=date]').element.value).toBe('2026-09-16')
 		expect(wrapper.get<HTMLTextAreaElement>('.daily-progress__editor textarea').element.value).toBe('')
+		expect(taskCommentsCreate).toHaveBeenCalledTimes(1)
+	})
+
+	it('does not create an empty outstanding-list comment while saving progress', async () => {
+		vi.mocked(sharedOutstanding).mockReturnValue({id: undefined, items: []})
+		vi.mocked(taskCommentsCreate).mockResolvedValue({data: {id: 99}} as never)
+		wrapper = mount(DailyProgress, {props: {taskId: 81}})
+		await flushPromises()
+		await wrapper.get<HTMLTextAreaElement>('.daily-progress__editor textarea').setValue('<p>Only progress</p>')
+		await wrapper.get('.daily-progress__heading-row button').trigger('click')
+		await flushPromises()
+		expect(changeOutstanding).not.toHaveBeenCalled()
 		expect(taskCommentsCreate).toHaveBeenCalledTimes(1)
 	})
 

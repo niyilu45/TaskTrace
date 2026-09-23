@@ -3,6 +3,8 @@
 package models
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,7 +120,52 @@ func TestTaskTraceTeamCombinesSameAttachmentContentAcrossComputers(t *testing.T)
 	combined := taskTraceTeamLatestActorSnapshots([]TaskTraceTeamSnapshot{one, two})
 	require.Len(t, combined, 1)
 	require.Len(t, combined[0].Tasks, 1)
-	require.Len(t, combined[0].Tasks[0].Attachments, 1)
+	require.Len(t, combined[0].Tasks[0].Attachments, 2, "each computer's source id is needed to rewrite its HTML to the local attachment")
+}
+
+func TestTaskTraceTeamRewritesEverySourceForSameAttachmentContent(t *testing.T) {
+	rows := []struct {
+		actor string
+		task  TaskTraceTeamTask
+	}{
+		{actor: "alice", task: TaskTraceTeamTask{Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 11, SourceAttachmentID: 21}}}},
+		{actor: "bob", task: TaskTraceTeamTask{Attachments: []TaskTraceTeamAttachment{{ID: "same-content", SourceTaskID: 12, SourceAttachmentID: 22}}}},
+	}
+	attachments := taskTraceTeamAllAttachments(rows)
+	require.Len(t, attachments, 2)
+	binding := &TaskTraceTeamBinding{
+		NodeTasks:        map[string]int64{"node": 42},
+		LocalAttachments: map[string]int64{"node:same-content": 77},
+	}
+	body := `<p><img src="/api/v1/tasks/11/attachments/21"><img src="/api/v2/tasks/12/attachments/22"></p>`
+	rewritten := taskTraceTeamRewriteAttachments(body, 42, attachments, binding)
+	require.NotContains(t, rewritten, "tasks/11/attachments/21")
+	require.NotContains(t, rewritten, "tasks/12/attachments/22")
+	require.Equal(t, 2, strings.Count(rewritten, "tasks/42/attachments/77"))
+}
+
+func TestTaskTraceTeamExportKeepsDuplicateContentSourceIDs(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	actor := &user.User{ID: 1, Username: "user1"}
+	task := &Task{Title: "attachment export test", ProjectID: 1}
+	require.NoError(t, task.Create(s, actor))
+	content := []byte("same outstanding image")
+	first := &TaskAttachment{TaskID: task.ID}
+	second := &TaskAttachment{TaskID: task.ID}
+	require.NoError(t, first.NewAttachment(s, bytes.NewReader(content), "first.png", uint64(len(content)), actor))
+	require.NoError(t, second.NewAttachment(s, bytes.NewReader(content), "second.png", uint64(len(content)), actor))
+	binding := &TaskTraceTeamBinding{Repository: t.TempDir(), ShareID: "share", LocalAttachments: map[string]int64{}}
+	exported, err := taskTraceTeamExportAttachments(s, binding, task.ID, "node")
+	require.NoError(t, err)
+	bySource := map[int64]TaskTraceTeamAttachment{}
+	for _, attachment := range exported {
+		bySource[attachment.SourceAttachmentID] = attachment
+	}
+	require.Contains(t, bySource, first.ID)
+	require.Contains(t, bySource, second.ID)
+	require.Equal(t, bySource[first.ID].ID, bySource[second.ID].ID)
 }
 
 func TestTaskTraceTeamSnapshotHashIgnoresSyncTimeAndAvatar(t *testing.T) {
@@ -281,6 +328,39 @@ func TestTaskTraceTeamOutstandingItemsMergeIndependently(t *testing.T) {
 	require.False(t, conflict)
 	require.Empty(t, options)
 	require.Equal(t, "Bob 新增", value)
+}
+
+func TestTaskTraceTeamEmptyOutstandingHasNoSyntheticComment(t *testing.T) {
+	require.Empty(t, taskTraceTeamOutstandingHTML(map[string]string{}, nil))
+}
+
+func TestTaskTraceTeamOutstandingUpsertCleansDuplicatesAndEmptyLists(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	body := `<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="one">内容</li></ul>`
+	older := &TaskComment{TaskID: 1, AuthorID: 1, Comment: body, Created: time.Now().UTC().Add(-time.Minute), Updated: time.Now().UTC().Add(-time.Minute)}
+	newer := &TaskComment{TaskID: 1, AuthorID: 1, Comment: body, Created: time.Now().UTC(), Updated: time.Now().UTC()}
+	_, err := s.NoAutoTime().Insert(older, newer)
+	require.NoError(t, err)
+
+	require.NoError(t, taskTraceTeamUpsertOutstanding(s, &user.User{ID: 1, Username: "user1"}, 1, body))
+	var comments []*TaskComment
+	require.NoError(t, s.Where("task_id = ?", 1).Find(&comments))
+	count := 0
+	for _, comment := range comments {
+		if taskTraceTeamIsOutstanding(comment.Comment) {
+			count++
+		}
+	}
+	require.Equal(t, 1, count)
+
+	require.NoError(t, taskTraceTeamUpsertOutstanding(s, &user.User{ID: 1, Username: "user1"}, 1, ""))
+	comments = nil
+	require.NoError(t, s.Where("task_id = ?", 1).Find(&comments))
+	for _, comment := range comments {
+		require.False(t, taskTraceTeamIsOutstanding(comment.Comment))
+	}
 }
 
 func TestTaskTraceTeamOutstandingPriorityStaysLocal(t *testing.T) {

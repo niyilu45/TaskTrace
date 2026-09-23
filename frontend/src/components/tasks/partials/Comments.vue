@@ -12,9 +12,9 @@
 			@saved="dailyProgressSaved"
 		/>
 		<h2
-			v-if="canWrite || comments.length > 0"
+			v-if="canWrite || visibleComments.length > 0"
 			class="comments-heading task-section-title"
-			:class="{'d-print-none': comments.length === 0}"
+			:class="{'d-print-none': visibleComments.length === 0}"
 		>
 			<span>
 				<span class="icon is-grey">
@@ -23,7 +23,7 @@
 				{{ $t('task.comment.title') }}
 			</span>
 			<span
-				v-if="comments.length > 0"
+				v-if="visibleComments.length > 0"
 				class="comment-sort-button"
 			>最新评论在前</span>
 			<label
@@ -329,6 +329,7 @@ import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
 import {commentReplyContextKey, scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import {readTeamCommentMarker, teamCommentActor} from '@/helpers/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
+import {isOutstandingComment} from '@/helpers/tasktraceCommentTypes'
 
 const props = withDefaults(defineProps<{
 	taskId: number,
@@ -389,6 +390,7 @@ const teamStore = useTasktraceTeamStore()
 const commentSortOrder = ref<'asc' | 'desc'>('desc')
 
 const comments = ref<ITaskComment[]>([])
+const visibleComments = computed(() => comments.value.filter(comment => !isOutstandingComment(comment.comment || '')))
 const selectedAuthor = ref('')
 const commentIsTeamAuthored = (comment: ITaskComment) => Boolean(readTeamCommentMarker(comment.comment || ''))
 const commentAuthorIdentity = (comment: ITaskComment) => teamCommentActor(comment.comment || '', getDisplayName(comment.author))
@@ -421,8 +423,8 @@ const commentOwnedByCurrent = (comment: ITaskComment) => {
 }
 const commentCanEdit = (comment: ITaskComment) => props.canWrite && (commentOwnedByCurrent(comment) || taskOwnedByCurrent.value)
 const commentCanDelete = (comment: ITaskComment) => props.canWrite && (commentOwnedByCurrent(comment) || taskOwnedByCurrent.value)
-const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
-const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
+const commentAuthors = computed(() => [...new Set(visibleComments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
+const filteredComments = computed(() => selectedAuthor.value ? visibleComments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : visibleComments.value)
 const savedComments = reactive(new Map<number, string>())
 const uploading = ref(0)
 let teamProfilesRequested = false
@@ -458,7 +460,7 @@ const actions = computed(() => {
 	if (!props.canWrite) {
 		return {}
 	}
-	return Object.fromEntries(comments.value.map((comment) => {
+	return Object.fromEntries(visibleComments.value.map((comment) => {
 		const list: {action: () => void, title: string}[] = [{
 			action: () => startReplyTo(comment),
 			title: t('task.comment.reply'),

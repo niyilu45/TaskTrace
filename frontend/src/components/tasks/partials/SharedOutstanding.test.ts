@@ -1,12 +1,13 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount, type VueWrapper} from '@vue/test-utils'
-import {taskAttachmentsUpload, taskCommentsCreate, taskCommentsList, taskCommentsUpdate} from '@/client/generated'
+import {taskAttachmentsUpload, taskCommentsCreate, taskCommentsDelete, taskCommentsList, taskCommentsUpdate} from '@/client/generated'
 import SharedOutstanding from './SharedOutstanding.vue'
 import {readTaskTraceDraft, deleteTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 
 vi.mock('@/client/generated', () => ({
 	taskAttachmentsUpload: vi.fn(),
 	taskCommentsCreate: vi.fn(),
+	taskCommentsDelete: vi.fn(),
 	taskCommentsList: vi.fn(),
 	taskCommentsUpdate: vi.fn(),
 }))
@@ -34,6 +35,7 @@ let root: HTMLDivElement
 const upload = vi.mocked(taskAttachmentsUpload)
 const update = vi.mocked(taskCommentsUpdate)
 const create = vi.mocked(taskCommentsCreate)
+const removeComment = vi.mocked(taskCommentsDelete)
 const list = vi.mocked(taskCommentsList)
 const shared = (items: string) => `<h3>TaskTrace 遗留事项清单</h3><ul>${items}</ul>`
 
@@ -81,6 +83,10 @@ beforeEach(() => {
 		const note = history.find(note => note.id === path.commentid)!
 		note.comment = body.comment!
 		return {data: note} as never
+	})
+	removeComment.mockImplementation(async ({path}) => {
+		history = history.filter(note => note.id !== path.commentid)
+		return {data: {message: 'success'}} as never
 	})
 	upload.mockImplementation(async () => ({data: {success: [{id: ++attachmentId}]}}) as never)
 })
@@ -267,6 +273,15 @@ describe('outstanding item images', () => {
 		await click('编辑')
 		const note = (wrapper.get('.mock-note-editor').element as HTMLTextAreaElement).value
 		expect(note.match(/<img /g)).toHaveLength(2)
+	})
+
+	it('deletes the canonical list comment when its last item is removed', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first">Only item</li>')}]
+		await open()
+		await click('移除')
+		expect(removeComment).toHaveBeenCalledWith(expect.objectContaining({path: {task: 42, commentid: 1}}))
+		expect(history).toEqual([])
+		expect(wrapper.text()).toContain('暂无遗留事项')
 	})
 
 	it('does not re-create an item that was moved or removed while its images were being added', async () => {

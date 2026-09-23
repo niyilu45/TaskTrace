@@ -1,5 +1,5 @@
 import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
-import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, type TaskComment} from '@/client/generated'
+import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, taskCommentsDelete, type TaskComment} from '@/client/generated'
 import {sortProgressNotes} from './progressNotes'
 import {deduplicateHtmlImages} from './tasktraceImages'
 import {isOutstandingComment, outstandingHeading, outstandingType, outstandingTypeAttribute} from './tasktraceCommentTypes'
@@ -93,6 +93,10 @@ export async function readTaskHistory(taskId: number) {
 export async function changeOutstanding(taskId: number, change: (items: OutstandingItem[]) => OutstandingItem[], headers = undoGroupHeaders()) {
 	const current = sharedOutstanding(await readTaskHistory(taskId))
 	const items = change(current.items)
+	if (items.length === 0) {
+		if (current.id) await taskCommentsDelete({path: {task: taskId, commentid: current.id}, headers})
+		return items
+	}
 	const comment = `<h3 ${outstandingTypeAttribute}="${outstandingType}">${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
 		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
