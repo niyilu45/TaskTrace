@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, onBeforeUnmount, ref, watch} from 'vue'
+import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import type {TaskComment} from '@/client/generated'
 import {taskCommentsCreate} from '@/client/generated'
 import Editor from '@/components/input/AsyncEditor'
@@ -42,7 +42,7 @@ import {mergedDay} from '@/helpers/progressNotes'
 import {createTeamCommentId, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
 import {serializeProgressReferences, normalizeProgressReferences, type ProgressReference} from '@/helpers/progressReferences'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
-import {deleteTaskTraceDraft, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
+import {deleteTaskTraceDraft, forgetRememberedTaskTraceDraft, readTaskTraceDraft, rememberTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {undoGroupHeaders, undoInProgress, useTasktraceUndoGuard} from '@/helpers/tasktraceUndo'
 import {readTaskHistory} from '@/helpers/sharedOutstanding'
@@ -104,8 +104,19 @@ async function load() {
 
 watch(() => [props.taskId, props.date, props.author, props.history] as const, load, {immediate: true, deep: true})
 watch(snapshot, () => {
+	if (!restoring.value) {
+		if (unchanged.value) forgetRememberedTaskTraceDraft('progress', props.taskId, cacheDay.value)
+		else rememberTaskTraceDraft('progress', props.taskId, cacheDay.value, {progress: progress.value, references: normalizeProgressReferences(references.value), images: []})
+	}
 	if (!restoring.value && !unchanged.value) message.value = '内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。'
 })
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+	if (restoring.value || unchanged.value) return
+	rememberTaskTraceDraft('progress', props.taskId, cacheDay.value, {progress: progress.value, references: normalizeProgressReferences(references.value), images: []})
+	event.preventDefault()
+	event.returnValue = ''
+}
 
 async function cacheDraft() {
 	if (restoring.value || unchanged.value) return
@@ -150,9 +161,11 @@ async function save() {
 useAutoSave(async () => {
 	if (autoSaveSettings.enabled) await cacheDraft()
 })
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onBeforeUnmount(() => {
 	++version
 	if (autoSaveSettings.enabled) void cacheDraft().catch(() => {})
+	window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 

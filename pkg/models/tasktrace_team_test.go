@@ -4,6 +4,8 @@ package models
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -167,6 +169,61 @@ func TestTaskTraceTeamCommentTieIsDeterministic(t *testing.T) {
 		require.Len(t, combined[0].Tasks[0].Comments, 1)
 		require.Equal(t, "second", combined[0].Tasks[0].Comments[0].Body)
 	}
+}
+
+func TestTaskTraceTeamConcurrentDevicesKeepIndependentFieldChanges(t *testing.T) {
+	base := TaskTraceTeamBase{Title: "original title", Description: "<p>original description</p>", Status: TaskStatusTodo}
+	snapshotBase := map[string]TaskTraceTeamBase{"node": base}
+	aliceLaptop := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "laptop", Base: snapshotBase, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: "laptop title", Description: base.Description, Status: base.Status}}}
+	aliceDesktop := TaskTraceTeamSnapshot{Actor: "alice", DeviceID: "desktop", Base: snapshotBase, Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: base.Title, Description: "<p>desktop description</p>", Status: base.Status}}}
+	snapshots := []TaskTraceTeamSnapshot{aliceLaptop, aliceDesktop}
+
+	title, options, conflict := taskTraceTeamFindField(snapshots, "node", "title", base.Title, "")
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, "laptop title", title)
+	description, options, conflict := taskTraceTeamFindField(snapshots, "node", "description", base.Description, "")
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, "<p>desktop description</p>", description)
+}
+
+func TestTaskTraceTeamStaleSnapshotDoesNotRevertMergedField(t *testing.T) {
+	oldBase := TaskTraceTeamBase{Title: "old title"}
+	currentBase := TaskTraceTeamBase{Title: "merged title"}
+	stale := TaskTraceTeamSnapshot{
+		Actor: "bob",
+		Base:  map[string]TaskTraceTeamBase{"node": oldBase},
+		Tasks: []TaskTraceTeamTask{{NodeID: "node", Title: oldBase.Title}},
+	}
+
+	value, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{stale}, "node", "title", currentBase.Title, "")
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, currentBase.Title, value)
+}
+
+func TestTaskTraceTeamSnapshotBaseDoesNotSharePersonalPriority(t *testing.T) {
+	body := `<h3>TaskTrace outstanding list</h3><ul><li data-id="one" data-priority="2">content</li></ul>`
+	stripped := taskTraceTeamStripOutstandingPriorities(body)
+	require.NotContains(t, stripped, "data-priority")
+	require.Contains(t, stripped, `data-id="one"`)
+}
+
+func TestTaskTraceTeamShareLockRecoversAfterKilledProcess(t *testing.T) {
+	binding := &TaskTraceTeamBinding{Repository: t.TempDir(), ShareID: "share"}
+	dir := taskTraceTeamShareDir(binding.Repository, binding.ShareID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, ".tasktrace-write.lock")
+	require.NoError(t, os.WriteFile(path, []byte("abandoned\n"), 0o600))
+	stale := time.Now().Add(-taskTraceTeamLockStaleAfter - time.Second)
+	require.NoError(t, os.Chtimes(path, stale, stale))
+
+	release, err := taskTraceTeamAcquireShareLock(binding)
+	require.NoError(t, err)
+	require.FileExists(t, path)
+	release()
+	require.NoFileExists(t, path)
 }
 
 func TestTaskTraceTeamMissingTaskPlanUsesEverySnapshot(t *testing.T) {

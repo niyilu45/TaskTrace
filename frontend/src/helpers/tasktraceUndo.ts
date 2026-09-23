@@ -11,6 +11,14 @@ let refreshHandler: (() => Promise<void>) | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 const pending = new WeakMap<object, () => void>()
 
+function guardBrowserRefresh(event: BeforeUnloadEvent) {
+	if (!isLocalBuild || (guards.size === 0 && undoPendingWrites.value === 0)) return
+	event.preventDefault()
+	event.returnValue = ''
+}
+
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', guardBrowserRefresh)
+
 export function useTasktraceUndoGuard(dirty: WatchSource<boolean>, reason: string) {
 	const key = Symbol('undo-guard')
 	const stop = watch(dirty, value => {

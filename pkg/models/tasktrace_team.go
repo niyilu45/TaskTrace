@@ -34,6 +34,11 @@ import (
 
 const taskTraceTeamSchema = 1
 
+const (
+	taskTraceTeamLockHeartbeat  = 5 * time.Second
+	taskTraceTeamLockStaleAfter = 30 * time.Second
+)
+
 var taskTraceTeamMu sync.Mutex
 
 type TaskTraceTeamRepositoryInfo struct {
@@ -101,14 +106,15 @@ type TaskTraceTeamTask struct {
 }
 
 type TaskTraceTeamSnapshot struct {
-	Schema         int                 `json:"schema"`
-	ShareID        string              `json:"share_id"`
-	Actor          string              `json:"actor"`
-	DeviceID       string              `json:"device_id"`
-	Updated        time.Time           `json:"updated"`
-	Avatar         string              `json:"avatar,omitempty"`
-	ResolutionAcks map[string]string   `json:"resolution_acks,omitempty"`
-	Tasks          []TaskTraceTeamTask `json:"tasks"`
+	Schema         int                          `json:"schema"`
+	ShareID        string                       `json:"share_id"`
+	Actor          string                       `json:"actor"`
+	DeviceID       string                       `json:"device_id"`
+	Updated        time.Time                    `json:"updated"`
+	Avatar         string                       `json:"avatar,omitempty"`
+	ResolutionAcks map[string]string            `json:"resolution_acks,omitempty"`
+	Base           map[string]TaskTraceTeamBase `json:"base,omitempty"`
+	Tasks          []TaskTraceTeamTask          `json:"tasks"`
 }
 
 type TaskTraceTeamBase struct {
@@ -294,13 +300,32 @@ func taskTraceTeamWriteJSON(path string, value interface{}) error {
 		return err
 	}
 	tmp := path + ".tmp-" + uuid.NewString()
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	removeTemp := true
+	defer func() {
+		_ = file.Close()
+		if removeTemp {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if written, writeErr := file.Write(b); writeErr != nil {
+		return writeErr
+	} else if written != len(b) {
+		return io.ErrShortWrite
+	}
+	if err = file.Sync(); err != nil {
+		return err
+	}
+	if err = file.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
+	removeTemp = false
 	return nil
 }
 
@@ -310,16 +335,46 @@ func taskTraceTeamAcquireShareLock(binding *TaskTraceTeamBinding) (func(), error
 	for {
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
-			_, _ = fmt.Fprintf(file, "%d\n", time.Now().UTC().UnixNano())
+			token := uuid.NewString()
+			_, _ = fmt.Fprintf(file, "%s\n%d\n", token, time.Now().UTC().UnixNano())
+			_ = file.Sync()
+			stop := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				ticker := time.NewTicker(taskTraceTeamLockHeartbeat)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						content, readErr := os.ReadFile(path)
+						if readErr != nil || !strings.HasPrefix(string(content), token+"\n") {
+							return
+						}
+						now := time.Now()
+						_ = os.Chtimes(path, now, now)
+					case <-stop:
+						return
+					}
+				}
+			}()
+			var once sync.Once
 			return func() {
-				_ = file.Close()
-				_ = os.Remove(path)
+				once.Do(func() {
+					close(stop)
+					<-done
+					_ = file.Close()
+					content, readErr := os.ReadFile(path)
+					if readErr == nil && strings.HasPrefix(string(content), token+"\n") {
+						_ = os.Remove(path)
+					}
+				})
 			}, nil
 		}
 		if !os.IsExist(err) {
 			return nil, err
 		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 2*time.Minute {
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > taskTraceTeamLockStaleAfter {
 			if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
 				continue
 			}
@@ -762,6 +817,23 @@ func taskTraceTeamApplyOutstandingPriorities(body string, priorities map[string]
 	return taskTraceTeamRenderDocument(doc)
 }
 
+func taskTraceTeamStripOutstandingPriorities(body string) string {
+	if !strings.Contains(body, "data-priority") {
+		return body
+	}
+	doc, nodes := taskTraceTeamOutstandingNodes(body)
+	for _, node := range nodes {
+		attributes := node.Attr[:0]
+		for _, attribute := range node.Attr {
+			if attribute.Key != "data-priority" {
+				attributes = append(attributes, attribute)
+			}
+		}
+		node.Attr = attributes
+	}
+	return taskTraceTeamRenderDocument(doc)
+}
+
 func taskTraceTeamCommentID(shareID, nodeID string, comment *TaskComment, actor string) string {
 	if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok {
 		return marker.ID
@@ -878,7 +950,12 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 	for key, value := range binding.ResolutionAcks {
 		acks[key] = value
 	}
-	snapshot := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), Avatar: taskTraceTeamAvatarDataURI(s, actor), ResolutionAcks: acks, Tasks: []TaskTraceTeamTask{}}
+	base := make(map[string]TaskTraceTeamBase, len(binding.Base))
+	for node, value := range binding.Base {
+		value.Outstanding = taskTraceTeamStripOutstandingPriorities(value.Outstanding)
+		base[node] = value
+	}
+	snapshot := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), Avatar: taskTraceTeamAvatarDataURI(s, actor), ResolutionAcks: acks, Base: base, Tasks: []TaskTraceTeamTask{}}
 	for _, taskID := range ids {
 		task, err := GetTaskByIDSimple(s, taskID)
 		if err != nil {
@@ -964,6 +1041,7 @@ func taskTraceTeamSnapshotHash(snapshot TaskTraceTeamSnapshot) string {
 	normalized := snapshot
 	normalized.Updated = time.Time{}
 	normalized.Avatar = ""
+	normalized.Base = nil
 	b, err := json.Marshal(normalized)
 	if err != nil {
 		return ""
@@ -1420,7 +1498,12 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 		}
 		value := taskTraceTeamFieldValue(task, field)
 		canonical := taskTraceTeamCanonicalFieldValue(task, field, value)
-		if canonical != baseValue {
+		snapshotBaseCanonical := baseValue
+		if snapshotBase, exists := snapshot.Base[node]; exists {
+			snapshotBaseValue := taskTraceTeamBaseValue(snapshotBase, field)
+			snapshotBaseCanonical = taskTraceTeamCanonicalFieldValue(task, field, snapshotBaseValue)
+		}
+		if canonical != snapshotBaseCanonical {
 			if values[canonical] == nil {
 				values[canonical] = &fieldValue{value: value}
 			}
@@ -2020,7 +2103,10 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
-	snapshots = taskTraceTeamLatestActorSnapshots(snapshots)
+	// Keep each device snapshot during the three-way merge. One user may edit
+	// different fields on two computers at the same time; collapsing both into
+	// the newest whole-task snapshot would silently discard the older device's
+	// independent field change. Comments and attachments are deduplicated below.
 	snapshots = taskTraceTeamFilterSnapshotsPermissions(snapshots, binding, &manifest)
 	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots); err != nil {
 		return err

@@ -286,7 +286,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, nextTick, onBeforeUnmount, reactive, ref, watch} from 'vue'
+import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
@@ -342,7 +342,25 @@ const canSave = computed(() => draft.value.images.length > 0 || !!draft.value.te
 const noteImageCount = computed(() => countProgressImages(draft.value.note))
 let loadVersion = 0
 let mounted = true
+let cacheTimer: ReturnType<typeof setTimeout> | undefined
 useTasktraceUndoGuard(() => busy.value || [...drafts].some(([key, value]) => draftChanged(key, value)), '请先保存或清空遗留事项的输入和待保存图片。')
+
+function hasUnsavedDrafts() {
+	return [...drafts].some(([key, value]) => draftChanged(key, value))
+}
+
+function queueDraftCache() {
+	if (!autoSaveSettings.enabled) return
+	if (cacheTimer) clearTimeout(cacheTimer)
+	cacheTimer = setTimeout(() => { void cacheChangedDrafts().catch(() => {}) }, 750)
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+	if (!hasUnsavedDrafts()) return
+	void cacheChangedDrafts().catch(() => {})
+	event.preventDefault()
+	event.returnValue = ''
+}
 
 async function load() {
 	const taskId = props.taskId
@@ -726,11 +744,17 @@ watch(() => props.taskId, () => {
 	void load()
 }, {immediate: true})
 watch(() => showComposer.value ? draft.value : undefined, value => {
-	if (value && draftChanged(`${props.taskId}:${activeId.value}`, value)) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击保存后才会正式提交。'
+	if (value && draftChanged(`${props.taskId}:${activeId.value}`, value)) {
+		message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击保存后才会正式提交。'
+		queueDraftCache()
+	}
 }, {deep: true})
 useAutoSave(cacheChangedDrafts)
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onBeforeUnmount(() => {
+	if (cacheTimer) clearTimeout(cacheTimer)
 	if (autoSaveSettings.enabled) void cacheChangedDrafts().catch(() => {})
+	window.removeEventListener('beforeunload', handleBeforeUnload)
 	mounted = false
 	emit('busy', false)
 	++loadVersion

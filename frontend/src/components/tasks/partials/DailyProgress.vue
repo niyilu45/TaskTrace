@@ -214,7 +214,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, onBeforeUnmount, reactive, ref, watch} from 'vue'
+import {computed, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {taskCommentsCreate, taskCommentsUpdate} from '@/client/generated'
 import Editor from '@/components/input/AsyncEditor'
 import AutoSaveSettings from './AutoSaveSettings.vue'
@@ -231,7 +231,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {createTeamCommentId, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import {deleteTaskTraceDraft, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
+import {deleteTaskTraceDraft, forgetRememberedTaskTraceDraft, readTaskTraceDraft, rememberTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {useTasktraceUndoGuard, undoGroupHeaders, undoInProgress} from '@/helpers/tasktraceUndo'
@@ -301,6 +301,22 @@ function stash() {
 		return
 	}
 	drafts.set(key, {html: progress.value, references: normalizeProgressReferences(references.value)})
+}
+
+function rememberCurrentDraft() {
+	if (restoring.value || !date.value) return
+	if (snapshot() === lastSaved.value) {
+		forgetRememberedTaskTraceDraft('progress', props.taskId, date.value)
+		return
+	}
+	rememberTaskTraceDraft('progress', props.taskId, date.value, {progress: progress.value, references: normalizeProgressReferences(references.value), images: []})
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+	rememberCurrentDraft()
+	if (drafts.size === 0 && (restoring.value || snapshot() === lastSaved.value)) return
+	event.preventDefault()
+	event.returnValue = ''
 }
 
 async function cacheChangedDrafts() {
@@ -415,6 +431,7 @@ watch(() => props.taskId, async () => {
 
 watch([progress, references], () => {
 	stash()
+	rememberCurrentDraft()
 	if (!restoring.value && snapshot() !== lastSaved.value) message.value = '内容尚未保存；自动保存只会缓存到 .cache，点击“保存进展”后才会正式提交。'
 }, {deep: true})
 
@@ -535,11 +552,13 @@ defineExpose({switchDate, refreshHistory})
 useAutoSave(async () => {
 	if (!restoring.value && !sharedBusy.value) await cacheChangedDrafts()
 })
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
 onBeforeUnmount(() => {
 	++version
 	++historyRefreshVersion
 	stash()
 	if (autoSaveSettings.enabled) void cacheChangedDrafts().catch(() => {})
+	window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 

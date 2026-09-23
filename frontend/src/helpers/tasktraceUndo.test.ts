@@ -32,6 +32,15 @@ describe('TaskTrace undo guards', () => {
 		expect(undoBlockReason.value).toBe('')
 	})
 
+	it('warns before refreshing a page with an unsaved editor', () => {
+		const dirty = ref(true)
+		const wrapper = mount(defineComponent({setup() {useTasktraceUndoGuard(dirty, 'Save first'); return () => null}}))
+		const event = new Event('beforeunload', {cancelable: true})
+		window.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(true)
+		wrapper.unmount()
+	})
+
 	it('tracks pending writes exactly once and refreshes server status after settling', async () => {
 		vi.useFakeTimers()
 		const refresh = vi.fn(async () => {})

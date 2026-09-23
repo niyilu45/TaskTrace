@@ -22,6 +22,8 @@ vi.mock('@/helpers/tasktraceDraftCache', () => ({
 	readTaskTraceDraft: draftMocks.read,
 	writeTaskTraceDraft: draftMocks.write,
 	deleteTaskTraceDraft: draftMocks.remove,
+	rememberTaskTraceDraft: vi.fn(),
+	forgetRememberedTaskTraceDraft: vi.fn(),
 	fileAsDataUrl: vi.fn(),
 	dataUrlAsFile: vi.fn(),
 }))
