@@ -65,6 +65,7 @@ const loadedId = ref<number>()
 const loadedTeamId = ref('')
 const mergedIds = ref<number[]>([])
 const mergedTeamIds = ref<string[]>([])
+let pendingCreate: {identity: string, signature: string, id: string} | undefined
 let version = 0
 
 const imageCount = computed(() => countProgressImages(progress.value))
@@ -135,16 +136,23 @@ async function save() {
 		const latest = await readTaskHistory(props.taskId)
 		const selected = mergedDay(latest, props.date, props.author)
 		const body = await persistProgressImages(progress.value, props.taskId)
+		progress.value = body
+		const identity = `${props.taskId}:${props.date}:${props.author.trim().toLowerCase()}`
+		const signature = JSON.stringify([identity, body, normalizeProgressReferences(references.value)])
+		if (!pendingCreate || pendingCreate.identity !== identity || pendingCreate.signature !== signature) {
+			pendingCreate = {identity, signature, id: createTeamCommentId()}
+		}
 		const absorbedIds = [...new Set([...mergedIds.value, ...selected.mergedIds, loadedId.value, selected.id].filter((id): id is number => !!id))]
 		const absorbedTeamIds = [...new Set([...mergedTeamIds.value, ...selected.mergedTeamIds, loadedTeamId.value, selected.teamId].filter(Boolean))]
 		const numericAttribute = absorbedIds.length ? ` data-tasktrace-merged="${absorbedIds.join(',')}"` : ''
 		const teamAttribute = absorbedTeamIds.length ? ` data-tasktrace-team-merged="${absorbedTeamIds.join(',')}"` : ''
-		const teamId = createTeamCommentId()
+		const teamId = pendingCreate.id
 		const comment = `<h3${numericAttribute}${teamAttribute}>每日进展 · ${props.date}</h3>${body}${serializeProgressReferences(references.value)}${serializeTeamCommentMarker({id: teamId, author: props.author, editor: props.editor})}`
 		const result = await taskCommentsCreate({path: {task: props.taskId}, body: {comment}, headers: undoGroupHeaders()})
 		progress.value = body
 		loadedId.value = result.data.id
 		loadedTeamId.value = teamId
+		pendingCreate = undefined
 		mergedIds.value = absorbedIds
 		mergedTeamIds.value = absorbedTeamIds
 		savedSnapshot.value = snapshot.value

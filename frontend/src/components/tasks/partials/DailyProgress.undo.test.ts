@@ -2,6 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 import {mount, flushPromises, type VueWrapper} from '@vue/test-utils'
 import DailyProgress from './DailyProgress.vue'
+import DailyProgressMemberEditor from './DailyProgressMemberEditor.vue'
 import {taskCommentsCreate} from '@/client/generated'
 import {changeOutstanding, readTaskHistory, sharedOutstanding} from '@/helpers/sharedOutstanding'
 import {readTeamCommentMarker, serializeTeamCommentMarker} from '@/helpers/tasktraceTeam'
@@ -91,6 +92,27 @@ describe('daily progress Undo drafts', () => {
 		expect(taskCommentsCreate).toHaveBeenCalledTimes(1)
 	})
 
+	it('reuses the same save marker when a comment request is retried', async () => {
+		vi.mocked(sharedOutstanding).mockReturnValue({id: 1, items: []})
+		vi.mocked(taskCommentsCreate)
+			.mockRejectedValueOnce(new Error('response lost'))
+			.mockResolvedValueOnce({data: {id: 99}} as never)
+		wrapper = mount(DailyProgress, {props: {taskId: 81}})
+		await flushPromises()
+		await wrapper.get<HTMLTextAreaElement>('.daily-progress__editor textarea').setValue('<p>save exactly once</p>')
+
+		await wrapper.get('.daily-progress__heading-row button').trigger('click')
+		await flushPromises()
+		await wrapper.get('.daily-progress__heading-row button').trigger('click')
+		await flushPromises()
+
+		expect(taskCommentsCreate).toHaveBeenCalledTimes(2)
+		const first = readTeamCommentMarker(vi.mocked(taskCommentsCreate).mock.calls[0][0].body?.comment || '')
+		const second = readTeamCommentMarker(vi.mocked(taskCommentsCreate).mock.calls[1][0].body?.comment || '')
+		expect(first?.id).toBeTruthy()
+		expect(second?.id).toBe(first?.id)
+	})
+
 	it('shows and edits another member only on a date where that member has progress', async () => {
 		const history = [
 			{id: 10, created: '2026-09-20T08:00:00Z', comment: '<h3>每日进展 · 2026-09-20</h3><p>alice old</p>' + serializeTeamCommentMarker({id: 'alice-old', author: 'alice'})},
@@ -135,6 +157,32 @@ describe('daily progress Undo drafts', () => {
 		expect(await exposed.switchDate('2026-09-21')).toBe(true)
 		await flushPromises()
 		expect(wrapper.findAll('.member-progress-editor')).toHaveLength(0)
+	})
+
+	it('reuses the same marker when retrying an edit to another member progress', async () => {
+		const history = [{
+			id: 10,
+			created: '2026-09-20T08:00:00Z',
+			comment: '<h3>每日进展 · 2026-09-20</h3><p>alice old</p>' + serializeTeamCommentMarker({id: 'alice-old', author: 'alice'}),
+		}]
+		vi.mocked(readTaskHistory).mockResolvedValue(history)
+		vi.mocked(taskCommentsCreate)
+			.mockRejectedValueOnce(new Error('response lost'))
+			.mockResolvedValueOnce({data: {id: 99}} as never)
+		wrapper = mount(DailyProgressMemberEditor, {props: {taskId: 81, date: '2026-09-20', author: 'alice', editor: 'current', history}})
+		await flushPromises()
+		await wrapper.get<HTMLTextAreaElement>('textarea').setValue('<p>alice corrected once</p>')
+
+		await wrapper.trigger('submit')
+		await flushPromises()
+		await wrapper.trigger('submit')
+		await flushPromises()
+
+		expect(taskCommentsCreate).toHaveBeenCalledTimes(2)
+		const first = readTeamCommentMarker(vi.mocked(taskCommentsCreate).mock.calls[0][0].body?.comment || '')
+		const second = readTeamCommentMarker(vi.mocked(taskCommentsCreate).mock.calls[1][0].body?.comment || '')
+		expect(first?.id).toBeTruthy()
+		expect(second?.id).toBe(first?.id)
 	})
 
 	it('refreshes collaborator editors after team comments are synchronized', async () => {

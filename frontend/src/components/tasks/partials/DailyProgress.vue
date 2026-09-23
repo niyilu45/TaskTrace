@@ -288,8 +288,17 @@ type ProgressDraft = {html: string, references: ProgressReference[]}
 type CachedProgressDraft = {progress?: string, references?: ProgressReference[]}
 const drafts = reactive(new Map<string, ProgressDraft>())
 const cachedSnapshots = new Map<string, string>()
+const pendingCreates = new Map<string, {signature: string, id: string}>()
 const snapshot = () => JSON.stringify([date.value, progress.value, references.value])
 const draftKey = (taskId = props.taskId, day = date.value) => `${taskId}:${day}`
+
+function pendingCreateId(key: string, signature: string) {
+	const pending = pendingCreates.get(key)
+	if (pending?.signature === signature) return pending.id
+	const id = createTeamCommentId()
+	pendingCreates.set(key, {signature, id})
+	return id
+}
 
 useTasktraceUndoGuard(() => saving.value || referenceLoading.value || sharedBusy.value || drafts.size > 0 || (!restoring.value && snapshot() !== lastSaved.value), '请先保存每日进展及其他日期的草稿。')
 
@@ -502,7 +511,12 @@ async function save() {
 		const outstanding = sharedOutstanding(latestHistory)
 		if (!outstanding.id && outstanding.items.length > 0) await changeOutstanding(taskId, items => items, undoGroupHeaders())
 		const body = await persistProgressImages(progress.value, taskId)
+		// Keep uploaded image URLs in the editor before the comment request. A
+		// retry then reuses those attachments instead of uploading them again.
+		progress.value = body
 		const author = currentUsername.value
+		const key = draftKey(taskId, date.value)
+		const createSignature = JSON.stringify([taskId, date.value, author, body, normalizeProgressReferences(references.value)])
 		const latestSelected = mergedDay(latestHistory, date.value, author)
 		const absorbedIds = [...new Set([...mergedIds.value, ...latestSelected.mergedIds, autoCommentId.value, latestSelected.id].filter((id): id is number => !!id))]
 		const absorbedTeamIds = [...new Set([...mergedTeamIds.value, ...latestSelected.mergedTeamIds, autoTeamId.value, latestSelected.teamId].filter(Boolean))]
@@ -511,15 +525,20 @@ async function save() {
 		let comment = `<h3${numericAttribute}${teamAttribute}>每日进展 · ${date.value}</h3>${body}${serializeProgressReferences(references.value)}`
 		if (snapshot() !== lastSaved.value || mergedIds.value.length || mergedTeamIds.value.length) {
 			if (collaborative.value) {
-				autoTeamId.value = createTeamCommentId()
-				comment += serializeTeamCommentMarker({id: autoTeamId.value, author})
+				const teamId = pendingCreateId(key, createSignature)
+				comment += serializeTeamCommentMarker({id: teamId, author})
 				autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoGroupHeaders()})).data.id
+				autoTeamId.value = teamId
+				pendingCreates.delete(key)
 				mergedIds.value = absorbedIds
 				mergedTeamIds.value = absorbedTeamIds
 			} else if (autoCommentId.value) {
 				await taskCommentsUpdate({path: {task: taskId, commentid: autoCommentId.value}, body: {comment}, headers: undoGroupHeaders()})
 			} else {
+				const teamId = pendingCreateId(key, createSignature)
+				comment += serializeTeamCommentMarker({id: teamId, author})
 				autoCommentId.value = (await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers: undoGroupHeaders()})).data.id
+				pendingCreates.delete(key)
 			}
 		}
 		if (taskId !== props.taskId) return
@@ -527,7 +546,6 @@ async function save() {
 		mergedIds.value = []
 		mergedTeamIds.value = []
 		lastSaved.value = snapshot()
-		const key = draftKey(taskId, date.value)
 		drafts.delete(key)
 		cachedSnapshots.delete(key)
 		await deleteTaskTraceDraft('progress', taskId, date.value).catch(() => {})

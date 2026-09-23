@@ -28,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"xorm.io/builder"
 )
 
 func TestTaskComment_Create(t *testing.T) {
@@ -69,6 +70,52 @@ func TestTaskComment_Create(t *testing.T) {
 		err := tc.Create(s, u)
 		require.Error(t, err)
 		assert.True(t, IsErrTaskDoesNotExist(err))
+	})
+	t.Run("retry with the same team marker is idempotent", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		events.ClearDispatchedEvents()
+		body := taskTraceTeamAddMarker("<h3>Progress 2026-09-24</h3><p>saved once</p>", "retry-token", "user1")
+
+		firstSession := db.NewSession()
+		first := &TaskComment{Comment: body, TaskID: 1}
+		require.NoError(t, first.Create(firstSession, u))
+		require.NoError(t, firstSession.Commit())
+		events.DispatchPending(context.Background(), firstSession)
+		firstSession.Close()
+
+		secondSession := db.NewSession()
+		second := &TaskComment{Comment: body, TaskID: 1}
+		require.NoError(t, second.Create(secondSession, u))
+		require.Equal(t, first.ID, second.ID)
+		require.NoError(t, secondSession.Commit())
+		events.DispatchPending(context.Background(), secondSession)
+		secondSession.Close()
+
+		db.AssertCount(t, "task_comments", builder.Eq{"task_id": 1, "comment": body}, 1)
+		assert.Equal(t, 1, events.CountDispatchedEvents((&TaskCommentCreatedEvent{}).Name()))
+	})
+	t.Run("retry with the same outstanding list is idempotent", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		events.ClearDispatchedEvents()
+		body := `<h3 data-tasktrace-comment-type="outstanding">Outstanding</h3><ul><li data-id="one">one</li></ul>`
+
+		firstSession := db.NewSession()
+		first := &TaskComment{Comment: body, TaskID: 1}
+		require.NoError(t, first.Create(firstSession, u))
+		require.NoError(t, firstSession.Commit())
+		events.DispatchPending(context.Background(), firstSession)
+		firstSession.Close()
+
+		secondSession := db.NewSession()
+		second := &TaskComment{Comment: body, TaskID: 1}
+		require.NoError(t, second.Create(secondSession, u))
+		require.Equal(t, first.ID, second.ID)
+		require.NoError(t, secondSession.Commit())
+		events.DispatchPending(context.Background(), secondSession)
+		secondSession.Close()
+
+		db.AssertCount(t, "task_comments", builder.Eq{"task_id": 1, "comment": body}, 1)
+		assert.Equal(t, 1, events.CountDispatchedEvents((&TaskCommentCreatedEvent{}).Name()))
 	})
 	t.Run("should send notifications for comment mentions", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
@@ -237,6 +284,26 @@ func TestTaskComment_Update(t *testing.T) {
 		err := tc.Update(s, u)
 		require.Error(t, err)
 		assert.True(t, IsErrTaskCommentDoesNotExist(err))
+	})
+	t.Run("retry with unchanged content does not emit another edit", func(t *testing.T) {
+		db.LoadAndAssertFixtures(t)
+		events.ClearDispatchedEvents()
+
+		firstSession := db.NewSession()
+		first := &TaskComment{ID: 1, TaskID: 1, Comment: "updated once"}
+		require.NoError(t, first.Update(firstSession, u))
+		require.NoError(t, firstSession.Commit())
+		events.DispatchPending(context.Background(), firstSession)
+		firstSession.Close()
+
+		secondSession := db.NewSession()
+		retry := &TaskComment{ID: 1, TaskID: 1, Comment: "updated once"}
+		require.NoError(t, retry.Update(secondSession, u))
+		require.NoError(t, secondSession.Commit())
+		events.DispatchPending(context.Background(), secondSession)
+		secondSession.Close()
+
+		assert.Equal(t, 1, events.CountDispatchedEvents((&TaskCommentUpdatedEvent{}).Name()))
 	})
 	t.Run("not the own comment", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)

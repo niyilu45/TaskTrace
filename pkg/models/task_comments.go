@@ -17,6 +17,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"code.vikunja.io/api/pkg/db"
@@ -86,6 +87,30 @@ func (tc *TaskComment) CreateWithTimestamps(s *xorm.Session, a web.Auth) (err er
 		return err
 	}
 	tc.AuthorID = tc.Author.ID
+
+	// Daily progress writes carry a stable TaskTrace marker. Reusing that
+	// marker makes a retry safe when the first request committed but its HTTP
+	// response was lost. Without this check the retry would create another
+	// comment and another audit/activity event for the same save operation.
+	marker, marked := taskTraceTeamReadMarker(tc.Comment)
+	outstanding := strings.Contains(tc.Comment, taskTraceOutstandingTypeAttribute) && taskTraceTeamIsOutstanding(tc.Comment)
+	if marked || outstanding {
+		var existing []*TaskComment
+		if err = s.Where("task_id = ?", tc.TaskID).Find(&existing); err != nil {
+			return err
+		}
+		for _, candidate := range existing {
+			candidateMarker, candidateMarked := taskTraceTeamReadMarker(candidate.Comment)
+			sameMarkedWrite := marked && candidateMarked && candidateMarker.ID == marker.ID
+			sameOutstandingWrite := outstanding && candidate.Comment == tc.Comment
+			if !sameMarkedWrite && !sameOutstandingWrite {
+				continue
+			}
+			candidate.Author = tc.Author
+			*tc = *candidate
+			return nil
+		}
+	}
 
 	if !tc.Created.IsZero() && !tc.Updated.IsZero() {
 		_, err = s.NoAutoTime().Insert(tc)
@@ -168,24 +193,45 @@ func (tc *TaskComment) Delete(s *xorm.Session, a web.Auth) error {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /tasks/{taskID}/comments/{commentID} [post]
 func (tc *TaskComment) Update(s *xorm.Session, a web.Auth) error {
-	updated, err := s.
-		ID(tc.ID).
-		Cols("comment").
-		Update(tc)
-	if updated == 0 {
-		return ErrTaskCommentDoesNotExist{ID: tc.ID}
+	saved := &TaskComment{ID: tc.ID, TaskID: tc.TaskID}
+	if err := getTaskCommentSimple(s, saved); err != nil {
+		return err
+	}
+	if saved.Comment == tc.Comment {
+		tc.TaskID = saved.TaskID
+		tc.AuthorID = saved.AuthorID
+		tc.Created = saved.Created
+		tc.Updated = saved.Updated
+		return nil
 	}
 
+	updated, err := s.
+		ID(tc.ID).
+		Where("comment <> ?", tc.Comment).
+		Cols("comment").
+		Update(tc)
 	if err != nil {
 		return err
+	}
+	if updated == 0 {
+		// A simultaneous retry may have written the same value after the read
+		// above. Treat that as success without emitting another edit event.
+		current := &TaskComment{ID: tc.ID, TaskID: saved.TaskID}
+		if readErr := getTaskCommentSimple(s, current); readErr != nil {
+			return readErr
+		}
+		if current.Comment == tc.Comment {
+			tc.TaskID = current.TaskID
+			tc.AuthorID = current.AuthorID
+			tc.Created = current.Created
+			tc.Updated = current.Updated
+			return nil
+		}
+		return ErrTaskCommentDoesNotExist{ID: tc.ID, TaskID: saved.TaskID}
 	}
 
 	// TaskID is optional here: only routes carrying it in the URL bind it, so fall back to the stored row.
 	if tc.TaskID == 0 {
-		saved := &TaskComment{ID: tc.ID}
-		if err := getTaskCommentSimple(s, saved); err != nil {
-			return err
-		}
 		tc.TaskID = saved.TaskID
 	}
 
