@@ -239,6 +239,36 @@ describe('outstanding item images', () => {
 		expect(wrapper.text()).not.toContain('Updated note')
 	})
 
+	it('keeps the selected priority after saving and reloading a new item', async () => {
+		await open()
+		await startNew()
+		await wrapper.get('textarea').setValue('Priority item')
+		await wrapper.get('select').setValue('2')
+		await click('添加遗留事项')
+		expect(history[0].comment).toContain('data-priority="2"')
+
+		wrapper.unmount()
+		await open()
+		expect(wrapper.text()).toContain('P2')
+	})
+
+	it('keeps every embedded note image after saving and reloading', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p></li>')}]
+		await open()
+		await click('编辑')
+		await wrapper.get('.mock-note-editor').setValue('<p>Note</p><img src="#" data-src="/api/v1/tasks/42/attachments/8"><p>between</p><img src="#" data-src="/api/v1/tasks/42/attachments/9">')
+		await click('保存修改')
+		expect(history[0].comment.match(/<img /g)).toHaveLength(2)
+		expect(history[0].comment).toContain('attachments/8')
+		expect(history[0].comment).toContain('attachments/9')
+
+		wrapper.unmount()
+		await open()
+		await click('编辑')
+		const note = (wrapper.get('.mock-note-editor').element as HTMLTextAreaElement).value
+		expect(note.match(/<img /g)).toHaveLength(2)
+	})
+
 	it('does not re-create an item that was moved or removed while its images were being added', async () => {
 		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
 		await open()

@@ -7,7 +7,7 @@ const getAll = vi.hoisted(() => vi.fn(async () => [{id: 2, comment: 'old', autho
 vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: true}))
 vi.mock('vue-i18n', () => ({useI18n: () => ({t: (key: string) => key})}))
 vi.mock('vue-router', () => ({useRoute: () => ({hash: ''})}))
-vi.mock('@/components/input/AsyncEditor', () => ({default: {props: ['modelValue', 'isEditEnabled'], emits: ['update:modelValue'], template: '<textarea :value="modelValue" :data-edit-enabled="String(isEditEnabled)" @input="$emit(\'update:modelValue\', $event.target.value)" />'}}))
+vi.mock('@/components/input/AsyncEditor', () => ({default: {props: ['modelValue', 'isEditEnabled', 'bottomActions'], emits: ['update:modelValue'], template: '<div><textarea :value="modelValue" :data-edit-enabled="String(isEditEnabled)" @input="$emit(\'update:modelValue\', $event.target.value)" /><button v-for="action in bottomActions" :key="action.title">{{ action.title }}</button></div>'}}))
 vi.mock('./DailyProgress.vue', () => ({default: {template: '<span />', methods: {refreshHistory: vi.fn()}}}))
 vi.mock('@/components/misc/CustomTransition.vue', () => ({default: {template: '<span><slot /></span>'}}))
 vi.mock('@/components/input/Reactions.vue', () => ({default: {template: '<span />'}}))
@@ -42,6 +42,7 @@ describe('comment Undo protection', () => {
 	it('lets the collaboration task owner edit another member comment', async () => {
 		await open({id: 2, username: 'user2'})
 		expect(wrapper.findAll('textarea')[0].attributes('data-edit-enabled')).toBe('true')
+		expect(wrapper.text()).toContain('misc.delete')
 	})
 	it('guards new and delayed existing comment drafts, and flushes them on normal navigation', async () => {
 		await open()

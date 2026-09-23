@@ -84,7 +84,7 @@ func RegisterTaskCommentRoutes(api huma.API) {
 	Register(api, huma.Operation{
 		OperationID: "task-comments-delete",
 		Summary:     "Delete a comment of a task",
-		Description: "Deletes a comment of a task. The comment must belong to the task in the path, and only its author may delete it.",
+		Description: "Deletes a comment of a task. The comment must belong to the task in the path. Its author or the collaboration task owner may delete it.",
 		Method:      http.MethodDelete,
 		Path:        "/tasks/{task}/comments/{commentid}",
 		Tags:        tags,
@@ -121,8 +121,8 @@ type taskCommentReadBody struct {
 	models.TaskComment
 	// Reports the parent task's permission, not the comment's: TaskComment.CanRead
 	// delegates to Task.CanRead. Editing usually requires being the author, with
-	// a collaboration-owner exception; deleting always requires authorship.
-	MaxPermission models.Permission `json:"max_permission" readOnly:"true" doc:"The maximum permission the requesting user has on this comment's parent task (0=read, 1=read/write, 2=admin). A collaboration task owner may edit every comment; deleting still requires being its author."`
+	// a collaboration-owner exception for both editing and deleting.
+	MaxPermission models.Permission `json:"max_permission" readOnly:"true" doc:"The maximum permission the requesting user has on this comment's parent task (0=read, 1=read/write, 2=admin). A collaboration task owner may edit or delete every comment."`
 }
 
 func taskCommentsRead(ctx context.Context, in *struct {

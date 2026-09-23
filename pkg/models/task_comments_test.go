@@ -174,7 +174,7 @@ func TestTaskComment_Delete(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, can)
 	})
-	t.Run("collaboration task owner can edit every comment but cannot delete another author's comment", func(t *testing.T) {
+	t.Run("collaboration task owner can edit and delete every comment", func(t *testing.T) {
 		db.LoadAndAssertFixtures(t)
 		root := t.TempDir()
 		dataRoot := t.TempDir()
@@ -200,7 +200,7 @@ func TestTaskComment_Delete(t *testing.T) {
 		require.True(t, can)
 		can, err = (&TaskComment{ID: comment.ID, TaskID: comment.TaskID}).CanDelete(s, owner)
 		require.NoError(t, err)
-		require.False(t, can)
+		require.True(t, can)
 	})
 }
 

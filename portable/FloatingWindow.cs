@@ -62,9 +62,9 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public bool Done; public int Priority=9, CurrentTextLength; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public bool Done; public int Priority=7, CurrentTextLength; }
     sealed class PendingItem {
-        public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number; public bool Done; public int Priority=9;
+        public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number; public bool Done; public int Priority=7;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -299,7 +299,7 @@ internal sealed partial class FloatingWindow : Form {
     static string ProgressBody(string html,long taskId=0) {
         return ProgressDisplayBody(SplitProgressReferences(html,taskId).Body);
     }
-    static SharedList ReadShared(List<Dictionary<string,object>> notes) {
+    SharedList ReadShared(List<Dictionary<string,object>> notes) {
         var list = new SharedList();
         var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => IsSharedComment(Convert.ToString(note["comment"])));
         if(record != null) {
@@ -312,7 +312,7 @@ internal sealed partial class FloatingWindow : Form {
                 var done=Regex.Match(attrs,"\\bdata-done\\s*=\\s*\"(?<value>true|false)\"",RegexOptions.IgnoreCase);
                 var priority=Regex.Match(attrs,"\\bdata-priority\\s*=\\s*\"(?<value>[0-9])\"",RegexOptions.IgnoreCase);
                 var reminder=Regex.Match(attrs,"\\bdata-reminder\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
-                int value=9;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
+                int value=defaultPriority;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
                 string content=match.Body;var note=OutstandingNotePattern.Match(content);
                 list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,ReminderAt=reminder.Success?WebUtility.HtmlDecode(reminder.Groups["value"].Value):null,Priority=Math.Max(0,Math.Min(9,value))});
             }
@@ -321,7 +321,7 @@ internal sealed partial class FloatingWindow : Form {
             if(latest != null) {
                 var match = Regex.Match((string)latest["comment"], @"<p>\s*<strong>遗留问题 / 下一步</strong>\s*</p>\s*<p>(.*?)</p>", RegexOptions.Singleline);
                 int index=0;
-                foreach(string value in Regex.Split(match.Groups[1].Value, @"<br\s*/?>")) if(value.Trim()!="") list.Items.Add(new PendingItem {Id="legacy-"+latest["id"]+"-"+(index++),Html=value});
+                foreach(string value in Regex.Split(match.Groups[1].Value, @"<br\s*/?>")) if(value.Trim()!="") list.Items.Add(new PendingItem {Id="legacy-"+latest["id"]+"-"+(index++),Html=value,Priority=defaultPriority});
             }
         }
         return list;
@@ -1202,7 +1202,7 @@ internal sealed partial class FloatingWindow : Form {
             await SaveProgress(childId,DateTime.Today.AddDays(-2),"合并编辑", "",null,sameDay,"<p>合并编辑</p>",new List<long>{oldDay});
             var sharedHistory=await ReadHistory(childId);
             var parsedShared=ReadShared(sharedHistory);
-            if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=9 || !Plain(parsedShared.Items[0].NoteHtml).Contains("仅编辑窗口显示的备注") || !Plain(parsedShared.Items[0].NoteHtml).Contains("备注列表") || !parsedShared.Items[1].Done || String.IsNullOrWhiteSpace(parsedShared.Items[1].CompletedAt) || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding note, status, priority, completion time or merged history failed");
+            if(parsedShared.Items.Count!=2 || parsedShared.Items[0].Done || parsedShared.Items[0].Priority!=defaultPriority || !Plain(parsedShared.Items[0].NoteHtml).Contains("仅编辑窗口显示的备注") || !Plain(parsedShared.Items[0].NoteHtml).Contains("备注列表") || !parsedShared.Items[1].Done || String.IsNullOrWhiteSpace(parsedShared.Items[1].CompletedAt) || parsedShared.Items[1].Priority!=2 || DailyHistory(sharedHistory).Count!=1 || Plain(ProgressBody((string)DailyHistory(sharedHistory)[0]["comment"]))!="合并编辑")throw new Exception("Shared outstanding note, status, priority, completion time or merged history failed");
             var noteLeaf=tasks.Nodes.Find(childId.ToString(),true).Single().Nodes.Cast<TreeNode>().Select(node=>node.Tag as OutstandingLeaf).FirstOrDefault(item=>item!=null && item.Id=="test-one");if(noteLeaf==null || !Plain(noteLeaf.NoteHtml).Contains("仅编辑窗口显示的备注") || tasks.Nodes.Find(childId.ToString(),true).Single().Nodes.Cast<TreeNode>().Any(node=>node.Text.Contains("仅编辑窗口显示的备注")))throw new Exception("Outstanding note leaked into the floating list or was not retained");
             sharedTest.Items.RemoveAt(0);await WriteShared(childId,sharedTest);
             if(ReadShared(await ReadHistory(childId)).Items.Count!=1)throw new Exception("Individual outstanding removal failed");

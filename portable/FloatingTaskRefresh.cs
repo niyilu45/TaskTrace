@@ -124,7 +124,7 @@ internal sealed partial class FloatingWindow {
             if(count==0 || pageIndex>=Convert.ToInt32(result["total_pages"]))return notes;
         }
     }
-    static async Task<SharedList> ReadOutstandingList(long id,long commentCount,Func<string,Task<Dictionary<string,object>>> read,Func<bool> current) {
+    async Task<SharedList> ReadOutstandingList(long id,long commentCount,Func<string,Task<Dictionary<string,object>>> read,Func<bool> current) {
         if(current!=null && !current())return null;
         if(commentCount==0)return new SharedList();
         // Small/legacy tasks keep their one-page read. Large histories only need the current

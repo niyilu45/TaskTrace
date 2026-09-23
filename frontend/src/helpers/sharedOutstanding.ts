@@ -3,6 +3,7 @@ import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, type TaskComme
 import {sortProgressNotes} from './progressNotes'
 import {deduplicateHtmlImages} from './tasktraceImages'
 import {isOutstandingComment, outstandingHeading, outstandingType, outstandingTypeAttribute} from './tasktraceCommentTypes'
+import {TASKTRACE_DEFAULT_PRIORITY} from './tasktracePriority'
 
 export const sharedHeading = outstandingHeading
 export type OutstandingItem = {
@@ -33,9 +34,9 @@ function serializeOutstandingNote(note?: string) {
 }
 
 function priority(value: string | null | undefined) {
-	if (value == null || value.trim() === '') return 9
+	if (value == null || value.trim() === '') return TASKTRACE_DEFAULT_PRIORITY
 	const parsed = Number(value)
-	return Number.isInteger(parsed) ? Math.max(0, Math.min(9, parsed)) : 9
+	return Number.isInteger(parsed) ? Math.max(0, Math.min(9, parsed)) : TASKTRACE_DEFAULT_PRIORITY
 }
 
 function attribute(value: string) {
@@ -68,7 +69,7 @@ export function sharedOutstanding(history: TaskComment[]) {
 	return {
 		id: undefined,
 		items: html
-			? html.split(/<br\s*\/?>(?:\r?\n)?/i).filter(value => value.trim()).map((itemHtml, index) => ({id: `legacy-${latest?.id}-${index}`, html: itemHtml, done: false, priority: 9}))
+			? html.split(/<br\s*\/?>(?:\r?\n)?/i).filter(value => value.trim()).map((itemHtml, index) => ({id: `legacy-${latest?.id}-${index}`, html: itemHtml, done: false, priority: TASKTRACE_DEFAULT_PRIORITY}))
 			: [],
 	}
 }
@@ -95,7 +96,7 @@ export async function changeOutstanding(taskId: number, change: (items: Outstand
 	const comment = `<h3 ${outstandingTypeAttribute}="${outstandingType}">${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
 		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
-		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? 9))}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
+		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY))}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
 	}).join('')}</ul>`
 	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}, headers})
 	else await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers})

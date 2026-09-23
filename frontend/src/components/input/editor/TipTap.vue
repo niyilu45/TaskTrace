@@ -257,7 +257,7 @@ const props = withDefaults(defineProps<{
 	allowBase64Images: false,
 })
 
-const emit = defineEmits(['save', 'discard'])
+const emit = defineEmits(['save', 'discard', 'uploading'])
 
 provide(taskLinkCurrentProjectIdKey, computed(() => props.projectId || undefined))
 
@@ -482,6 +482,12 @@ onBeforeUnmount(() => {
 
 const uploadInputRef = ref<HTMLInputElement | null>(null)
 
+let activeUploads = 0
+function setUploading(delta: number) {
+	activeUploads = Math.max(0, activeUploads + delta)
+	emit('uploading', activeUploads > 0)
+}
+
 function uploadAndInsertFiles(files: File[] | FileList) {
 	if (typeof props.uploadCallback === 'undefined') {
 		throw new Error('Can\'t add files here')
@@ -489,6 +495,7 @@ function uploadAndInsertFiles(files: File[] | FileList) {
 
 	// The server reports failed uploads (quota, disk full) in the response body,
 	// so a rejection here is a message for the user, not a bug to report.
+	setUploading(1)
 	props.uploadCallback(files).then(async urls => {
 		urls?.forEach(url => {
 			if (liveEditor()?.isEmpty) {
@@ -520,7 +527,7 @@ function uploadAndInsertFiles(files: File[] | FileList) {
 		if (urls?.length === 1) {
 			await promptImageAlt(urls[0])
 		}
-	}).catch(e => error(e))
+	}).catch(e => error(e)).finally(() => setUploading(-1))
 }
 
 function triggerImageInput(event: Event) {

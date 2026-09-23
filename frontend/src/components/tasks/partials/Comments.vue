@@ -163,7 +163,7 @@
 								编辑当天进展
 							</button>
 							<button
-								v-if="commentOwnedByCurrent(c)"
+								v-if="commentCanDelete(c)"
 								type="button"
 								class="button is-small"
 								@click="toggleDelete(c.id)"
@@ -420,6 +420,7 @@ const commentOwnedByCurrent = (comment: ITaskComment) => {
 	return marker ? teamMemberKey(commentAuthorIdentity(comment)) === teamMemberKey(current) : comment.author.id === currentUserId.value
 }
 const commentCanEdit = (comment: ITaskComment) => props.canWrite && (commentOwnedByCurrent(comment) || taskOwnedByCurrent.value)
+const commentCanDelete = (comment: ITaskComment) => props.canWrite && (commentOwnedByCurrent(comment) || taskOwnedByCurrent.value)
 const commentAuthors = computed(() => [...new Set(comments.value.map(commentAuthor).filter(Boolean))].sort((a, b) => a.localeCompare(b)))
 const filteredComments = computed(() => selectedAuthor.value ? comments.value.filter(comment => commentAuthor(comment) === selectedAuthor.value) : comments.value)
 const savedComments = reactive(new Map<number, string>())
@@ -462,7 +463,7 @@ const actions = computed(() => {
 			action: () => startReplyTo(comment),
 			title: t('task.comment.reply'),
 		}]
-		if (commentOwnedByCurrent(comment)) {
+		if (commentCanDelete(comment)) {
 			list.push({
 				action: () => toggleDelete(comment.id),
 				title: t('misc.delete'),

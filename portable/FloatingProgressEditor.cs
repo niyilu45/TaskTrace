@@ -162,12 +162,12 @@ internal sealed partial class FloatingWindow {
         return safe;
     }
 
-    async Task<string> PrepareInlineEditorHtml(long taskId,string html,bool description) {
+    async Task<string> PrepareInlineEditorHtml(long taskId,string html,bool description,bool allowOtherTaskAttachments=false) {
         string safe=description?TaskDescriptionEditorHtml(html):ProgressSnapshotHtml(html??"",taskId);var output=new StringBuilder();int cursor=0;
         foreach(Match image in Regex.Matches(safe,@"<img\b[^>]*>",RegexOptions.IgnoreCase)) {
             output.Append(safe.Substring(cursor,image.Index-cursor));cursor=image.Index+image.Length;
             string source=ReferenceAttribute(image.Value,"data-src")??ReferenceAttribute(image.Value,"src")??"";
-            string retained=AttachmentPath(source);if(retained==null || !Regex.IsMatch(retained,@"^/api/v2/tasks/"+taskId+@"/attachments/[1-9][0-9]*$"))continue;
+            string retained=AttachmentPath(source);if(retained==null || (!allowOtherTaskAttachments && !Regex.IsMatch(retained,@"^/api/v2/tasks/"+taskId+@"/attachments/[1-9][0-9]*$")))continue;
             try {
                 byte[] bytes=await DownloadImage(retained);
                 output.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(bytes)).Append("\" data-tasktrace-src=\"").Append(WebUtility.HtmlEncode(retained.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"").Append(description?"任务描述图片":"进展图片").Append("\">");
@@ -178,6 +178,7 @@ internal sealed partial class FloatingWindow {
 
     Task<string> PrepareProgressEditorHtml(long taskId,string html) {return PrepareInlineEditorHtml(taskId,html,false);}
     Task<string> PrepareTaskDescriptionEditorHtml(long taskId,string html) {return PrepareInlineEditorHtml(taskId,html,true);}
+    Task<string> PrepareOutstandingNoteEditorHtml(long taskId,string html) {return PrepareInlineEditorHtml(taskId,html,true,true);}
 
     async Task<long> UploadProgressEditorImage(long taskId,byte[] bytes,string extension) {
         await Api("GET","/tasks/"+taskId,null);
@@ -217,6 +218,7 @@ internal sealed partial class FloatingWindow {
 
     Task<string> PersistProgressEditorImages(long taskId,string html) {return PersistInlineEditorImages(taskId,html,false);}
     Task<string> PersistTaskDescriptionEditorImages(long taskId,string html) {return PersistInlineEditorImages(taskId,html,true);}
+    Task<string> PersistOutstandingNoteEditorImages(long taskId,string html) {return PersistInlineEditorImages(taskId,html,true);}
 }
 
 internal sealed partial class FloatingWindow {

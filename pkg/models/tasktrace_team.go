@@ -72,6 +72,7 @@ type TaskTraceTeamComment struct {
 	Author  string    `json:"author"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
+	Deleted bool      `json:"deleted,omitempty"`
 }
 
 type TaskTraceTeamAttachment struct {
@@ -134,22 +135,23 @@ type TaskTraceTeamConflict struct {
 }
 
 type TaskTraceTeamBinding struct {
-	ShareID          string                       `json:"share_id"`
-	Repository       string                       `json:"repository"`
-	Secret           string                       `json:"secret"`
-	Owner            string                       `json:"owner"`
-	Members          []string                     `json:"members"`
-	RootTaskID       int64                        `json:"root_task_id"`
-	ProjectID        int64                        `json:"project_id"`
-	NodeTasks        map[string]int64             `json:"node_tasks"`
-	Base             map[string]TaskTraceTeamBase `json:"base"`
-	Notify           bool                         `json:"notify"`
-	LastSnapshotHash string                       `json:"last_snapshot_hash,omitempty"`
-	LastSync         time.Time                    `json:"last_sync,omitempty"`
-	LastError        string                       `json:"last_error,omitempty"`
-	Conflicts        []TaskTraceTeamConflict      `json:"conflicts,omitempty"`
-	ResolutionAcks   map[string]string            `json:"resolution_acks,omitempty"`
-	LocalAttachments map[string]int64             `json:"local_attachments,omitempty"`
+	ShareID               string                       `json:"share_id"`
+	Repository            string                       `json:"repository"`
+	Secret                string                       `json:"secret"`
+	Owner                 string                       `json:"owner"`
+	Members               []string                     `json:"members"`
+	RootTaskID            int64                        `json:"root_task_id"`
+	ProjectID             int64                        `json:"project_id"`
+	NodeTasks             map[string]int64             `json:"node_tasks"`
+	Base                  map[string]TaskTraceTeamBase `json:"base"`
+	Notify                bool                         `json:"notify"`
+	LastSnapshotHash      string                       `json:"last_snapshot_hash,omitempty"`
+	LastSync              time.Time                    `json:"last_sync,omitempty"`
+	LastError             string                       `json:"last_error,omitempty"`
+	Conflicts             []TaskTraceTeamConflict      `json:"conflicts,omitempty"`
+	ResolutionAcks        map[string]string            `json:"resolution_acks,omitempty"`
+	LocalAttachments      map[string]int64             `json:"local_attachments,omitempty"`
+	OutstandingPriorities map[string]int               `json:"outstanding_priorities,omitempty"`
 }
 
 type taskTraceTeamResolutionRecord struct {
@@ -659,6 +661,35 @@ func taskTraceTeamOutstandingPriorities(body string) map[string]string {
 	return priorities
 }
 
+func taskTraceTeamOutstandingPriorityKey(nodeID, outstandingID string) string {
+	return nodeID + ":" + outstandingID
+}
+
+func taskTraceTeamRememberOutstandingPriorities(binding *TaskTraceTeamBinding, snapshot TaskTraceTeamSnapshot) {
+	if binding.OutstandingPriorities == nil {
+		binding.OutstandingPriorities = map[string]int{}
+	}
+	for _, task := range snapshot.Tasks {
+		for id, value := range taskTraceTeamOutstandingPriorities(task.Outstanding) {
+			parsed, err := strconv.Atoi(value)
+			if err == nil && parsed >= 0 && parsed <= 9 {
+				binding.OutstandingPriorities[taskTraceTeamOutstandingPriorityKey(task.NodeID, id)] = parsed
+			}
+		}
+	}
+}
+
+func taskTraceTeamRememberedOutstandingPriorities(binding *TaskTraceTeamBinding, nodeID string) map[string]string {
+	result := map[string]string{}
+	for key, value := range binding.OutstandingPriorities {
+		prefix := nodeID + ":"
+		if strings.HasPrefix(key, prefix) && value >= 0 && value <= 9 {
+			result[strings.TrimPrefix(key, prefix)] = strconv.Itoa(value)
+		}
+	}
+	return result
+}
+
 func taskTraceTeamApplyOutstandingPriorities(body string, priorities map[string]string) string {
 	if len(priorities) == 0 {
 		return body
@@ -889,6 +920,9 @@ func taskTraceTeamLatestProgressChange(previous *TaskTraceTeamSnapshot, current 
 	var latest *taskTraceTeamProgressChange
 	for _, task := range current.Tasks {
 		for _, comment := range task.Comments {
+			if comment.Deleted {
+				continue
+			}
 			if !strings.EqualFold(comment.Author, actor) {
 				continue
 			}
@@ -1025,6 +1059,77 @@ func taskTraceTeamTaskMap(snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTe
 	result := map[string]TaskTraceTeamTask{}
 	for _, task := range snapshot.Tasks {
 		result[task.NodeID] = task
+	}
+	return result
+}
+
+// taskTraceTeamReconcileLocalCommentEvents turns comments which disappeared
+// since the previous snapshot into durable deletion events. Without these
+// tombstones another member's older snapshot would recreate a deleted comment
+// during the next merge. A restored comment receives a newer event timestamp so
+// Undo can intentionally supersede the tombstone.
+func taskTraceTeamReconcileLocalCommentEvents(current *TaskTraceTeamSnapshot, previous *TaskTraceTeamSnapshot, now time.Time) {
+	if current == nil || previous == nil {
+		return
+	}
+	previousTasks := taskTraceTeamTaskMap(*previous)
+	for taskIndex := range current.Tasks {
+		task := &current.Tasks[taskIndex]
+		oldTask, exists := previousTasks[task.NodeID]
+		if !exists {
+			continue
+		}
+		currentByID := make(map[string]int, len(task.Comments))
+		for index := range task.Comments {
+			currentByID[task.Comments[index].ID] = index
+		}
+		for _, old := range oldTask.Comments {
+			index, stillPresent := currentByID[old.ID]
+			if old.Deleted {
+				if !stillPresent {
+					task.Comments = append(task.Comments, old)
+					currentByID[old.ID] = len(task.Comments) - 1
+					continue
+				}
+				if !task.Comments[index].Deleted && !task.Comments[index].Updated.After(old.Updated) {
+					task.Comments[index].Updated = now
+				}
+				continue
+			}
+			if stillPresent {
+				continue
+			}
+			old.Body = ""
+			old.Deleted = true
+			old.Updated = now
+			task.Comments = append(task.Comments, old)
+			currentByID[old.ID] = len(task.Comments) - 1
+		}
+	}
+}
+
+func taskTraceTeamLatestCommentEventSnapshot(snapshots []TaskTraceTeamSnapshot) TaskTraceTeamSnapshot {
+	tasks := map[string]map[string]TaskTraceTeamComment{}
+	for _, snapshot := range snapshots {
+		for _, task := range snapshot.Tasks {
+			if tasks[task.NodeID] == nil {
+				tasks[task.NodeID] = map[string]TaskTraceTeamComment{}
+			}
+			for _, comment := range task.Comments {
+				previous, exists := tasks[task.NodeID][comment.ID]
+				if !exists || comment.Updated.After(previous.Updated) {
+					tasks[task.NodeID][comment.ID] = comment
+				}
+			}
+		}
+	}
+	result := TaskTraceTeamSnapshot{Tasks: make([]TaskTraceTeamTask, 0, len(tasks))}
+	for nodeID, comments := range tasks {
+		task := TaskTraceTeamTask{NodeID: nodeID, Comments: make([]TaskTraceTeamComment, 0, len(comments))}
+		for _, comment := range comments {
+			task.Comments = append(task.Comments, comment)
+		}
+		result.Tasks = append(result.Tasks, task)
 	}
 	return result
 }
@@ -1366,6 +1471,15 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 	}
 	sort.Slice(remote, func(i, j int) bool { return remote[i].Created.Before(remote[j].Created) })
 	for _, shared := range remote {
+		if shared.Deleted {
+			if existing := byID[shared.ID]; existing != nil && !existing.Updated.After(shared.Updated) {
+				if _, err := s.ID(existing.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+					return err
+				}
+				delete(byID, shared.ID)
+			}
+			continue
+		}
 		body := taskTraceTeamAddMarker(shared.Body, shared.ID, shared.Author)
 		if existing := byID[shared.ID]; existing != nil {
 			_, marked := taskTraceTeamReadMarker(existing.Comment)
@@ -1540,6 +1654,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
+	taskTraceTeamRememberOutstandingPriorities(binding, local)
 	var manifest TaskTraceTeamManifest
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
 	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
@@ -1558,6 +1673,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		previousLocal = &storedLocal
 	}
 	taskTraceTeamProtectSnapshotPermissions(&local, previousLocal, &manifest, actor)
+	taskTraceTeamReconcileLocalCommentEvents(&local, previousLocal, time.Now().UTC())
 	progressChange := taskTraceTeamLatestProgressChange(previousLocal, local, actor)
 	localHash := taskTraceTeamSnapshotHash(local)
 	localChanged := binding.LastSnapshotHash != "" && binding.LastSnapshotHash != localHash
@@ -1663,9 +1779,13 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		outstanding = taskTraceTeamOutstandingHTML(outstandingItems, outstandingOrder)
+		localPriorities := taskTraceTeamRememberedOutstandingPriorities(binding, node)
 		if hasLocalTask {
-			outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, taskTraceTeamOutstandingPriorities(localTask.Outstanding))
+			for id, value := range taskTraceTeamOutstandingPriorities(localTask.Outstanding) {
+				localPriorities[id] = value
+			}
 		}
+		outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, localPriorities)
 		latest := rows[0].task
 		for _, row := range rows[1:] {
 			if row.task.Updated.After(latest.Updated) {
@@ -1745,6 +1865,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
+	latestCommentEvents := taskTraceTeamLatestCommentEventSnapshot(snapshots)
+	taskTraceTeamReconcileLocalCommentEvents(&final, &latestCommentEvents, time.Now().UTC())
 	if err := taskTraceTeamWriteSnapshot(binding, final); err != nil {
 		return err
 	}

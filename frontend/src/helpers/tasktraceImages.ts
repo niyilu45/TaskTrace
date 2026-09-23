@@ -7,7 +7,7 @@ export function deduplicateHtmlImages(html: string) {
 	const doc = new DOMParser().parseFromString(html || '', 'text/html')
 	const seen = new Set<string>()
 	for (const image of doc.body.querySelectorAll('img')) {
-		const source = image.getAttribute('src') || ''
+		const source = image.getAttribute('data-tasktrace-src') || image.getAttribute('data-src') || image.getAttribute('src') || ''
 		const key = attachmentImageKey(source)
 		if (!source || seen.has(key)) image.remove()
 		else seen.add(key)

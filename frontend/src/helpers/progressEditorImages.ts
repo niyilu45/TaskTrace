@@ -24,6 +24,19 @@ export function countProgressImages(html: string) {
 	return new DOMParser().parseFromString(html || '', 'text/html').querySelectorAll('img').length
 }
 
+function normalizedAttachmentSource(source: string) {
+	if (/^\/api\/v[12]\/tasks\/\d+\/attachments\/\d+$/.test(source)) return source.replace(/^\/api\/v2/, '/api/v1')
+	try {
+		const parsed = new URL(source, window.location.origin)
+		const api = new URL(window.API_URL, window.location.origin)
+		if (parsed.origin !== api.origin) return ''
+		const match = parsed.pathname.match(/^\/api\/v[12]\/tasks\/\d+\/attachments\/\d+$/)
+		return match ? match[0].replace(/^\/api\/v2/, '/api/v1') : ''
+	} catch {
+		return ''
+	}
+}
+
 export async function persistProgressImages(html: string, taskId: number) {
 	const doc = new DOMParser().parseFromString(html || '', 'text/html')
 	for (const image of Array.from(doc.querySelectorAll('img'))) {
@@ -35,8 +48,8 @@ export async function persistProgressImages(html: string, taskId: number) {
 			const id = result.data.success?.[0]?.id
 			if (!id || result.data.errors?.length) throw new Error('Progress image upload failed')
 			image.setAttribute('src', `/api/v1/tasks/${taskId}/attachments/${id}`)
-		} else if (/^\/api\/v[12]\/tasks\/\d+\/attachments\/\d+$/.test(source)) {
-			image.setAttribute('src', source.replace(/^\/api\/v2/, '/api/v1'))
+		} else if (normalizedAttachmentSource(source)) {
+			image.setAttribute('src', normalizedAttachmentSource(source))
 		} else {
 			image.remove()
 			continue

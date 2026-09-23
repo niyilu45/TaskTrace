@@ -37,7 +37,7 @@
 						@change="toggleDone(entry.item, eventChecked($event))"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? 9 }}</span>
+						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
@@ -90,7 +90,7 @@
 						@change="toggleDone(entry.item, false)"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? 9 }}</span>
+						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
@@ -225,6 +225,7 @@
 						:upload-callback="stageProgressImages"
 						placeholder="补充背景、处理说明或截图…"
 						@save="save"
+						@uploading="noteUploading = $event"
 					/>
 				</div>
 				<p class="outstanding-hint">
@@ -314,6 +315,7 @@ const showComposer = ref(false)
 const textInput = ref<HTMLTextAreaElement>()
 const fileInput = ref<HTMLInputElement>()
 const busy = ref(false)
+const noteUploading = ref(false)
 watch(busy, value => emit('busy', value), {flush: 'sync'})
 const loading = ref(false)
 const error = ref('')
@@ -322,7 +324,7 @@ const showCompleted = ref(false)
 const pendingCompletionIds = ref(new Set<string>())
 const completionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const cachedSignatures = new Map<string, string>()
-const blocked = computed(() => props.disabled || busy.value || loading.value || undoInProgress.value)
+const blocked = computed(() => props.disabled || busy.value || loading.value || noteUploading.value || undoInProgress.value)
 const activeIndex = computed(() => items.value.findIndex(item => item.id === activeId.value))
 const numberedItems = computed(() => items.value.map((item, index) => ({item, number: index + 1})))
 const visibleItems = computed(() => numberedItems.value.filter(entry => !entry.item.done || pendingCompletionIds.value.has(entry.item.id)))
@@ -380,7 +382,7 @@ async function draftFromItem(item: OutstandingItem): Promise<Draft> {
 		const taskId = Number(match[1]) || props.taskId
 		images.push({attachmentId, preview: await fetchAttachmentBlobUrl({taskId, id: attachmentId})})
 	}
-	const result = {text: state.text, note: item.note || '', images, itemId: item.id, priority: item.priority ?? 9, original: '', base: {text: state.text, note: item.note || '', imageKeys: state.imageKeys, priority: item.priority ?? 9}}
+	const result = {text: state.text, note: item.note || '', images, itemId: item.id, priority: item.priority ?? TASKTRACE_DEFAULT_PRIORITY, original: '', base: {text: state.text, note: item.note || '', imageKeys: state.imageKeys, priority: item.priority ?? TASKTRACE_DEFAULT_PRIORITY}}
 	result.original = draftSignature(result)
 	return result
 }
@@ -656,11 +658,11 @@ async function save() {
 				if (textChanged && latest.text !== savedDraft.base.text && latest.text !== savedDraft.text) throw new Error('Outstanding edit conflict')
 				if (noteChanged && editorContentSignature(current.note || '') !== editorContentSignature(savedDraft.base.note) && editorContentSignature(current.note || '') !== editorContentSignature(savedNote)) throw new Error('Outstanding edit conflict')
 				if (imagesChanged && !sameValues(latest.imageKeys, savedDraft.base.imageKeys) && !sameValues(latest.imageKeys, desiredImageKeys)) throw new Error('Outstanding edit conflict')
-				if (priorityChanged && (current.priority ?? 9) !== savedDraft.base.priority && (current.priority ?? 9) !== savedDraft.priority) throw new Error('Outstanding edit conflict')
+				if (priorityChanged && (current.priority ?? TASKTRACE_DEFAULT_PRIORITY) !== savedDraft.base.priority && (current.priority ?? TASKTRACE_DEFAULT_PRIORITY) !== savedDraft.priority) throw new Error('Outstanding edit conflict')
 				if (!textChanged) text = latest.text
 				if (!noteChanged) note = current.note || ''
 				if (!imagesChanged) mergedImages = latest.imageSources
-				if (!priorityChanged) priority = current.priority ?? 9
+				if (!priorityChanged) priority = current.priority ?? TASKTRACE_DEFAULT_PRIORITY
 			}
 			const html = `${textHtml(text)}${mergedImages.map(imageHtml).join('')}`
 			if (current) return existing.map(item => item.id === targetId ? {...item, html, note, priority} : item)

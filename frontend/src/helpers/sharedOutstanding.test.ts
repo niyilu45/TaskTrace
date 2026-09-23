@@ -4,7 +4,7 @@ import {sharedOutstanding, outstandingHtml} from './sharedOutstanding'
 describe('shared outstanding', () => {
 	it('recognizes the stable type marker when an editor rewrites the heading', () => {
 		const marked = {id: 4, comment: '<h3 data-tasktrace-comment-type="outstanding">已改写标题</h3><ul><li data-id="a"><p>事项</p><aside data-tasktrace-outstanding-note="true" hidden><p>备注</p></aside></li></ul>'}
-		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 9, completedAt: undefined, reminderAt: undefined}])
+		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 7, completedAt: undefined, reminderAt: undefined}])
 	})
 
 	it('uses the shared list regardless of progress dates and retains empty lists', () => {
@@ -38,5 +38,10 @@ describe('shared outstanding', () => {
 		expect(item.note).toContain('内部备注')
 		expect(item.note).toContain('attachments/8')
 		expect(outstandingHtml([shared])).toBe('<ol><li><p>事项正文</p></li></ol>')
+	})
+
+	it('uses the configured product default when older collaborative markup has no priority', () => {
+		const shared = {id: 7, comment: '<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="a">事项</li></ul>'}
+		expect(sharedOutstanding([shared]).items[0].priority).toBe(7)
 	})
 })

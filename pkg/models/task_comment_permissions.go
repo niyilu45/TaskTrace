@@ -57,7 +57,7 @@ func (tc *TaskComment) canUserModifyTaskComment(s *xorm.Session, a web.Auth, all
 
 // CanDelete checks if a user can delete a comment
 func (tc *TaskComment) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
-	return tc.canUserModifyTaskComment(s, a, false)
+	return tc.canUserModifyTaskComment(s, a, true)
 }
 
 // CanUpdate checks if a user can update a comment

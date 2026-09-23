@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/user"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -217,6 +220,54 @@ func TestTaskTraceTeamUnmarkedCommentUsesExportedIdentity(t *testing.T) {
 	require.Equal(t, []*TaskComment{comment}, duplicates)
 }
 
+func TestTaskTraceTeamCommentDeletionEventsSurviveRefreshAndAllowRestore(t *testing.T) {
+	created := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	deletedAt := created.Add(time.Minute)
+	previous := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{{ID: "comment", Body: "<p>progress</p>", Author: "alice", Created: created, Updated: created}}}}}
+	current := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{NodeID: "node"}}}
+
+	taskTraceTeamReconcileLocalCommentEvents(&current, &previous, deletedAt)
+	require.Len(t, current.Tasks[0].Comments, 1)
+	tombstone := current.Tasks[0].Comments[0]
+	require.True(t, tombstone.Deleted)
+	require.Empty(t, tombstone.Body)
+	require.Equal(t, deletedAt, tombstone.Updated)
+
+	next := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{NodeID: "node"}}}
+	taskTraceTeamReconcileLocalCommentEvents(&next, &current, deletedAt.Add(time.Minute))
+	require.Equal(t, tombstone, next.Tasks[0].Comments[0], "refresh must retain the original tombstone instead of recreating the comment")
+
+	restored := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{NodeID: "node", Comments: []TaskTraceTeamComment{{ID: "comment", Body: "<p>progress</p>", Author: "alice", Created: created, Updated: created}}}}}
+	restoredAt := deletedAt.Add(2 * time.Minute)
+	taskTraceTeamReconcileLocalCommentEvents(&restored, &next, restoredAt)
+	require.False(t, restored.Tasks[0].Comments[0].Deleted)
+	require.Equal(t, restoredAt, restored.Tasks[0].Comments[0].Updated, "an Undo restore must supersede the deletion event")
+
+	latest := taskTraceTeamLatestCommentEventSnapshot([]TaskTraceTeamSnapshot{previous, current, restored})
+	require.Len(t, latest.Tasks, 1)
+	require.False(t, latest.Tasks[0].Comments[0].Deleted)
+	require.Equal(t, restoredAt, latest.Tasks[0].Comments[0].Updated)
+}
+
+func TestTaskTraceTeamMergeCommentDeletionDoesNotRecreateOnRefresh(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	s := db.NewSession()
+	defer s.Close()
+	created := time.Now().UTC().Add(-time.Minute)
+	comment := &TaskComment{TaskID: 1, AuthorID: 2, Comment: taskTraceTeamAddMarker("<p>collaborator progress</p>", "shared-comment", "user2"), Created: created, Updated: created}
+	_, err := s.NoAutoTime().Insert(comment)
+	require.NoError(t, err)
+
+	binding := &TaskTraceTeamBinding{ShareID: "share"}
+	remote := []TaskTraceTeamComment{{ID: "shared-comment", Author: "user2", Created: created, Updated: created.Add(time.Minute), Deleted: true}}
+	require.NoError(t, taskTraceTeamMergeComments(s, &user.User{ID: 1, Username: "user1"}, binding, "node", "user1", 1, remote))
+
+	var stored TaskComment
+	exists, err := s.ID(comment.ID).Get(&stored)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
 func TestTaskTraceTeamOutstandingItemsMergeIndependently(t *testing.T) {
 	baseHTML := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">原内容</li><li data-id="two">不变</li></ul>`
 	base := TaskTraceTeamBase{Outstanding: baseHTML}
@@ -242,6 +293,11 @@ func TestTaskTraceTeamOutstandingPriorityStaysLocal(t *testing.T) {
 	require.Contains(t, rebuilt, `<li data-id="one" data-priority="2">协作者修改</li>`)
 	require.NotContains(t, rebuilt, `data-id="three" data-priority=`)
 	require.Equal(t, map[string]string{"one": "2", "two": "7"}, priorities)
+
+	binding := &TaskTraceTeamBinding{}
+	taskTraceTeamRememberOutstandingPriorities(binding, TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: local}}})
+	rebuilt = taskTraceTeamApplyOutstandingPriorities(merged, taskTraceTeamRememberedOutstandingPriorities(binding, "node"))
+	require.Contains(t, rebuilt, `<li data-id="one" data-priority="2">协作者修改</li>`, "a later sync must not reset the local priority when rebuilt markup omits it")
 }
 
 func TestTaskTraceTeamOutstandingRichNoteSurvivesParsingAndPriorityRestore(t *testing.T) {

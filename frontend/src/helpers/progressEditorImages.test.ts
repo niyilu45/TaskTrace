@@ -18,6 +18,16 @@ describe('progress editor images', () => {
 		expect(taskAttachmentsUpload).not.toHaveBeenCalled()
 	})
 
+	it('normalizes a same-server absolute attachment url instead of dropping it', async () => {
+		const previousApiUrl = window.API_URL
+		window.API_URL = `${window.location.origin}/api/v1`
+		try {
+			expect(await persistProgressImages(`<img src="${window.location.origin}/api/v2/tasks/8/attachments/4">`, 8)).toBe('<img src="/api/v1/tasks/8/attachments/4">')
+		} finally {
+			window.API_URL = previousApiUrl
+		}
+	})
+
 	it('uploads staged data images with the progress-only filename prefix', async () => {
 		vi.mocked(taskAttachmentsUpload).mockResolvedValue({data: {success: [{id: 44}], errors: []}} as never)
 		const html = await persistProgressImages('<p>text</p><img src="data:image/png;base64,AQID"><p>end</p>', 8)
