@@ -100,6 +100,32 @@ internal sealed partial class FloatingWindow : Form {
         return dialog;
     }
 
+    static async Task ShowEditorWindowAsync(Form dialog, IWin32Window owner) {
+        var closed = new TaskCompletionSource<bool>();
+        FormClosedEventHandler handler = null;
+        handler = delegate {
+            dialog.FormClosed -= handler;
+            closed.TrySetResult(true);
+        };
+        dialog.FormClosed += handler;
+        try {
+            var ownerForm = owner as Form;
+            if(ownerForm != null && !ownerForm.IsDisposed) {
+                var ownerBounds = ownerForm.Bounds;
+                var area = Screen.FromRectangle(ownerBounds).WorkingArea;
+                dialog.StartPosition = FormStartPosition.Manual;
+                dialog.Location = new Point(
+                    Math.Max(area.Left, Math.Min(ownerBounds.Left + (ownerBounds.Width - dialog.Width) / 2, area.Right - dialog.Width)),
+                    Math.Max(area.Top, Math.Min(ownerBounds.Top + (ownerBounds.Height - dialog.Height) / 2, area.Bottom - dialog.Height)));
+            }
+            dialog.Show();
+            dialog.Activate();
+            await closed.Task;
+        } finally {
+            dialog.FormClosed -= handler;
+        }
+    }
+
     [STAThread] static int Main(string[] args) {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -563,7 +589,7 @@ internal sealed partial class FloatingWindow : Form {
         try {
             var task=await Api("GET","/tasks/"+id,null);
             var history = await ReadHistory(id);
-            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true})) {
+            using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true})) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=9};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,32));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,82));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));
                 var descriptionPanel=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=new Padding(0)};
@@ -735,6 +761,7 @@ internal sealed partial class FloatingWindow : Form {
                     try {
                         autoTimer.Stop();
                         if(!dialog.ShowInTaskbar)throw new Exception("Progress editor must have its own taskbar entry");
+                        if(dialog.Modal || dialog.Owner!=null || !dialog.MinimizeBox || !Enabled)throw new Exception("Progress editor must keep the floating window movable and minimizable");
                         if(descriptionEditor.Visible || layout.RowStyles[0].Height!=42)throw new Exception("Task description editor must be collapsed by default");
                         descriptionToggle.PerformClick();if(!descriptionEditor.Visible || layout.RowStyles[0].Height<=42)throw new Exception("Task description editor did not expand");
                         string descriptionBefore=originalDescription;if(!descriptionEditor.SimulateUserHtmlForTest("<p>悬浮窗任务描述编辑验收</p>") || !descriptionDirty() || !await writeDescription())throw new Exception("Task description editor did not save an edit");
@@ -805,7 +832,7 @@ internal sealed partial class FloatingWindow : Form {
                     else {feedback.Text="任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
                 using(var updateRegistration=RegisterUnsavedUpdateEditor("任务描述或每日进展编辑窗口",delegate{stash();return drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving)return false;stash();bool descriptionSaved=!descriptionDirty() || await writeDescription();return descriptionSaved && await saveAllDrafts();},delegate{updateDiscarded=true;drafts.Clear();DeleteDraftCaches("progress",id);lastSaved=snapshot();savedDescriptionVersion=descriptionEditor.ChangeVersion;autoTimer.Stop();}))
-                try{dialog.ShowDialog(this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
+                try{await ShowEditorWindowAsync(dialog,this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
         }catch(Exception e){if(verify)throw;Error(e);}finally{SetBusy(false);timer.Start();}

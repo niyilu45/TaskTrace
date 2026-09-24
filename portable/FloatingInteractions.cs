@@ -391,10 +391,10 @@ internal sealed partial class FloatingWindow {
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
     async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
     async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
-        if((busy && !nested)||closing)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;SetBusy(true);timer.Stop();editingOutstanding=true;
+        if(editingOutstanding || (busy && !nested)||closing)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;SetBusy(true);timer.Stop();editingOutstanding=true;
         try {
             var shared=ReadShared(await ReadHistory(id));
-            using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,KeyPreview=true})){
+            using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true,KeyPreview=true})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=9};
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,66));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,76));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
                 var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
@@ -500,6 +500,7 @@ internal sealed partial class FloatingWindow {
                 if(verify)dialog.Shown+=async delegate{
                     try{
                         if(!dialog.ShowInTaskbar)throw new Exception("Outstanding editor must have its own taskbar entry");
+                        if(dialog.Modal || dialog.Owner!=null || !dialog.MinimizeBox || (owner!=null && !owner.Enabled))throw new Exception("Outstanding editor must keep other windows movable and minimizable");
                         var unchangedItem=shared.Items.FirstOrDefault();
                         if(unchangedItem!=null){await edit(unchangedItem);await Task.Delay(120);if(dirty())throw new Exception("Opening an unchanged outstanding item was treated as an unsaved edit");var otherItem=shared.Items.Skip(1).FirstOrDefault();if(otherItem!=null){await edit(otherItem);await Task.Delay(40);if(dirty())throw new Exception("Switching between unchanged outstanding items was treated as an unsaved edit");}await edit(null);if(dirty())throw new Exception("Opening an empty new outstanding item was treated as an unsaved edit");}
                         int count=shared.Items.Count;input.Text="编辑器图片验收";noteEditor.Html="<p>备注图片验收</p>";priority.SelectedIndex=4;
@@ -540,7 +541,7 @@ internal sealed partial class FloatingWindow {
                     }));
                 };
                 using(var updateRegistration=RegisterUnsavedUpdateEditor("遗留事项编辑窗口",dirty,async delegate{return !writing && await write(false);},delegate{updateDiscarded=true;DeleteDraftCaches("outstanding",id);autoTimer.Stop();}))
-                try{dialog.ShowDialog(owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
+                try{await ShowEditorWindowAsync(dialog,owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
         }catch(Exception e){if(verify)throw;Error(e);}finally{editingOutstanding=false;if(!nested){SetBusy(false);timer.Start();}}
