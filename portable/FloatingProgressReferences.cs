@@ -66,22 +66,28 @@ internal sealed partial class FloatingWindow {
         }
         return html.ToString();
     }
-    static string ProgressTextHtml(string text) { return "<p>"+WebUtility.HtmlEncode((text??"").Trim()).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>"; }
+    static string ProgressTextHtml(string text) { string value=(text??"").Replace("\r\n","\n").Replace("\r","\n");return value==""?"":"<p>"+WebUtility.HtmlEncode(value).Replace("\n","<br>")+"</p>"; }
     static string ProgressDisplayBody(string html) { return Regex.Replace(Regex.Replace(html??"",@"^\s*<h3\b[^>]*>每日进展\s*[·:：]\s*[0-9]{4}-[0-9]{2}-[0-9]{2}</h3>","",RegexOptions.Singleline),@"<p>\s*<strong>遗留问题 / 下一步</strong>\s*</p>\s*<p>.*?</p>","",RegexOptions.Singleline); }
     static string ProgressSnapshotHtml(string html,long taskId) {
         html=SplitProgressReferences(html).Body;
-        html=Regex.Replace(html,@"<(script|style|iframe|object|embed|svg|math|template|noscript|textarea|select|button)\b[^>]*>.*?</\1\s*>","",RegexOptions.IgnoreCase|RegexOptions.Singleline);
-        var output=new StringBuilder();var plain=new StringBuilder();int cursor=0;
-        Action flush=delegate {string text=String.Join("\n",plain.ToString().Replace("\r\n","\n").Replace("\r","\n").Split('\n').Select(line=>line.Trim())).Trim();text=Regex.Replace(text,"\n{3,}","\n\n");if(text!="")output.Append(ProgressTextHtml(text));plain.Clear();};
+        html=TaskDescriptionEditorHtml(html);
+        var output=new StringBuilder();int cursor=0;
         foreach(Match token in ProgressTags.Matches(html)) {
-            plain.Append(WebUtility.HtmlDecode(html.Substring(cursor,token.Index-cursor)));cursor=token.Index+token.Length;
-            if(Regex.IsMatch(token.Value,@"^<img\b",RegexOptions.IgnoreCase)) {
-                flush();string src=ReferenceAttribute(token.Value,"data-src")??ReferenceAttribute(token.Value,"src")??"";
+            output.Append(html.Substring(cursor,token.Index-cursor));cursor=token.Index+token.Length;
+            var tag=Regex.Match(token.Value,@"^<\s*(/?)\s*([a-z0-9]+)\b",RegexOptions.IgnoreCase);if(!tag.Success)continue;
+            bool closing=tag.Groups[1].Value=="/";string name=tag.Groups[2].Value.ToLowerInvariant();
+            if(name=="img" && !closing) {
+                string src=ReferenceAttribute(token.Value,"data-src")??ReferenceAttribute(token.Value,"src")??"";
                 var path=Regex.Match(src,@"^/api/v([12])/tasks/([1-9][0-9]*)/attachments/([1-9][0-9]*)$");long imageTask,imageId;
-                if(path.Success && Int64.TryParse(path.Groups[2].Value,out imageTask) && imageTask==taskId && Int64.TryParse(path.Groups[3].Value,out imageId) && imageId<=9007199254740991L)output.Append("<p><img src=\"").Append(src).Append("\"></p>");
-            } else if(Regex.IsMatch(token.Value,@"^<\s*/?\s*(?:br|p|div|li|ul|ol|blockquote|pre|h[1-6]|table|tr|td|th)\b",RegexOptions.IgnoreCase))plain.Append('\n');
+                if(path.Success && Int64.TryParse(path.Groups[2].Value,out imageTask) && imageTask==taskId && Int64.TryParse(path.Groups[3].Value,out imageId) && imageId<=9007199254740991L)output.Append("<img src=\"").Append(WebUtility.HtmlEncode(src)).Append("\">");
+                continue;
+            }
+            if(Regex.IsMatch(name,@"^h[1-6]$"))name="div";
+            if(!Regex.IsMatch(name,@"^(?:p|div|br|ul|ol|li|blockquote|pre)$"))continue;
+            if(name=="br") {if(!closing)output.Append("<br>");continue;}
+            output.Append(closing?"</"+name+">":"<"+name+">");
         }
-        plain.Append(WebUtility.HtmlDecode(html.Substring(cursor)));flush();return output.ToString();
+        output.Append(html.Substring(cursor));return output.ToString();
     }
     ProgressReference ReferenceForDay(long taskId,string sourceDay,string targetDay,List<Dictionary<string,object>> history) {
         if(String.CompareOrdinal(sourceDay,targetDay)>=0)throw new Exception("只能引用当前日期之前的进展。");
@@ -213,6 +219,8 @@ internal sealed partial class FloatingWindow {
             string badOuter="<blockquote data-tasktrace-reference=\"2\">"+serialized+"</blockquote>";if(SplitProgressReferences(badOuter,taskId).Body!=badOuter)throw new Exception("Invalid outer wrapper lost valid nested content");
             string unclosed="<blockquote data-tasktrace-reference=\"2\">"+serialized;if(SplitProgressReferences(unclosed,taskId).Body!=unclosed)throw new Exception("Unclosed invalid outer wrapper lost nested content");
             string dangerous=ProgressSnapshotHtml("<script>alert(1)</script><h3>小标题</h3><p>A &amp; B</p><img src=\"/api/v1/tasks/"+taskId+"/attachments/"+images[0].Id+"\"><p>图片后文字</p><img src=\"https://example.invalid/picture.png\">",taskId);if(dangerous.Contains("alert") || dangerous.Contains("<h3") || dangerous.Contains("example.invalid") || dangerous.IndexOf("<img",StringComparison.Ordinal)>dangerous.IndexOf("图片后文字",StringComparison.Ordinal))throw new Exception("Reference snapshot normalization failed");
+            string exactLines="<p><br>第一行<br><br>第二行<br></p><div>第三行</div><div><br></div>";if(ProgressSnapshotHtml(exactLines,taskId)!=exactLines || ProgressSnapshotHtml(ProgressSnapshotHtml(exactLines,taskId),taskId)!=exactLines)throw new Exception("Progress editor changed user line breaks");
+            if(ProgressTextHtml("\r\n第一行\r\n\r\n第二行\r\n")!="<p><br>第一行<br><br>第二行<br></p>")throw new Exception("Progress text conversion trimmed user line breaks");
             bool blocked=false;try{ReferenceForDay(taskId,DateTime.Today.ToString("yyyy-MM-dd"),DateTime.Today.ToString("yyyy-MM-dd"),original);}catch{blocked=true;}if(!blocked)throw new Exception("Same-day reference was accepted");
             undoRecording=true;await EditProgress(taskId,"引用历史进展验收",true);
             var current=await ReadHistory(taskId);foreach(var note in preserved)if((string)current.First(row=>Convert.ToInt64(row["id"])==note.Key)["comment"]!=note.Value)throw new Exception("Adding a reference rewrote its source record");

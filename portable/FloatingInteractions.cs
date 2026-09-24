@@ -376,14 +376,21 @@ internal sealed partial class FloatingWindow {
         return Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>ReferenceAttribute(match.Value,"data-tasktrace-src")??ReferenceAttribute(match.Value,"data-src")??ReferenceAttribute(match.Value,"src")??"").ToList();
     }
     static bool SameProgressEditorContent(string left,string right) {
-        return Plain(left)==Plain(right) && ProgressEditorImageKeys(left).SequenceEqual(ProgressEditorImageKeys(right),StringComparer.Ordinal);
+        Func<string,string> layout=value=>ProgressSnapshotHtml(Regex.Replace(value??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase),0).Replace("\r\n","\n").Replace("\r","\n");
+        return layout(left)==layout(right) && ProgressEditorImageKeys(left).SequenceEqual(ProgressEditorImageKeys(right),StringComparer.Ordinal);
     }
     static string OutstandingEditorText(string html) {
-        return Plain(Regex.Replace(html??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase));
+        string source=Regex.Replace(html??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase);
+        var paragraph=Regex.Match(source,@"^\s*<p(?:\s[^>]*)?>(?<body>[\s\S]*)</p\s*>\s*$",RegexOptions.IgnoreCase);
+        if(paragraph.Success && !Regex.IsMatch(paragraph.Groups["body"].Value,@"</?p\b",RegexOptions.IgnoreCase))source=paragraph.Groups["body"].Value;
+        else return Plain(source);
+        source=Regex.Replace(source,@"<br\s*/?>","\n",RegexOptions.IgnoreCase);
+        source=WebUtility.HtmlDecode(Regex.Replace(source,"<[^>]+>",""));
+        return source.Replace("\r\n","\n").Replace("\r","\n").Replace("\n","\r\n");
     }
     static string OutstandingTextHtml(string value) {
-        string text=(value??"").Trim();
-        return text==""?"":"<p>"+WebUtility.HtmlEncode(text).Replace("\r\n","<br>").Replace("\n","<br>")+"</p>";
+        string text=(value??"").Replace("\r\n","\n").Replace("\r","\n");
+        return text==""?"":"<p>"+WebUtility.HtmlEncode(text).Replace("\n","<br>")+"</p>";
     }
     static string OutstandingImagesHtml(string html) {
         return String.Join("",Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>match.Value));
@@ -501,6 +508,7 @@ internal sealed partial class FloatingWindow {
                     try{
                         if(!dialog.ShowInTaskbar)throw new Exception("Outstanding editor must have its own taskbar entry");
                         if(dialog.Modal || dialog.Owner!=null || !dialog.MinimizeBox || (owner!=null && !owner.Enabled))throw new Exception("Outstanding editor must keep other windows movable and minimizable");
+                        string exactLines="\r\n第一行\r\n\r\n第二行\r\n";if(OutstandingEditorText(OutstandingTextHtml(exactLines))!=exactLines)throw new Exception("Outstanding editor changed user line breaks");
                         var unchangedItem=shared.Items.FirstOrDefault();
                         if(unchangedItem!=null){await edit(unchangedItem);await Task.Delay(120);if(dirty())throw new Exception("Opening an unchanged outstanding item was treated as an unsaved edit");var otherItem=shared.Items.Skip(1).FirstOrDefault();if(otherItem!=null){await edit(otherItem);await Task.Delay(40);if(dirty())throw new Exception("Switching between unchanged outstanding items was treated as an unsaved edit");}await edit(null);if(dirty())throw new Exception("Opening an empty new outstanding item was treated as an unsaved edit");}
                         int count=shared.Items.Count;input.Text="编辑器图片验收";noteEditor.Html="<p>备注图片验收</p>";priority.SelectedIndex=4;

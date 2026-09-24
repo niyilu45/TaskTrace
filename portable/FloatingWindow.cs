@@ -631,7 +631,7 @@ internal sealed partial class FloatingWindow : Form {
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
                 WarnIfTeamReadOnly(id,dialog,feedback);
                 Action renderImages=delegate { };
-                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,text=Plain(progress.Html),images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
+                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,html=progress.Html,images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
                 Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
