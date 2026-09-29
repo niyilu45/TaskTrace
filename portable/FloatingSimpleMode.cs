@@ -213,6 +213,7 @@ internal sealed partial class FloatingWindow {
         if(enabled==simpleMode){UpdateSimpleModeState();return;}
         var modeSwitchBounds=edgeHidden && !edgeRestoreBounds.IsEmpty ? edgeRestoreBounds : Bounds;
         var modeSwitchArea=edgeHidden && !edgeWorkingArea.IsEmpty ? edgeWorkingArea : Screen.FromRectangle(modeSwitchBounds).WorkingArea;
+        var modeSwitchLocation=modeSwitchBounds.Location;
         var modeSwitchEdge=edgeHidden ? edgeDock : TouchedEdge(modeSwitchBounds,modeSwitchArea);
         RestoreFromEdge(true);
         var selected=tasks.SelectedNode;var top=tasks.TopNode;
@@ -233,7 +234,9 @@ internal sealed partial class FloatingWindow {
                 // simpleSize already contains the stable expanded dimensions, even while unfocused.
                 simpleMode=false;simpleWindowWasMinimized=false;Controls.Remove(taskSurface);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
                 FormBorderStyle=FormBorderStyle.Sizable;MinimumSize=new Size(350,420);
-                content.Controls.Add(taskSurface,0,3);taskSurface.Dock=DockStyle.Fill;taskSurface.Visible=true;content.Visible=true;toolbar.Visible=true;Bounds=fullBounds;
+                content.Controls.Add(taskSurface,0,3);taskSurface.Dock=DockStyle.Fill;taskSurface.Visible=true;content.Visible=true;toolbar.Visible=true;
+                var restored=new Rectangle(modeSwitchLocation,fullBounds.Size);var area=modeSwitchArea;
+                restored.X=Math.Max(area.Left,Math.Min(restored.X,area.Right-restored.Width));restored.Y=Math.Max(area.Top,Math.Min(restored.Y,area.Bottom-restored.Height));if(modeSwitchEdge!=EdgeDock.None)restored=AlignBoundsToEdge(restored,area,modeSwitchEdge);Bounds=restored;fullBounds=restored;
             }
         } finally {simpleLayout=false;content.ResumeLayout(true);ResumeLayout(true);}
         PerformLayout();PositionSimpleModeControls();tasks.RefreshWrappedLayout();taskSurface.Rebuild(true);UpdateSimpleModeState();
@@ -259,7 +262,7 @@ internal sealed partial class FloatingWindow {
             if(simpleActions.Visible || ClientSize.Height-simpleEmpty.Bottom!=SimpleEdge || simpleEmpty.Bounds!=emptyArea || simpleSize!=savedSize)throw new Exception("Unselected empty mode retained a footer or changed its viewport");
             OnActivated(EventArgs.Empty);
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-simple-empty-test.png"));}
-            restoreSimple.PerformClick();if(simpleMode || Bounds!=originalBounds)throw new Exception("Empty simple mode button failed to restore original bounds");
+            var compactLocation=Bounds.Location;restoreSimple.PerformClick();if(simpleMode || Bounds.Location!=compactLocation || Bounds.Size!=originalBounds.Size)throw new Exception("Empty simple mode button failed to retain the compact position and restore the full size");
             SetSimpleMode(true);HideSimpleModeActions();
             typeof(Control).GetMethod("OnMouseClick",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,1,20,80,0)});
             if(!restoreSimple.Visible)throw new Exception("Blank surface click failed to expose recovery controls");

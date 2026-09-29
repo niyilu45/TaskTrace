@@ -61,8 +61,8 @@ internal sealed partial class FloatingWindow : Form {
     readonly ToolTip progressTip = new ToolTip { AutoPopDelay = 20000, InitialDelay = 300, ReshowDelay = 200 };
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
-    internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public bool Done; public int Priority=7, CurrentTextLength; }
+    internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public string LocalColorKey="",EffectiveColorKey=""; public TaskNode(string text) : base(text) {} }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, CurrentTextLength; }
     sealed class PendingItem {
         public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number; public bool Done; public int Priority=7;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
@@ -149,7 +149,7 @@ internal sealed partial class FloatingWindow : Form {
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
-        LoadBounds(); LoadAutoSaveSettings(); tasks.StrikeCompleted=strikeCompleted; LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
+        LoadBounds(); LoadAutoSaveSettings(); LoadLocalAppearance(); tasks.StrikeCompleted=strikeCompleted; LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 3, 0), WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
         var full = new Button { Text = "完整界面", AutoSize = true };
         var settingsButton = new Button { Text = "设置", AutoSize = true };
@@ -595,10 +595,13 @@ internal sealed partial class FloatingWindow : Form {
                 var descriptionPanel=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Margin=new Padding(0)};
                 descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,38));descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Percent,100));descriptionPanel.RowStyles.Add(new RowStyle(SizeType.Absolute,0));
                 var descriptionToggle=new Button {Text="查看/编辑任务描述",Dock=DockStyle.Fill,AccessibleName="展开或收起任务描述编辑区"};
+                bool taskCanInherit=taskParents.ContainsKey(id);var taskAppearance=AppearancePicker(taskCanInherit);taskAppearance.Width=138;SelectAppearance(taskAppearance,LocalTaskAppearance(id));
+                var descriptionHeader=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=3,RowCount=1,Margin=Padding.Empty};descriptionHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));descriptionHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,112));descriptionHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,140));
+                descriptionHeader.Controls.Add(descriptionToggle,0,0);descriptionHeader.Controls.Add(new Label{Text="背景色（仅本机）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AccessibleName="任务背景色说明"},1,0);descriptionHeader.Controls.Add(taskAppearance,2,0);
                 var descriptionEditor=new ProgressHtmlEditor {Dock=DockStyle.Fill,Visible=false,AccessibleName="任务描述，支持粘贴图片，双击图片查看大图"};
                 var descriptionActions=new FlowLayoutPanel {Dock=DockStyle.Fill,Visible=false,WrapContents=false};
                 var saveDescription=new Button {Text="保存任务描述",AutoSize=true};var cancelDescription=new Button {Text="取消描述修改",AutoSize=true};descriptionActions.Controls.Add(saveDescription);descriptionActions.Controls.Add(cancelDescription);
-                descriptionPanel.Controls.Add(descriptionToggle,0,0);descriptionPanel.Controls.Add(descriptionEditor,0,1);descriptionPanel.Controls.Add(descriptionActions,0,2);
+                descriptionPanel.Controls.Add(descriptionHeader,0,0);descriptionPanel.Controls.Add(descriptionEditor,0,1);descriptionPanel.Controls.Add(descriptionActions,0,2);
                 var day=new ProgressDatePicker {Value=DateTime.Today,Dock=DockStyle.Fill};day.SetMarkedDates(ProgressDates(history));
                 var progress=new ProgressHtmlEditor {Dock=DockStyle.Fill,AccessibleName="当天进展与更正，图片直接嵌入正文，双击查看大图，选中后可按退格或 Delete 删除"};
                 var collaboratorGroup=new GroupBox {Text="其他协作人员当天进展",Dock=DockStyle.Fill,Visible=false,Padding=new Padding(8)};
@@ -612,6 +615,7 @@ internal sealed partial class FloatingWindow : Form {
                 var deleteTask=new Button {Text="删除此任务",Dock=DockStyle.Fill,BackColor=Color.Firebrick,ForeColor=Color.White,FlatStyle=FlatStyle.Flat};
                 var actionRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));actionRow.Controls.Add(save,0,0);actionRow.Controls.Add(deleteTask,1,0);
                 var feedback=new Label {Dock=DockStyle.Fill};
+                taskAppearance.SelectedIndexChanged+=delegate{SetLocalTaskAppearance(id,SelectedAppearance(taskAppearance));feedback.Text=taskCanInherit&&SelectedAppearance(taskAppearance)==""?"背景色已设为继承父任务，仅保存在本机。":"背景色已保存到本机，不会同步给协作成员。";};
                 var referenceGroup=new GroupBox {Text="引用历史进展",Dock=DockStyle.Fill,Padding=new Padding(8)};
                 var referenceLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
                 referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));referenceLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));

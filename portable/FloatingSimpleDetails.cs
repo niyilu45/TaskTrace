@@ -218,7 +218,8 @@ internal sealed partial class FloatingWindow {
     TreeNode CreateOutstandingNode(long taskId,PendingItem item,int index,string path="") {
         int number=item.Number>0?item.Number:index+1;
         string current=number+". [P"+item.Priority+"] "+OutstandingText(item.Html);
-        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,CurrentTextLength=current.Length};
+        string localColor=LocalOutstandingAppearance(taskId,item.Id);string inherited=EffectiveTaskAppearance(taskId,taskParents);
+        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
         var leaf=new TreeNode(current+path){Tag=state,Checked=item.Done,
             ForeColor=item.Done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
             ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};
@@ -233,10 +234,9 @@ internal sealed partial class FloatingWindow {
             // Clear native expansion before removing the last child; no placeholders are needed.
             if(shared.Items.Count==0 && !node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long))node.Collapse();
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf).ToArray())node.Nodes.Remove(child);
-            for(int index=0;index<shared.Items.Count;index++) {
-                var item=shared.Items[index];
-                node.Nodes.Add(CreateOutstandingNode(id,item,index));
-            }
+            var leaves=shared.Items.Select((item,index)=>CreateOutstandingNode(id,item,index)).ToList();
+            if(prioritySort.Checked){var combined=node.Nodes.Cast<TreeNode>().Concat(leaves).Select((child,index)=>new{child,index}).OrderBy(value=>value.child.Tag is OutstandingLeaf?((OutstandingLeaf)value.child.Tag).Priority:TaskNodePriority(value.child,taskCache)).ThenBy(value=>value.child.Tag is OutstandingLeaf?1:0).ThenBy(value=>value.index).Select(value=>value.child).ToArray();node.Nodes.Clear();node.Nodes.AddRange(combined);}
+            else foreach(var leaf in leaves)node.Nodes.Add(leaf);
             tasks.SyncCompletionState(node);
             if(node.Nodes.Count==0)node.Collapse();
             else if(singleLine.Checked || (!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id))))node.Expand();

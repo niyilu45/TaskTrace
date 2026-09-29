@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -15,7 +16,7 @@ internal sealed class TaskTreeSurface : Panel {
         internal Font Font;
         internal int AnchorY;
         internal bool HasChildren,Done,Wrap,ImageAvailable,ReminderAvailable;
-        internal string SourceText="",CurrentText="";
+        internal string SourceText="",CurrentText="",Appearance="";
         internal int Level;
         internal Color SourceColor;
     }
@@ -127,6 +128,7 @@ internal sealed class TaskTreeSurface : Panel {
                 !row.Font.Equals(model.DisplayFont(node)) || row.HasChildren!=node.Nodes.Cast<TreeNode>().Any(Real) ||
                 row.Done!=(leaf==null?node.Checked:leaf.Done) || row.ImageAvailable!=HasImage(node) || row.ReminderAvailable!=HasReminder(node))return false;
             if(row.SourceColor!=node.ForeColor){row.SourceColor=node.ForeColor;repaint=true;}
+            string appearance=NodeAppearance(node);if(row.Appearance!=appearance){row.Appearance=appearance;repaint=true;}
         }
         if(!preserveScroll && AutoScrollPosition!=Point.Empty){AutoScrollPosition=Point.Empty;repaint=true;}
         layoutSelection=model.SelectedNode;LayoutReuseCount++;
@@ -157,7 +159,7 @@ internal sealed class TaskTreeSurface : Panel {
             else titleWidth=Math.Max(1,Advance(title,font)+4);
             int textHeight=TextRenderer.MeasureText(title.Length==0?" ":title,font,new Size(titleWidth,Int32.MaxValue),TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|(wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.SingleLine)).Height;
             int height=wrap?Math.Max(baseHeight,(stacked?baseHeight:0)+textHeight+(stacked?2:8)):baseHeight;
-            var row=new Row{Node=node,SourceText=node.Text,CurrentText=current,Level=node.Level,SourceColor=node.ForeColor,ImageAvailable=image,ReminderAvailable=reminder,Font=font,PrefixText=prefix,PriorityText=priority,TitleText=title,AncestorText=ancestors,HasChildren=node.Nodes.Cast<TreeNode>().Any(Real),Done=node.Tag is FloatingWindow.OutstandingLeaf?((FloatingWindow.OutstandingLeaf)node.Tag).Done:node.Checked,Wrap=wrap};
+            var row=new Row{Node=node,SourceText=node.Text,CurrentText=current,Level=node.Level,SourceColor=node.ForeColor,Appearance=NodeAppearance(node),ImageAvailable=image,ReminderAvailable=reminder,Font=font,PrefixText=prefix,PriorityText=priority,TitleText=title,AncestorText=ancestors,HasChildren=node.Nodes.Cast<TreeNode>().Any(Real),Done=node.Tag is FloatingWindow.OutstandingLeaf?((FloatingWindow.OutstandingLeaf)node.Tag).Done:node.Checked,Wrap=wrap};
             row.Bounds=new Rectangle(0,y,Math.Max(viewport,titleLeft+titleWidth+6),height);row.AnchorY=y+baseHeight/2;
             row.Expand=new Rectangle(expandLeft,y+(baseHeight-12)/2,12,12);row.Check=new Rectangle(checkLeft,y+(baseHeight-16)/2,16,16);
             int lineHeight=TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+2;int textTop=y+4;int headerHeight=Math.Max(1,Math.Min(height-8,lineHeight));
@@ -179,6 +181,12 @@ internal sealed class TaskTreeSurface : Panel {
         Invalidate();
     }
     static Color NodeColor(TreeNode node,Color fallback) {return node.ForeColor.IsEmpty?fallback:node.ForeColor;}
+    static string NodeAppearance(TreeNode node) {var leaf=node.Tag as FloatingWindow.OutstandingLeaf;if(leaf!=null)return leaf.EffectiveColorKey??"";var task=node as FloatingWindow.TaskNode;return task==null?"":task.EffectiveColorKey??"";}
+    static Color Blend(Color left,Color right,float rightAmount){rightAmount=Math.Max(0,Math.Min(1,rightAmount));float leftAmount=1-rightAmount;return Color.FromArgb(255,(int)(left.R*leftAmount+right.R*rightAmount),(int)(left.G*leftAmount+right.G*rightAmount),(int)(left.B*leftAmount+right.B*rightAmount));}
+    static GraphicsPath RoundedRectangle(Rectangle bounds,int radius){
+        var path=new GraphicsPath();int diameter=Math.Max(2,radius*2);var arc=new Rectangle(bounds.Location,new Size(diameter,diameter));
+        path.AddArc(arc,180,90);arc.X=bounds.Right-diameter;path.AddArc(arc,270,90);arc.Y=bounds.Bottom-diameter;path.AddArc(arc,0,90);arc.X=bounds.Left;path.AddArc(arc,90,90);path.CloseFigure();return path;
+    }
     static Rectangle OffsetRectangle(Rectangle value,Point offset) {value.Offset(offset);return value;}
     protected override void OnPaint(PaintEventArgs e) {
         base.OnPaint(e);if(model==null)return;
@@ -188,8 +196,11 @@ internal sealed class TaskTreeSurface : Panel {
             if(bounds.Bottom<0 || bounds.Top>ClientSize.Height)continue;
             var expand=OffsetRectangle(row.Expand,offset);var check=OffsetRectangle(row.Check,offset);var prefix=OffsetRectangle(row.Prefix,offset);
             var image=OffsetRectangle(row.Image,offset);var reminder=OffsetRectangle(row.Reminder,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
-            bool selected=model.SelectedNode==row.Node;Color background=selected?SystemColors.Highlight:BackColor;Color foreground=selected?SystemColors.HighlightText:NodeColor(row.Node,ForeColor);
-            using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillRectangle(backgroundBrush,new Rectangle(0,bounds.Top,ClientSize.Width,bounds.Height));
+            bool selected=model.SelectedNode==row.Node;Color tint=FloatingWindow.AppearanceColor(row.Appearance);Color background=tint.IsEmpty?BackColor:tint;Color foreground=NodeColor(row.Node,ForeColor);
+            if(selected){background=Blend(background,Color.FromArgb(182,216,255),tint.IsEmpty?.72f:.38f);foreground=Color.FromArgb(24,42,67);}
+            var band=new Rectangle(2,bounds.Top+1,Math.Max(1,ClientSize.Width-5),Math.Max(1,bounds.Height-2));
+            using(var path=RoundedRectangle(band,6))using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillPath(backgroundBrush,path);
+            if(selected)using(var path=RoundedRectangle(band,6))using(var pen=new Pen(Color.FromArgb(58,122,204),1))e.Graphics.DrawPath(pen,path);
             if(!model.SingleLinePaths) {
                 for(int level=0;level<row.Node.Level;level++){int x=offset.X+10+level*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,bounds.Top,x,bounds.Bottom);}
                 if(row.Node.Level>0){int x=offset.X+10+(row.Node.Level-1)*Math.Max(18,model.Indent);e.Graphics.DrawLine(linePen,x,offset.Y+row.AnchorY,expand.Left,offset.Y+row.AnchorY);}
@@ -198,13 +209,13 @@ internal sealed class TaskTreeSurface : Panel {
             CheckBoxRenderer.DrawCheckBox(e.Graphics,new Point(check.Left,check.Top),row.Done?System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal:System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal);
             var single=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis;
             if(row.PrefixText.Length>0)TextRenderer.DrawText(e.Graphics,row.PrefixText,row.Font,prefix,foreground,single);
-            if(!row.Image.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
-            if(!row.Reminder.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"提醒",underline,reminder,selected?SystemColors.HighlightText:Color.FromArgb(196,92,28),single);
-            if(!row.Priority.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,row.PriorityText,underline,priority,selected?SystemColors.HighlightText:Color.FromArgb(36,94,210),single);
+            if(!row.Image.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"图片",underline,image,Color.FromArgb(31,83,176),single);
+            if(!row.Reminder.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,"提醒",underline,reminder,Color.FromArgb(160,72,18),single);
+            if(!row.Priority.IsEmpty)using(var underline=new Font(row.Font,row.Font.Style|FontStyle.Underline))TextRenderer.DrawText(e.Graphics,row.PriorityText,underline,priority,Color.FromArgb(31,83,176),single);
             var titleFlags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.EndEllipsis|(row.Wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
             TextRenderer.DrawText(e.Graphics,row.TitleText,row.Font,title,foreground,titleFlags);
-            if(!row.Ancestors.IsEmpty)TextRenderer.DrawText(e.Graphics,row.AncestorText,row.Font,ancestors,selected?Color.FromArgb(215,225,236):Color.FromArgb(156,163,175),single);
-            if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,bounds,foreground,background);
+            if(!row.Ancestors.IsEmpty)TextRenderer.DrawText(e.Graphics,row.AncestorText,row.Font,ancestors,selected?Color.FromArgb(90,104,124):Color.FromArgb(120,130,145),single);
+            if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,new Rectangle(band.Left+2,band.Top+2,Math.Max(1,band.Width-4),Math.Max(1,band.Height-4)),foreground,background);
             if(row.Node==dropNode){int y=dropZone<0?bounds.Top:dropZone>0?bounds.Bottom-2:bounds.Top+bounds.Height/2;using(var pen=new Pen(Color.FromArgb(36,94,210),2))e.Graphics.DrawLine(pen,Math.Max(2,bounds.Left+2),y,Math.Max(2,bounds.Right-4),y);}
         }
     }

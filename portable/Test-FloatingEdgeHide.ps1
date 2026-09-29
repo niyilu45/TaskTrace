@@ -123,6 +123,8 @@ internal sealed partial class FloatingWindow {
             EdgeAssert(window.edgeDock==EdgeDock.Left && !window.edgeHidden,"Initial/manual docking must arm without immediately hiding");
             window.edgeHideEnabled=false;window.PollEdgeHide(new Point(area.Right+200,area.Bottom+200),now.AddSeconds(10),false);
             EdgeAssert(!window.edgeHidden,"Disabled preference still hid the window");
+            if(window.simpleMode)window.SetSimpleMode(false);window.Bounds=new Rectangle(area.Left+130,area.Top+90,420,580);window.SetSimpleMode(true);window.Location=new Point(area.Left+240,area.Top+160);var compactLocation=window.Location;window.SetSimpleMode(false);Application.DoEvents();
+            EdgeAssert(window.Location==compactLocation,"Returning to full mode did not inherit the simple window position");
             window.Hide();
         }
         Console.WriteLine("PASS lifecycle: both layouts on all four edges; delayed hide, exact hover restore, repeat hide, pointer/interaction/modal/drag guards, 16 production mode switches and disabled preference.");
@@ -156,7 +158,8 @@ $stdout = Join-Path $testRoot 'results.txt'
 $stderr = Join-Path $testRoot 'errors.txt'
 $process = Start-Process -FilePath $binary -ArgumentList ('"' + $testRoot + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 if (!$process.WaitForExit(60000)) { $process.Kill(); throw 'Edge-hide test timed out.' }
-$process.WaitForExit()
+$process.WaitForExit();$process.Refresh()
 Get-Content -LiteralPath $stdout
-if ($process.ExitCode -ne 0) { Get-Content -LiteralPath $stderr; throw ('Edge-hide test failed: ' + $process.ExitCode) }
+$exitCode=$process.ExitCode;if($null -eq $exitCode){$exitCode=if((Get-Item -LiteralPath $stderr).Length -eq 0){0}else{1}}
+if ($exitCode -ne 0) { Get-Content -LiteralPath $stderr; throw ('Edge-hide test failed: ' + $exitCode) }
 Write-Output ('Results: ' + $stdout)

@@ -97,6 +97,11 @@ internal sealed partial class FloatingWindow {
         var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();
         flat.Add(node);foreach(var child in children)CollectFlatTaskNodes(child,flat);
     }
+    static int TaskNodePriority(TreeNode node,Dictionary<long,Dictionary<string,object>> all) {return node!=null&&node.Tag is long&&all.ContainsKey((long)node.Tag)?PriorityNumber(all[(long)node.Tag]):9;}
+    static void SortTaskHierarchy(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all) {
+        var sorted=roots.Select((node,index)=>new{node,index}).OrderBy(value=>TaskNodePriority(value.node,all)).ThenBy(value=>value.index).Select(value=>value.node).ToArray();roots.Clear();roots.AddRange(sorted);
+        foreach(var node in roots){var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();SortTaskHierarchy(children,all);node.Nodes.Clear();node.Nodes.AddRange(children.ToArray());}
+    }
     List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists) {
         var flat=new List<TreeNode>();foreach(var root in roots)CollectFlatTaskNodes(root,flat);
         var hasTaskChildren=flat.ToDictionary(node=>(long)node.Tag,node=>node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long));
@@ -223,6 +228,8 @@ internal sealed partial class FloatingWindow {
             if(!nodes.ContainsKey(id))continue;
             if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id]))nodes[parents[id]].Nodes.Add(nodes[id]);else roots.Add(nodes[id]);
         }
+        if(prioritySort.Checked)SortTaskHierarchy(roots,all);
+        ApplyLocalAppearance(nodes,parents);
         NumberTasks(roots,all);
         int groupCount=roots.Count;
         await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists,all,current);
