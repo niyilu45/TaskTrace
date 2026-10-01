@@ -631,12 +631,12 @@ internal sealed partial class FloatingWindow : Form {
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,updateDiscarded=false;
-                descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);int savedDescriptionVersion=descriptionEditor.ChangeVersion;
+                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"",originalDescriptionEditorHtml="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,updateDiscarded=false;
+                descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;
                 WarnIfTeamReadOnly(id,dialog,feedback);
                 Action renderImages=delegate { };
-                Func<string> snapshot=delegate {return json.Serialize(new {date=selectedDay,html=progress.Html,images=ProgressEditorImageKeys(progress.Html),references=SerializeProgressReferences(references)});};
-                Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=savedDescriptionVersion;};
+                Func<string> snapshot=delegate {string editorHtml=progress.Html;return json.Serialize(new {date=selectedDay,html=ProgressSnapshotHtml(editorHtml,id),images=ProgressEditorImageKeys(editorHtml),references=SerializeProgressReferences(references)});};
+                Func<bool> descriptionDirty=delegate{return !updateDiscarded && !SameProgressEditorContent(descriptionEditor.Html,originalDescriptionEditorHtml);};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
                     if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
@@ -645,13 +645,13 @@ internal sealed partial class FloatingWindow : Form {
                     try {
                         var latest=await Api("GET","/tasks/"+id,null);string latestDescription=latest.ContainsKey("description")?Convert.ToString(latest["description"]):"";if(latestDescription!=originalDescription)throw new Exception("任务描述已在其他窗口修改，请重新打开后合并。");
                         string savedHtml=await PersistTaskDescriptionEditorImages(id,descriptionEditor.Html);var saved=await Api("PATCH","/tasks/"+id,new{description=savedHtml});originalDescription=saved.ContainsKey("description")?Convert.ToString(saved["description"]):savedHtml;
-                        descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);savedDescriptionVersion=descriptionEditor.ChangeVersion;feedback.Text="任务描述已保存。";return true;
+                        descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;feedback.Text="任务描述已保存。";return true;
                     } catch(Exception error){feedback.Text="任务描述未保存："+error.Message;return false;}
                     finally{descriptionSaving=false;if(!dialog.IsDisposed){saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=true;descriptionEditor.SetReadOnly(false);}}
                 };
                 descriptionToggle.Click+=delegate{if(!descriptionSaving)setDescriptionExpanded(!descriptionExpanded);};
                 saveDescription.Click+=async delegate{await writeDescription();};
-                cancelDescription.Click+=async delegate{if(descriptionSaving)return;descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);savedDescriptionVersion=descriptionEditor.ChangeVersion;setDescriptionExpanded(false);feedback.Text="任务描述修改已取消。";};
+                cancelDescription.Click+=async delegate{if(descriptionSaving)return;descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;setDescriptionExpanded(false);feedback.Text="任务描述修改已取消。";};
                 Action stash=delegate {if(updateDiscarded || selectedDay=="")return;if(snapshot()!=lastSaved)drafts[selectedDay]=new ProgressDraft {Html=progress.Html,References=references.Select(item=>item.Copy()).ToList()};else drafts.Remove(selectedDay);};
                 Action cacheSelectedDay=delegate {
                     if(selectedDay=="")return;stash();ProgressDraft cached;
@@ -835,7 +835,7 @@ internal sealed partial class FloatingWindow : Form {
                     if(descriptionSaved && await saveAllDrafts()){closeAfterSave=true;dialog.Close();}
                     else {feedback.Text="任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
-                using(var updateRegistration=RegisterUnsavedUpdateEditor("任务描述或每日进展编辑窗口",delegate{stash();return drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving)return false;stash();bool descriptionSaved=!descriptionDirty() || await writeDescription();return descriptionSaved && await saveAllDrafts();},delegate{updateDiscarded=true;drafts.Clear();DeleteDraftCaches("progress",id);lastSaved=snapshot();savedDescriptionVersion=descriptionEditor.ChangeVersion;autoTimer.Stop();}))
+                using(var updateRegistration=RegisterUnsavedUpdateEditor("任务描述或每日进展编辑窗口",delegate{stash();return drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving)return false;stash();bool descriptionSaved=!descriptionDirty() || await writeDescription();return descriptionSaved && await saveAllDrafts();},delegate{updateDiscarded=true;drafts.Clear();DeleteDraftCaches("progress",id);lastSaved=snapshot();originalDescriptionEditorHtml=descriptionEditor.Html;autoTimer.Stop();}))
                 try{await ShowEditorWindowAsync(dialog,this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }

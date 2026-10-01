@@ -62,12 +62,20 @@ internal sealed partial class FloatingWindow {
         string saved=System.IO.File.ReadAllText(AppearancePath);if(!saved.Contains("soft-rose") || !saved.Contains("3:item") || saved.Contains(SharedHeading))throw new Exception("Local colors were not isolated in the local appearance file");
         Console.WriteLine("PASS local appearance: parent inheritance, child override and outstanding color remain in the isolated local file; root and child priority ordering are independent.");
     }
+    internal void TestEditorDirtyEquivalence() {
+        string retained="/api/v1/tasks/5/attachments/9";
+        string before="<P style='margin: 0'>Saved text</P><IMG src='data:image/png;base64,AA==' data-tasktrace-src='"+retained+"'>";
+        string after="<p>Saved text</p><img data-tasktrace-src='"+retained+"' src='data:image/png;base64,changed'>";
+        Func<string,string> snapshot=html=>ProgressSnapshotHtml(html,5)+"|"+String.Join(",",ProgressEditorImageKeys(html));
+        if(snapshot(before)!=snapshot(after) || !SameProgressEditorContent(before,after) || SameProgressEditorContent(before,"<p>Changed text</p>"))throw new Exception("Editor save baseline did not ignore browser-only HTML normalization");
+        Console.WriteLine("PASS editor state: browser HTML normalization and retained image previews do not create false unsaved prompts after saving.");
+    }
 }
 internal static class FloatingPerformanceTests {
     [STAThread] static int Main() {
         try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory)){window.TestOutstandingReadsForPerformance().GetAwaiter().GetResult();window.TestLocalAppearanceAndPriorityOrdering();}
+            using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory)){window.TestOutstandingReadsForPerformance().GetAwaiter().GetResult();window.TestLocalAppearanceAndPriorityOrdering();window.TestEditorDirtyEquivalence();}
             using(var host=new Form{ShowInTaskbar=false,Opacity=0,ClientSize=new Size(400,300)})
             using(var model=new TaskTreeView())
             using(var surface=new TaskTreeSurface{Dock=DockStyle.Fill}) {
