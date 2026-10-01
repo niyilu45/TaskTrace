@@ -60,6 +60,41 @@ internal sealed partial class FloatingWindow {
         }
         taskSurface.Rebuild(true);tasks.Invalidate();
     }
+    ToolStripMenuItem CreateAppearanceMenuItem(){
+        var menu=new ToolStripMenuItem("背景色（仅本机）");
+        foreach(var source in AppearanceChoices){
+            var choice=source;
+            var item=new ToolStripMenuItem(choice.Label){Tag=choice.Key,Image=AppearanceSwatch(choice.Color),ImageScaling=ToolStripItemImageScaling.None};
+            item.Click+=delegate{ApplySelectedAppearance(choice.Key);};
+            menu.DropDownItems.Add(item);
+        }
+        menu.DropDownOpening+=delegate{RefreshAppearanceMenu(menu);};
+        return menu;
+    }
+    void RefreshAppearanceMenu(ToolStripMenuItem menu){
+        var node=tasks.SelectedNode;var leaf=node==null?null:node.Tag as OutstandingLeaf;bool task=node!=null&&node.Tag is long;
+        menu.Enabled=task||leaf!=null;if(!menu.Enabled)return;
+        string selected=task?LocalTaskAppearance((long)node.Tag):LocalOutstandingAppearance(leaf.TaskId,leaf.Id);
+        bool inherits=leaf!=null||(task&&taskParents.ContainsKey((long)node.Tag));
+        for(int index=0;index<menu.DropDownItems.Count;index++){
+            var item=menu.DropDownItems[index] as ToolStripMenuItem;if(item==null)continue;
+            string key=Convert.ToString(item.Tag);item.Checked=key==selected;
+            if(index==0)item.Text=leaf!=null?"继承所属任务":inherits?"继承父任务":"无背景";
+        }
+    }
+    void ApplySelectedAppearance(string key){
+        var node=tasks.SelectedNode;if(node==null)return;var leaf=node.Tag as OutstandingLeaf;
+        if(node.Tag is long){long id=(long)node.Tag;SetLocalTaskAppearance(id,key);status.Text=key==""?(taskParents.ContainsKey(id)?"已继承父任务背景色，仅保存在本机。":"已清除背景色，仅保存在本机。"):"背景色已保存到本机，不会同步给协作成员。";}
+        else if(leaf!=null){SetLocalOutstandingAppearance(leaf.TaskId,leaf.Id,key);status.Text=key==""?"已继承所属任务背景色，仅保存在本机。":"背景色已保存到本机，不会同步给协作成员。";}
+    }
+    static Bitmap AppearanceSwatch(Color color){
+        var image=new Bitmap(18,18);using(var graphics=Graphics.FromImage(image)){
+            graphics.Clear(Color.Transparent);var bounds=new Rectangle(2,2,13,13);
+            using(var brush=new SolidBrush(color.IsEmpty?Color.White:color))graphics.FillRectangle(brush,bounds);
+            using(var pen=new Pen(Color.FromArgb(145,156,172)))graphics.DrawRectangle(pen,bounds);
+            if(color.IsEmpty)using(var pen=new Pen(Color.FromArgb(185,91,91),1.5f))graphics.DrawLine(pen,bounds.Left+2,bounds.Bottom-2,bounds.Right-2,bounds.Top+2);
+        }return image;
+    }
     ComboBox AppearancePicker(bool canInherit){
         var picker=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,DrawMode=DrawMode.OwnerDrawFixed,ItemHeight=24,AccessibleName="背景色，仅保存在本机"};
         foreach(var source in AppearanceChoices){picker.Items.Add(new AppearanceChoice{Key=source.Key,Label=source.Key==""?(canInherit?"继承父任务":"无背景"):source.Label,Color=source.Color});}

@@ -166,12 +166,13 @@ internal sealed partial class FloatingWindow {
         var menu=new ContextMenuStrip();
         menu.Items.Add(CreatePriorityFilterMenuItem());
         var setPriority=menu.Items.Add("设置优先级…",null,async delegate{await ShowPriority();});
+        var setAppearance=CreateAppearanceMenuItem();menu.Items.Add(setAppearance);
         var setStatus=menu.Items.Add("设置任务状态…",null,async delegate{await ShowTaskStatus();});
         var setReminder=menu.Items.Add("设置提醒…",null,delegate{ShowReminderForSelected();});
         menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
         var toRoot=menu.Items.Add("移为顶层任务",null,async delegate{long id=SelectedTaskId();if(id>0)await ExecuteDrop(new DropPlan{TaskId=id,ParentId=0,BeforeId=0,Message="移为顶层任务"});});
-        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);setStatus.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;setReminder.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);toRoot.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long && taskParents.ContainsKey(SelectedTaskId());};
+        menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy;setPriority.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);RefreshAppearanceMenu(setAppearance);setStatus.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long;setReminder.Enabled=tasks.SelectedNode!=null && (tasks.SelectedNode.Tag is long || tasks.SelectedNode.Tag is OutstandingLeaf);toRoot.Enabled=tasks.SelectedNode!=null && tasks.SelectedNode.Tag is long && taskParents.ContainsKey(SelectedTaskId());};
         InitializeUndo(menu);
         tasks.ContextMenuStrip=menu;
         tasks.NodeMouseClick+=delegate(object sender,TreeNodeMouseClickEventArgs e){if(e.Button==MouseButtons.Right)tasks.SelectedNode=e.Node;};
