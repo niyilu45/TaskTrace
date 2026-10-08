@@ -322,8 +322,19 @@ func snapshotData(destination string) error {
 	if err := snapshotSQLite(databaseSource, databaseDestination); err != nil {
 		return err
 	}
-	skip := map[string]bool{"tasktrace.db": true, "tasktrace.db-wal": true, "tasktrace.db-shm": true}
-	if err := copyDirectoryFiltered(dataRoot(), destination, func(relative string, entry fs.DirEntry) bool {
+	// The launcher keeps its session lock and redirected logs open with
+	// FileShare.None on Windows. They are transient process state, not task data.
+	// Match only root-relative names so identically named attachments stay intact.
+	skip := map[string]bool{
+		"tasktrace.db":         true,
+		"tasktrace.db-wal":     true,
+		"tasktrace.db-shm":     true,
+		"tasktrace.db-journal": true,
+		"session.lock":         true,
+		"server.log":           true,
+		"server-error.log":     true,
+	}
+	if err := copyDirectoryFiltered(dataRoot(), destination, func(relative string, _ fs.DirEntry) bool {
 		return !skip[strings.ToLower(filepath.ToSlash(relative))]
 	}); err != nil {
 		return fmt.Errorf("copy personal data: %w", err)
