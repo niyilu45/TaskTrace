@@ -21,19 +21,19 @@ import (
 )
 
 const (
-	defaultBackupDirectory       = "backups"
-	defaultBackupIntervalMinutes = 60
-	defaultBackupRetentionDays   = 30
-	defaultBackupMinimumCount    = 3
-	backupDirectoryPrefix        = "TaskTrace-backup-"
+	defaultBackupDirectory     = "backups"
+	defaultBackupDailyTime     = "02:00"
+	defaultBackupRetentionDays = 30
+	defaultBackupMinimumCount  = 3
+	backupDirectoryPrefix      = "TaskTrace-backup-"
 )
 
 type TaskTraceBackupSettings struct {
-	Enabled         bool   `json:"enabled" doc:"Whether TaskTrace periodically checks for data changes and creates a backup."`
-	Directory       string `json:"directory" minLength:"1" maxLength:"1024" doc:"Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory."`
-	IntervalMinutes int    `json:"interval_minutes" minimum:"1" maximum:"10080" doc:"Minutes between automatic backup checks."`
-	RetentionDays   int    `json:"retention_days" minimum:"1" maximum:"3650" doc:"Backups older than this many days may be removed."`
-	MinimumBackups  int    `json:"minimum_backups" minimum:"1" maximum:"1000" doc:"Minimum number of newest backups retained even when they are older than the retention period."`
+	Enabled        bool   `json:"enabled" doc:"Whether TaskTrace periodically checks for data changes and creates a backup."`
+	Directory      string `json:"directory" minLength:"1" maxLength:"1024" doc:"Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory."`
+	DailyTime      string `json:"daily_time" pattern:"^(?:[01]\\d|2[0-3]):[0-5]\\d$" doc:"Local time of day when the automatic backup runs, in HH:mm format."`
+	RetentionDays  int    `json:"retention_days" minimum:"1" maximum:"3650" doc:"Backups older than this many days may be removed."`
+	MinimumBackups int    `json:"minimum_backups" minimum:"1" maximum:"1000" doc:"Minimum number of newest backups retained even when they are older than the retention period."`
 }
 
 type TaskTraceBackupStatus struct {
@@ -83,10 +83,10 @@ var (
 
 func DefaultBackupSettings() TaskTraceBackupSettings {
 	return TaskTraceBackupSettings{
-		Directory:       defaultBackupDirectory,
-		IntervalMinutes: defaultBackupIntervalMinutes,
-		RetentionDays:   defaultBackupRetentionDays,
-		MinimumBackups:  defaultBackupMinimumCount,
+		Directory:      defaultBackupDirectory,
+		DailyTime:      defaultBackupDailyTime,
+		RetentionDays:  defaultBackupRetentionDays,
+		MinimumBackups: defaultBackupMinimumCount,
 	}
 }
 
@@ -161,14 +161,7 @@ func BackupStatus() (TaskTraceBackupStatus, error) {
 		status.LastCheckedAt = &lastChecked
 	}
 	if settings.Enabled {
-		base := lastChecked
-		if base.IsZero() && status.LastBackupAt != nil {
-			base = *status.LastBackupAt
-		}
-		if base.IsZero() {
-			base = time.Now()
-		}
-		next := base.Add(time.Duration(settings.IntervalMinutes) * time.Minute)
+		next := nextBackupTime(settings, time.Now())
 		status.NextCheckAt = &next
 	}
 	return status, nil
@@ -222,15 +215,40 @@ func backupCheckDue(settings TaskTraceBackupSettings, now time.Time) bool {
 	if running {
 		return false
 	}
-	if !lastChecked.IsZero() {
-		return !now.Before(lastChecked.Add(time.Duration(settings.IntervalMinutes) * time.Minute))
+	scheduled := scheduledBackupTime(settings, now)
+	if now.Before(scheduled) {
+		return false
+	}
+	if !lastChecked.IsZero() && !lastChecked.Before(scheduled) {
+		return false
 	}
 	directory, err := resolveBackupDirectory(settings.Directory)
 	if err != nil {
 		return false
 	}
 	entries, _ := listBackups(directory)
-	return len(entries) == 0 || !now.Before(entries[0].manifest.CreatedAt.Add(time.Duration(settings.IntervalMinutes)*time.Minute))
+	return len(entries) == 0 || entries[0].manifest.CreatedAt.Before(scheduled)
+}
+
+func scheduledBackupTime(settings TaskTraceBackupSettings, day time.Time) time.Time {
+	hour, minute, _ := parseBackupDailyTime(settings.DailyTime)
+	return time.Date(day.Year(), day.Month(), day.Day(), hour, minute, 0, 0, day.Location())
+}
+
+func nextBackupTime(settings TaskTraceBackupSettings, now time.Time) time.Time {
+	next := scheduledBackupTime(settings, now)
+	if !now.Before(next) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
+}
+
+func parseBackupDailyTime(value string) (int, int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
+	if err != nil {
+		return 0, 0, errors.New("backup time must use HH:mm format")
+	}
+	return parsed.Hour(), parsed.Minute(), nil
 }
 
 func runBackup(now time.Time) (TaskTraceBackupRunResult, error) {
@@ -495,8 +513,9 @@ func normalizeBackupSettings(settings TaskTraceBackupSettings) TaskTraceBackupSe
 	if settings.Directory == "" {
 		settings.Directory = defaultBackupDirectory
 	}
-	if settings.IntervalMinutes == 0 {
-		settings.IntervalMinutes = defaultBackupIntervalMinutes
+	settings.DailyTime = strings.TrimSpace(settings.DailyTime)
+	if settings.DailyTime == "" {
+		settings.DailyTime = defaultBackupDailyTime
 	}
 	if settings.RetentionDays == 0 {
 		settings.RetentionDays = defaultBackupRetentionDays
@@ -508,8 +527,8 @@ func normalizeBackupSettings(settings TaskTraceBackupSettings) TaskTraceBackupSe
 }
 
 func validateBackupSettings(settings TaskTraceBackupSettings) error {
-	if settings.IntervalMinutes < 1 || settings.IntervalMinutes > 10080 {
-		return errors.New("backup interval must be between 1 and 10080 minutes")
+	if _, _, err := parseBackupDailyTime(settings.DailyTime); err != nil {
+		return err
 	}
 	if settings.RetentionDays < 1 || settings.RetentionDays > 3650 {
 		return errors.New("backup retention must be between 1 and 3650 days")

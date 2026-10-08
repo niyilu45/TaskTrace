@@ -4,7 +4,7 @@
 		:loading="backupLoading"
 	>
 		<p class="mbe-4">
-			定期备份个人数据和团队协作数据。每次检查会比较完整内容，数据没有变化时不会新增备份。
+			每天在指定时间备份个人数据和团队协作数据。备份前会比较完整内容，数据没有变化时不会新增备份。
 		</p>
 		<FormCheckbox
 			v-model="backupSettings.enabled"
@@ -25,15 +25,12 @@
 		</p>
 		<div class="backup-grid">
 			<FormField
-				label="检测间隔（分钟）"
+				label="每天备份时间"
 				layout="two-col"
 			>
 				<FormInput
-					v-model.number="backupSettings.interval_minutes"
-					type="number"
-					:min="1"
-					:max="10080"
-					:step="1"
+					v-model="backupSettings.daily_time"
+					type="time"
 				/>
 			</FormField>
 			<FormField
@@ -76,7 +73,7 @@
 				:loading="backupRunning"
 				@click="runBackupNow"
 			>
-				立即检查并备份
+				立即备份
 			</XButton>
 		</div>
 		<dl
@@ -87,12 +84,52 @@
 			<div><dt>最近备份</dt><dd>{{ formatDate(backupStatus.last_backup_at) }}</dd></div>
 			<div><dt>最近检查</dt><dd>{{ formatDate(backupStatus.last_checked_at) }}</dd></div>
 			<div v-if="backupSettings.enabled">
-				<dt>下次检查</dt><dd>{{ formatDate(backupStatus.next_check_at) }}</dd>
+				<dt>下次定时备份</dt><dd>{{ formatDate(backupStatus.next_check_at) }}</dd>
 			</div>
 			<div v-if="backupStatus.last_message">
 				<dt>最近结果</dt><dd>{{ backupStatus.last_message }}</dd>
 			</div>
 		</dl>
+	</Card>
+
+	<Card
+		title="从备份恢复"
+		:loading="backupDetecting"
+		class="mts-4"
+	>
+		<p>从已配置的备份目录选择一份历史备份。恢复内容会复制到新的受保护目录，当前数据不会被覆盖。</p>
+		<XButton
+			class="mbs-4"
+			:loading="backupDetecting"
+			@click="detectBackups"
+		>
+			查看可恢复备份
+		</XButton>
+		<p v-if="backupDetection && backupCandidates.length === 0">
+			当前备份目录中没有可恢复的数据。
+		</p>
+		<div
+			v-else-if="backupCandidates.length > 0"
+			class="candidate-list mbs-4"
+		>
+			<article
+				v-for="candidate in backupCandidates"
+				:key="candidate.data_directory"
+				class="candidate"
+			>
+				<div class="candidate__details">
+					<strong>{{ formatDate(candidate.modified_at) }}</strong>
+					<span>事项 {{ candidate.tasks || 0 }} · 项目 {{ candidate.projects || 0 }} · 用户 {{ candidate.users || 0 }}</span>
+					<span>{{ candidate.data_directory }}</span>
+				</div>
+				<XButton
+					variant="secondary"
+					@click="selectCandidate(candidate, 'backup')"
+				>
+					恢复此备份
+				</XButton>
+			</article>
+		</div>
 	</Card>
 
 	<Card
@@ -168,7 +205,7 @@
 				</div>
 				<XButton
 					variant="secondary"
-					@click="selectedCandidate = candidate"
+					@click="selectCandidate(candidate, 'old')"
 				>
 					导入此数据
 				</XButton>
@@ -201,7 +238,7 @@
 		@submit="importCandidate"
 	>
 		<template #header>
-			导入旧数据
+			{{ selectedSource === 'backup' ? '从备份恢复' : '导入旧数据' }}
 		</template>
 		<template #text>
 			<p>程序会把选中的个人数据和团队数据复制到新的纯数据目录，并先备份当前配置。</p>
@@ -245,14 +282,18 @@ const manualTeamPath = ref('')
 const detecting = ref(false)
 const importing = ref(false)
 const detection = ref<TaskTraceDataDetection>()
+const backupDetection = ref<TaskTraceDataDetection>()
 const selectedCandidate = ref<TaskTraceDataCandidate>()
+const selectedSource = ref<'backup' | 'old'>('old')
 const imported = ref<TaskTraceDataImportResult>()
 const candidates = computed(() => detection.value?.candidates || [])
+const backupCandidates = computed(() => backupDetection.value?.candidates || [])
 
-const backupSettings = ref<TaskTraceBackupSettings>({
+type DailyBackupSettings = TaskTraceBackupSettings & {daily_time?: string}
+const backupSettings = ref<DailyBackupSettings>({
 	enabled: false,
 	directory: 'backups',
-	interval_minutes: 60,
+	daily_time: '02:00',
 	retention_days: 30,
 	minimum_backups: 3,
 })
@@ -260,6 +301,7 @@ const backupStatus = ref<TaskTraceBackupStatus>()
 const backupLoading = ref(true)
 const backupSaving = ref(false)
 const backupRunning = ref(false)
+const backupDetecting = ref(false)
 
 onMounted(() => {
 	detect()
@@ -273,7 +315,7 @@ async function loadBackupSettings() {
 			tasktraceDataBackupSettingsRead(),
 			tasktraceDataBackupStatus(),
 		])
-		backupSettings.value = settings
+		backupSettings.value = {...settings, daily_time: (settings as DailyBackupSettings).daily_time || '02:00'}
 		backupStatus.value = status
 	} catch (cause) {
 		showError(cause)
@@ -284,13 +326,10 @@ async function loadBackupSettings() {
 
 function validateBackupSettings() {
 	const settings = backupSettings.value
-	const intervalMinutes = Number(settings.interval_minutes)
 	const retentionDays = Number(settings.retention_days)
 	const minimumBackups = Number(settings.minimum_backups)
 	if (!settings.directory?.trim()) throw new Error('请填写备份路径。')
-	if (!Number.isInteger(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 10080) {
-		throw new Error('检测间隔必须是 1 到 10080 之间的整数分钟。')
-	}
+	if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(settings.daily_time || '')) throw new Error('请选择每天备份的时间。')
 	if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
 		throw new Error('保留天数必须是 1 到 3650 之间的整数。')
 	}
@@ -336,6 +375,27 @@ async function runBackupNow() {
 	}
 }
 
+async function detectBackups() {
+	if (backupDetecting.value) return
+	backupDetecting.value = true
+	try {
+		if (!backupStatus.value?.directory) await loadBackupSettings()
+		const path = backupStatus.value?.directory
+		if (!path) throw new Error('请先保存备份路径。')
+		const {data} = await tasktraceDataRecoveryDetect({query: {path}})
+		backupDetection.value = data
+	} catch (cause) {
+		showError(cause)
+	} finally {
+		backupDetecting.value = false
+	}
+}
+
+function selectCandidate(candidate: TaskTraceDataCandidate, source: 'backup' | 'old') {
+	selectedSource.value = source
+	selectedCandidate.value = candidate
+}
+
 async function detect() {
 	if (detecting.value) return
 	detecting.value = true
@@ -360,7 +420,7 @@ async function importCandidate() {
 		}})
 		imported.value = data
 		selectedCandidate.value = undefined
-		success({message: '旧数据已安全复制。退出并重新启动 TaskTrace 后生效。'})
+		success({message: selectedSource.value === 'backup' ? '备份已安全恢复。退出并重新启动 TaskTrace 后生效。' : '旧数据已安全复制。退出并重新启动 TaskTrace 后生效。'})
 	} catch (cause) {
 		showError(cause)
 	} finally {

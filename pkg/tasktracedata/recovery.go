@@ -65,11 +65,11 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 
 	paths := knownCandidatePaths()
 	if strings.TrimSpace(extraPath) != "" {
-		manual, manualErr := resolveCandidateDirectory(extraPath)
+		manualPaths, manualErr := resolveCandidateDirectories(extraPath)
 		if manualErr != nil {
 			return TaskTraceDataDetection{}, manualErr
 		}
-		paths = append(paths, manual)
+		paths = append(paths, manualPaths...)
 	}
 
 	seen := map[string]bool{}
@@ -99,6 +99,34 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 		CurrentTeamDataDirectory: currentTeam,
 		Candidates:               candidates,
 	}, nil
+}
+
+func resolveCandidateDirectories(path string) ([]string, error) {
+	if direct, err := resolveCandidateDirectory(path); err == nil {
+		return []string{direct}, nil
+	}
+	root, err := canonicalDirectory(strings.TrimSpace(os.ExpandEnv(path)))
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("read backup directory: %w", err)
+	}
+	candidates := make([]string, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), backupDirectoryPrefix) {
+			continue
+		}
+		dataDirectory := filepath.Join(root, entry.Name(), "data")
+		if _, inspectErr := inspectCandidate(dataDirectory); inspectErr == nil {
+			candidates = append(candidates, dataDirectory)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no TaskTrace backups were found in %s", root)
+	}
+	return candidates, nil
 }
 
 func Import(request TaskTraceDataImportRequest) (TaskTraceDataImportResult, error) {

@@ -1,20 +1,28 @@
 # 从源码生成 TaskTrace 免安装程序
 
-双击 `Install-TaskTrace.cmd`。工具会先检查全部构建依赖；只有检查通过后才开始生成程序。成功、缺少依赖或构建失败都会弹出结果窗口。
+双击 `Install-TaskTrace.cmd`，先选择安装目录。工具会先检查全部构建依赖；只有检查通过后才开始生成并安装程序。成功、缺少依赖或构建失败都会弹出结果窗口。
 
-生成结果位于：
+默认安装目录为：
 
 ```text
 dist\TaskTrace-local\TaskTrace.exe
 ```
 
-如果要复制到另一台电脑，或覆盖另一套已经在使用的 TaskTrace，请使用安装器同时生成的安全复制包：
+如果选择的目录中已有 TaskTrace，安装器只替换程序文件，绝不会修改 `tasktrace-settings.json`、`data`、`teamData`、`.cache`、`backups` 以及其他用户文件。构建过程在系统临时目录完成，不会把构建电脑上的测试数据带入目标目录。
+
+也可以从命令行直接指定安装目录：
+
+```powershell
+dist\Install-TaskTrace.cmd -InstallDirectory "D:\Apps\TaskTrace"
+```
+
+如果要手工复制到另一台电脑，安装器仍会生成安全复制包：
 
 ```text
 dist\TaskTrace-program-files.zip
 ```
 
-这个压缩包只包含程序文件，明确排除 `data`、`teamData`、`.cache` 和 `tasktrace-settings.json`。退出目标电脑上正在运行的 TaskTrace 后，将压缩包内容解压并覆盖到原程序目录；原数据库、团队协作仓库、草稿缓存和本机数据目录设置都会保留。不要把已经运行过的 `dist\TaskTrace-local` 整个目录复制到另一台电脑，因为其中可能带有构建电脑生成的空数据库和本机配置。
+这个压缩包只包含程序文件，明确排除 `data`、`teamData`、`.cache`、`backups` 和 `tasktrace-settings.json`。退出目标电脑上正在运行的 TaskTrace 后，将压缩包内容解压并覆盖到原程序目录；原数据库、团队协作仓库、草稿缓存、备份和本机数据目录设置都会保留。不要把已经运行过的 `dist\TaskTrace-local` 整个目录复制到另一台电脑，因为其中可能带有构建电脑生成的数据库和本机配置。
 
 如果旧数据仍在其他目录，启动 TaskTrace 后进入“设置 → 数据保护与恢复”。程序可以自动检测旧版目录，也可以按用户填写的完整路径检测；确认导入后会复制到新的纯数据目录、校验数据库并备份配置，不会覆盖当前数据。
 

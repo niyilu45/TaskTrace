@@ -25,11 +25,11 @@ func TestBackupSkipsUnchangedDataAndPrunesWithMinimum(t *testing.T) {
 	t.Setenv("TASKTRACE_TEAM_ROOT", teamDirectory)
 
 	settings, err := WriteBackupSettings(TaskTraceBackupSettings{
-		Enabled:         true,
-		Directory:       backupDirectory,
-		IntervalMinutes: 15,
-		RetentionDays:   1,
-		MinimumBackups:  2,
+		Enabled:        true,
+		Directory:      backupDirectory,
+		DailyTime:      "03:30",
+		RetentionDays:  1,
+		MinimumBackups: 2,
 	})
 	require.NoError(t, err)
 	require.Equal(t, backupDirectory, settings.Directory)
@@ -80,10 +80,31 @@ func TestBackupDirectoryCannotBeInsideLiveData(t *testing.T) {
 	t.Setenv("TASKTRACE_TEAM_ROOT", teamDirectory)
 
 	_, err := WriteBackupSettings(TaskTraceBackupSettings{
-		Directory:       filepath.Join(dataDirectory, "backups"),
-		IntervalMinutes: 60,
-		RetentionDays:   30,
-		MinimumBackups:  3,
+		Directory:      filepath.Join(dataDirectory, "backups"),
+		DailyTime:      "02:00",
+		RetentionDays:  30,
+		MinimumBackups: 3,
 	})
 	require.ErrorContains(t, err, "backup directory cannot be inside")
+}
+
+func TestBackupScheduleRunsOnceAtConfiguredLocalTime(t *testing.T) {
+	settings := TaskTraceBackupSettings{DailyTime: "14:25"}
+	location := time.FixedZone("test", 8*60*60)
+	before := time.Date(2026, 10, 8, 14, 24, 59, 0, location)
+	require.Equal(t, time.Date(2026, 10, 8, 14, 25, 0, 0, location), nextBackupTime(settings, before))
+	after := time.Date(2026, 10, 8, 14, 25, 0, 0, location)
+	require.Equal(t, time.Date(2026, 10, 9, 14, 25, 0, 0, location), nextBackupTime(settings, after))
+}
+
+func TestResolveCandidateDirectoriesListsStoredBackups(t *testing.T) {
+	root := t.TempDir()
+	older := filepath.Join(root, backupDirectoryPrefix+"20261007-020000", "data")
+	newer := filepath.Join(root, backupDirectoryPrefix+"20261008-020000", "data")
+	createRecoveryDatabase(t, older, 1)
+	createRecoveryDatabase(t, newer, 2)
+
+	candidates, err := resolveCandidateDirectories(root)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{older, newer}, candidates)
 }

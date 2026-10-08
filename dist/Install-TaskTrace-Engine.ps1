@@ -3,12 +3,15 @@ param(
     [switch]$CheckOnly,
     [switch]$SkipFrontend,
     [switch]$Interactive,
+    [string]$InstallDirectory = '',
     [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$outputDirectory = Join-Path $PSScriptRoot 'TaskTrace-local'
+$defaultInstallDirectory = Join-Path $PSScriptRoot 'TaskTrace-local'
+$outputDirectory = $defaultInstallDirectory
+$buildStagingRoot = ''
 $logFile = Join-Path $PSScriptRoot 'install.log'
 $issues = New-Object 'System.Collections.Generic.List[string]'
 $hints = New-Object 'System.Collections.Generic.List[string]'
@@ -33,6 +36,60 @@ function Show-InstallResult([string]$Title, [string]$Message, [bool]$IsError = $
     } catch {
         Write-InstallLine ('无法显示结果窗口：' + $_.Exception.Message) Yellow
     }
+}
+
+function Select-InstallDirectory([string]$RequestedDirectory) {
+    if (![string]::IsNullOrWhiteSpace($RequestedDirectory)) {
+        return [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($RequestedDirectory.Trim().Trim('"')))
+    }
+    if (!$Interactive) { return [IO.Path]::GetFullPath($defaultInstallDirectory) }
+    Add-Type -AssemblyName System.Windows.Forms
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = '选择 TaskTrace 安装目录。若目录中已有程序，只覆盖程序文件，并保留配置、data、teamData、.cache 和 backups。'
+    $dialog.SelectedPath = $defaultInstallDirectory
+    $dialog.ShowNewFolderButton = $true
+    try {
+        if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return '' }
+        return [IO.Path]::GetFullPath($dialog.SelectedPath)
+    } finally { $dialog.Dispose() }
+}
+
+function Install-ProgramFiles([string]$SourceDirectory, [string]$DestinationDirectory, [string[]]$Names) {
+    New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    $transactionRoot = Join-Path $env:TEMP ('TaskTrace-install-' + [Guid]::NewGuid().ToString('N'))
+    $backupRoot = Join-Path $transactionRoot 'previous-program'
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    $previous = @{}
+    try {
+        foreach ($name in $Names) {
+            $source = Join-Path $SourceDirectory $name
+            if (!(Test-Path -LiteralPath $source -PathType Leaf)) { throw ('安装文件不完整，缺少 ' + $name) }
+            $destination = Join-Path $DestinationDirectory $name
+            $previous[$name] = Test-Path -LiteralPath $destination -PathType Leaf
+            if ($previous[$name]) { Copy-Item -LiteralPath $destination -Destination (Join-Path $backupRoot $name) -Force }
+        }
+        foreach ($name in $Names) {
+            $destination = Join-Path $DestinationDirectory $name
+            $pending = $destination + '.tasktrace-installing'
+            try {
+                Copy-Item -LiteralPath (Join-Path $SourceDirectory $name) -Destination $pending -Force
+                if (Test-Path -LiteralPath $destination -PathType Leaf) {
+                    [IO.File]::Delete($destination)
+                }
+                [IO.File]::Move($pending, $destination)
+            } finally { Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue }
+        }
+    } catch {
+        foreach ($name in $Names) {
+            $destination = Join-Path $DestinationDirectory $name
+            if ($previous.ContainsKey($name) -and $previous[$name]) {
+                Copy-Item -LiteralPath (Join-Path $backupRoot $name) -Destination $destination -Force -ErrorAction SilentlyContinue
+            } elseif ($previous.ContainsKey($name)) {
+                Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+            }
+        }
+        throw
+    } finally { Remove-Item -LiteralPath $transactionRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 function Add-DependencyIssue([string]$Problem, [string]$Hint) {
@@ -186,6 +243,15 @@ try {
     [IO.File]::WriteAllText($logFile, ('TaskTrace build started: ' + [DateTime]::Now.ToString('o') + [Environment]::NewLine), [Text.UTF8Encoding]::new($true))
     Write-InstallLine 'TaskTrace 免安装程序生成工具' Cyan
     Write-InstallLine ('源码目录：' + $root)
+    if (!$CheckOnly) {
+        $selectedDirectory = Select-InstallDirectory $InstallDirectory
+        if ([string]::IsNullOrWhiteSpace($selectedDirectory)) {
+            Write-InstallLine '用户已取消安装。' Yellow
+            exit 0
+        }
+        $outputDirectory = $selectedDirectory
+        Write-InstallLine ('安装目录：' + $outputDirectory) Cyan
+    }
     Import-FreshBuildEnvironment
 	Write-InstallLog '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
     $env:TASKTRACE_NPM_PROXY = Select-DependencyProxy 'https://registry.npmjs.org/'
@@ -361,7 +427,9 @@ try {
     $Version = Resolve-TaskTraceSourceBuildVersion $Version 'niyilu45/TaskTrace' $env:TASKTRACE_NPM_PROXY
     Write-InstallLine ('源码构建版本：' + $Version) Cyan
     $buildScript = Join-Path $root 'portable\Build-Local.ps1'
-    $buildArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-PackageDirectory', 'dist/TaskTrace-local', '-Version', $Version, '-SkipArchive')
+    $buildStagingRoot = Join-Path $env:TEMP ('TaskTrace-build-' + [Guid]::NewGuid().ToString('N'))
+    $buildOutputDirectory = Join-Path $buildStagingRoot 'program'
+    $buildArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $buildScript, '-PackageDirectory', $buildOutputDirectory, '-Version', $Version, '-SkipArchive')
     if ($SkipFrontend) { $buildArguments += '-SkipFrontend' }
     $savedErrorPreference = $ErrorActionPreference
     try {
@@ -385,7 +453,7 @@ try {
     Write-InstallLine '前端、后端和 Windows 启动程序编译完成。'
 
     foreach ($file in @('TaskTrace.exe', 'TaskTrace-server.exe', 'TaskTrace-floating.exe', 'Launch-TaskTrace.ps1', 'SOURCE-COMMIT.txt')) {
-        if (!(Test-Path -LiteralPath (Join-Path $outputDirectory $file) -PathType Leaf)) { throw ('生成结果不完整，缺少 ' + $file) }
+        if (!(Test-Path -LiteralPath (Join-Path $buildOutputDirectory $file) -PathType Leaf)) { throw ('生成结果不完整，缺少 ' + $file) }
     }
     $stage = '生成安全复制包'
     $copyArchive = Join-Path $PSScriptRoot 'TaskTrace-program-files.zip'
@@ -405,20 +473,22 @@ try {
         'VERSION.txt'
     )
     $programFiles = @($programFileNames | ForEach-Object {
-        $programFile = Join-Path $outputDirectory $_
+        $programFile = Join-Path $buildOutputDirectory $_
         if (!(Test-Path -LiteralPath $programFile -PathType Leaf)) { throw ('无法生成安全复制包，缺少 ' + $_) }
         $programFile
     })
     Compress-Archive -LiteralPath $programFiles -DestinationPath $copyArchive -Force
     if (!(Test-Path -LiteralPath $copyArchive -PathType Leaf)) { throw '安全复制包生成失败。' }
+    $stage = '安装程序文件'
+    Install-ProgramFiles $buildOutputDirectory $outputDirectory $programFileNames
     Write-InstallLine ''
-    Write-InstallLine '免安装程序生成成功。' Green
-    Write-InstallLine ('本机测试程序：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
+    Write-InstallLine '免安装程序生成并安装成功。' Green
+    Write-InstallLine ('程序位置：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
     Write-InstallLine ('复制到其他电脑请使用：' + $copyArchive) Green
-    Write-InstallLine '安全复制包不含 data、teamData、.cache 和 tasktrace-settings.json，覆盖程序目录时不会覆盖运行数据。' Yellow
+    Write-InstallLine '本次安装只覆盖程序文件；配置、data、teamData、.cache、backups 和其他用户文件均未修改。' Yellow
     Write-InstallLine '运行程序不再需要 Node.js、pnpm、Go、GCC 或 C# 编译器。'
     Write-InstallLine ('详细记录：' + $logFile)
-    Show-InstallResult 'TaskTrace：生成成功' ("免安装程序已经生成。`r`n`r`n本机测试：`r`n" + (Join-Path $outputDirectory 'TaskTrace.exe') + "`r`n`r`n复制或覆盖其他电脑的软件目录时，请解压并使用下面的安全复制包：`r`n" + $copyArchive + "`r`n`r`n该压缩包不含 data、teamData、.cache 和 tasktrace-settings.json。`r`n`r`n详细记录：" + $logFile)
+    Show-InstallResult 'TaskTrace：安装成功' ("TaskTrace 已安装到：`r`n" + $outputDirectory + "`r`n`r`n只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。`r`n`r`n同时生成安全复制包：`r`n" + $copyArchive + "`r`n`r`n详细记录：" + $logFile)
     exit 0
 } catch {
     Write-InstallLine ''
@@ -431,4 +501,6 @@ try {
     Write-InstallLine ('详细记录：' + $logFile)
     Show-InstallResult 'TaskTrace：生成失败' ("失败阶段：" + $stage + "`r`n`r`n错误：" + $_.Exception.Message + "`r`n`r`n详细记录：" + $logFile) $true
     exit 1
+} finally {
+    if (![string]::IsNullOrWhiteSpace($buildStagingRoot)) { Remove-Item -LiteralPath $buildStagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }

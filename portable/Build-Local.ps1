@@ -1,7 +1,11 @@
 ﻿param([switch]$SkipFrontend, [switch]$SkipArchive, [string]$PackageDirectory = 'dist/TaskTrace-local', [string]$Version = 'v0.1.0-beta.11')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
-$packageRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
+$packageRoot = if ([IO.Path]::IsPathRooted($PackageDirectory)) {
+    [IO.Path]::GetFullPath($PackageDirectory)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
+}
 . (Join-Path $PSScriptRoot 'DependencyBootstrap.ps1')
 if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Version must be a semantic version such as v0.1.0-beta.11.' }
 function Assert-Exit([string]$Step) {

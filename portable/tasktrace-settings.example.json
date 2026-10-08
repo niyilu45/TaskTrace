@@ -4,7 +4,7 @@
   "backup": {
     "enabled": false,
     "directory": "backups",
-    "interval_minutes": 60,
+    "daily_time": "02:00",
     "retention_days": 30,
     "minimum_backups": 3
   }
