@@ -446,7 +446,7 @@ internal sealed partial class FloatingWindow {
                     int existing=removeExistingImages?0:Regex.Matches(originalHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
                     previews.AccessibleName="遗留事项图片缩略图，点击查看大图";clearImages.Enabled=!writing && existing>0;
                 };
-                Action render=delegate{loading=true;list.Items.Clear();for(int i=0;i<shared.Items.Count;i++){shared.Items[i].Number=i+1;list.Items.Add(shared.Items[i]);}loading=false;};render();
+                Action render=delegate{loading=true;list.Items.Clear();var display=OutstandingDisplayOrder(shared,false);for(int i=0;i<display.Items.Count;i++){display.Items[i].Number=i+1;list.Items.Add(display.Items[i]);}loading=false;};render();
                 Func<bool> noteDirty=delegate{return (noteDraftRestored || noteEditor.ChangeVersion!=originalNoteVersion) && !SameProgressEditorContent(noteEditor.Html,originalNoteEditorHtml);};
                 Func<bool> dirty=delegate{return !updateDiscarded && (input.Text!=originalText || noteDirty() || priority.SelectedIndex!=originalPriority || SelectedAppearance(appearance)!=originalAppearance || pictures.Count>0 || removeExistingImages);};
                 Func<string> draftKey=delegate{return editingId??"new";};

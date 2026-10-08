@@ -176,7 +176,7 @@ import {useIntersectionObserver} from '@vueuse/core'
 import type {TaskComment} from '@/client/generated'
 import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
 import {type ProgressTask} from '@/helpers/projectProgress'
-import {sharedOutstanding} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, numberOutstandingItems} from '@/helpers/sharedOutstanding'
 import {finalProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
@@ -224,7 +224,7 @@ const authorNames = (date: string) => (authorsByDate.value[date] ?? []).map(auth
 const authorVerification = (date: string) => (authorsByDate.value[date] ?? []).map(author => teamStore.identityTitleFor(author)).join('\n')
 const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
 watch(() => props.progressDays, () => { showAllProgress.value = false })
-const numberedOutstanding = computed(() => sharedOutstanding(history.value).items.map((item, index) => ({item, number: index + 1})))
+const numberedOutstanding = computed(() => numberOutstandingItems(sharedOutstanding(history.value).items))
 const pendingOutstanding = computed(() => numberedOutstanding.value.filter(entry => !entry.item.done))
 const completedOutstanding = computed(() => numberedOutstanding.value.filter(entry => entry.item.done))
 const showCompletedOutstanding = ref(false)

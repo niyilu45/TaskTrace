@@ -289,7 +289,7 @@
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload} from '@/client/generated'
-import {sharedOutstanding, readTaskHistory, changeOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
@@ -327,7 +327,7 @@ const completionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const cachedSignatures = new Map<string, string>()
 const blocked = computed(() => props.disabled || busy.value || loading.value || noteUploading.value || undoInProgress.value)
 const activeIndex = computed(() => items.value.findIndex(item => item.id === activeId.value))
-const numberedItems = computed(() => items.value.map((item, index) => ({item, number: index + 1})))
+const numberedItems = computed(() => numberOutstandingItems(items.value))
 const visibleItems = computed(() => numberedItems.value.filter(entry => !entry.item.done || pendingCompletionIds.value.has(entry.item.id)))
 const completedItems = computed(() => numberedItems.value.filter(entry => entry.item.done && !pendingCompletionIds.value.has(entry.item.id)))
 const draft = computed(() => {

@@ -1,7 +1,26 @@
 import {describe, it, expect, vi} from 'vitest'
 vi.mock('@/client/generated', () => ({}))
-import {sharedOutstanding, outstandingHtml} from './sharedOutstanding'
+import {sharedOutstanding, outstandingHtml, numberOutstandingItems} from './sharedOutstanding'
 describe('shared outstanding', () => {
+	it('numbers unfinished items before completed items without rewriting saved order', () => {
+		const items = [
+			{id: 'done-first', html: 'Done', done: true},
+			{id: 'pending-one', html: 'One'},
+			{id: 'done-middle', html: 'Done too', done: true},
+			{id: 'pending-two', html: 'Two', done: false},
+		]
+		const before = structuredClone(items)
+		expect(numberOutstandingItems(items).map(({item, number}) => [item.id, number])).toEqual([
+			['pending-one', 1], ['pending-two', 2], ['done-first', 3], ['done-middle', 4],
+		])
+		expect(items).toEqual(before)
+		items[0].done = false
+		expect(numberOutstandingItems(items).map(({item, number}) => [item.id, number])).toEqual([
+			['done-first', 1], ['pending-one', 2], ['pending-two', 3], ['done-middle', 4],
+		])
+		expect(numberOutstandingItems([])).toEqual([])
+		expect(numberOutstandingItems(items.filter(item => item.done)).map(entry => entry.number)).toEqual([1])
+	})
 	it('recognizes the stable type marker when an editor rewrites the heading', () => {
 		const marked = {id: 4, comment: '<h3 data-tasktrace-comment-type="outstanding">已改写标题</h3><ul><li data-id="a"><p>事项</p><aside data-tasktrace-outstanding-note="true" hidden><p>备注</p></aside></li></ul>'}
 		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 7, completedAt: undefined, reminderAt: undefined}])

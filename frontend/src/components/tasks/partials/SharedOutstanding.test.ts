@@ -355,17 +355,42 @@ describe('outstanding item images', () => {
 		expect(wrapper.find('[aria-live="polite"]').exists()).toBe(false)
 	})
 
-	it('hides completed items until requested and keeps their original numbers', async () => {
-		history = [{id: 1, comment: shared('<li data-id="pending" data-done="false">Pending</li><li data-id="done" data-done="true" data-completed-at="2026-09-18T08:00:00.000Z">Completed</li>')}]
+	it('hides completed items without leaving a gap and numbers them after unfinished items when expanded', async () => {
+		history = [{id: 1, comment: shared('<li data-id="done" data-done="true" data-completed-at="2026-09-18T08:00:00.000Z">Completed</li><li data-id="pending" data-done="false">Pending</li><li data-id="pending-two">Pending two</li>')}]
 		await open()
 		expect(wrapper.text()).toContain('Pending')
 		expect(wrapper.text()).not.toContain('Completed')
-		expect(wrapper.get('ol.outstanding-list > li').attributes('value')).toBe('1')
+		expect(wrapper.findAll('ol.outstanding-list > li').map(item => item.attributes('value'))).toEqual(['1', '2'])
 		await click('显示已完成的遗留事项（1）')
 		expect(wrapper.text()).toContain('Completed')
 		const completed = wrapper.get('ol.completed-list > li')
-		expect(completed.attributes('value')).toBe('2')
+		expect(completed.attributes('value')).toBe('3')
 		expect((completed.get('input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
+		expect(update).not.toHaveBeenCalled()
+		expect(history[0].comment.indexOf('data-id="done"')).toBeLessThan(history[0].comment.indexOf('data-id="pending"'))
+	})
+
+	it('renumbers immediately during the five-second completion delay and after reopening', async () => {
+		vi.useFakeTimers()
+		history = [{id: 1, comment: shared('<li data-id="first">First</li><li data-id="second">Second</li>')}]
+		await open()
+		await wrapper.get('input[aria-label="完成第 1 条遗留事项"]').setValue(true)
+		await flushPromises()
+		let visible = wrapper.findAll('ol.outstanding-list > li')
+		expect(visible.map(item => item.attributes('value'))).toEqual(['1', '2'])
+		expect(visible[0].text()).toContain('Second')
+		expect(visible[1].text()).toContain('First')
+		vi.advanceTimersByTime(5000)
+		await wrapper.vm.$nextTick()
+		visible = wrapper.findAll('ol.outstanding-list > li')
+		expect(visible).toHaveLength(1)
+		expect(visible[0].attributes('value')).toBe('1')
+		await click('显示已完成的遗留事项（1）')
+		await wrapper.get('input[aria-label="恢复第 2 条遗留事项"]').setValue(false)
+		await flushPromises()
+		visible = wrapper.findAll('ol.outstanding-list > li')
+		expect(visible.map(item => item.attributes('value'))).toEqual(['1', '2'])
+		expect(visible[0].text()).toContain('First')
 	})
 
 	it('moves a checked item into completed items after five seconds and allows restoring it', async () => {

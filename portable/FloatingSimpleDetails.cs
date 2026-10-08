@@ -168,7 +168,12 @@ internal sealed partial class FloatingWindow {
     bool SimpleOutstandingCurrent(int version,TreeNode node) {
         return version==simpleOutstandingVersion && !closing && !IsDisposed && node.TreeView==tasks;
     }
-    static bool SimpleOutstandingMatches(TreeNode node,SharedList shared) {
+    SharedList OutstandingDisplayOrder(SharedList shared,bool byPriority) {
+        // Sorting is a view of the shared list; never rewrite its saved order.
+        return new SharedList{CommentId=shared.CommentId,Items=shared.Items.OrderBy(item=>item.Done).ThenBy(item=>byPriority?item.Priority:0).ToList()};
+    }
+    bool SimpleOutstandingMatches(TreeNode node,SharedList shared) {
+        shared=OutstandingDisplayOrder(shared,prioritySort.Checked);
         var leaves=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf).Select(child=>(OutstandingLeaf)child.Tag).ToList();
         if(leaves.Count!=shared.Items.Count)return false;
         for(int index=0;index<leaves.Count;index++) {
@@ -216,7 +221,7 @@ internal sealed partial class FloatingWindow {
         }
     }
     TreeNode CreateOutstandingNode(long taskId,PendingItem item,int index,string path="") {
-        int number=item.Number>0?item.Number:index+1;
+        int number=index+1;
         string current=number+". [P"+item.Priority+"] "+OutstandingText(item.Html);
         string localColor=LocalOutstandingAppearance(taskId,item.Id);string inherited=EffectiveTaskAppearance(taskId,taskParents);
         var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
@@ -227,6 +232,7 @@ internal sealed partial class FloatingWindow {
     }
     bool ApplySimpleOutstanding(TreeNode node,SharedList shared) {
         if(SimpleOutstandingMatches(node,shared))return false;
+        shared=OutstandingDisplayOrder(shared,prioritySort.Checked);
         long id=(long)node.Tag;
         var selection=CaptureOutstandingPosition(tasks.SelectedNode);var top=CaptureOutstandingPosition(tasks.TopNode);
         bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
@@ -235,8 +241,10 @@ internal sealed partial class FloatingWindow {
             if(shared.Items.Count==0 && !node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long))node.Collapse();
             foreach(var child in node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is OutstandingLeaf).ToArray())node.Nodes.Remove(child);
             var leaves=shared.Items.Select((item,index)=>CreateOutstandingNode(id,item,index)).ToList();
-            if(prioritySort.Checked){var combined=node.Nodes.Cast<TreeNode>().Concat(leaves).Select((child,index)=>new{child,index}).OrderBy(value=>value.child.Tag is OutstandingLeaf?((OutstandingLeaf)value.child.Tag).Priority:TaskNodePriority(value.child,taskCache)).ThenBy(value=>value.child.Tag is OutstandingLeaf?1:0).ThenBy(value=>value.index).Select(value=>value.child).ToArray();node.Nodes.Clear();node.Nodes.AddRange(combined);}
-            else foreach(var leaf in leaves)node.Nodes.Add(leaf);
+            var combined=node.Nodes.Cast<TreeNode>().Concat(leaves).Select((child,index)=>new{child,index}).OrderBy(value=>value.child.Checked)
+                .ThenBy(value=>prioritySort.Checked?(value.child.Tag is OutstandingLeaf?((OutstandingLeaf)value.child.Tag).Priority:TaskNodePriority(value.child,taskCache)):0)
+                .ThenBy(value=>prioritySort.Checked && value.child.Tag is OutstandingLeaf?1:0).ThenBy(value=>value.index).Select(value=>value.child).ToArray();
+            node.Nodes.Clear();node.Nodes.AddRange(combined);
             tasks.SyncCompletionState(node);
             if(node.Nodes.Count==0)node.Collapse();
             else if(singleLine.Checked || (!simpleCollapsedDuringRead.Contains(id) && (search.Text.Trim().Length>0 || !collapsedTasks.Contains(id))))node.Expand();

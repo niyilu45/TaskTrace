@@ -18,6 +18,13 @@ export type OutstandingItem = {
 
 const outstandingNoteSelector = 'aside[data-tasktrace-outstanding-note]'
 
+// Keep saved order within each state; hidden completed items cannot leave gaps
+// in the unfinished list. Sorting this view must not reorder shared task data.
+export function numberOutstandingItems(items: ReadonlyArray<OutstandingItem>) {
+	return [...items.filter(item => !item.done), ...items.filter(item => item.done)]
+		.map((item, index) => ({item, number: index + 1}))
+}
+
 function outstandingContent(li: Element) {
 	const clone = li.cloneNode(true) as Element
 	const note = clone.querySelector(outstandingNoteSelector)

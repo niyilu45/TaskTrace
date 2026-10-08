@@ -51,7 +51,7 @@ internal sealed partial class FloatingWindow {
     SharedList FilterCompletedOutstanding(long taskId,SharedList source,ref DateTime nextRefreshUtc) {
         if(source==null)return null;
         var filtered=new SharedList {CommentId=source.CommentId};
-        for(int index=0;index<source.Items.Count;index++) {var item=source.Items[index];if(item.Number<=0)item.Number=index+1;if(!HideCompletedOutstanding(taskId,item,ref nextRefreshUtc))filtered.Items.Add(item);}
+        foreach(var item in source.Items)if(!HideCompletedOutstanding(taskId,item,ref nextRefreshUtc))filtered.Items.Add(item);
         return filtered;
     }
     bool TaskLoadCurrent(int version,string context,bool background) {
@@ -98,9 +98,16 @@ internal sealed partial class FloatingWindow {
         flat.Add(node);foreach(var child in children)CollectFlatTaskNodes(child,flat);
     }
     static int TaskNodePriority(TreeNode node,Dictionary<long,Dictionary<string,object>> all) {return node!=null&&node.Tag is long&&all.ContainsKey((long)node.Tag)?PriorityNumber(all[(long)node.Tag]):9;}
-    static void SortTaskHierarchy(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all) {
-        var sorted=roots.Select((node,index)=>new{node,index}).OrderBy(value=>TaskNodePriority(value.node,all)).ThenBy(value=>value.index).Select(value=>value.node).ToArray();roots.Clear();roots.AddRange(sorted);
-        foreach(var node in roots){var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();SortTaskHierarchy(children,all);node.Nodes.Clear();node.Nodes.AddRange(children.ToArray());}
+    static void SortTaskHierarchy(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,bool byPriority=true) {
+        var sorted=roots.Select((node,index)=>new{node,index}).OrderBy(value=>value.node.Checked).ThenBy(value=>byPriority?TaskNodePriority(value.node,all):0).ThenBy(value=>value.index).Select(value=>value.node).ToArray();roots.Clear();roots.AddRange(sorted);
+        foreach(var node in roots){var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();SortTaskHierarchy(children,all,byPriority);node.Nodes.Clear();node.Nodes.AddRange(children.ToArray());}
+    }
+    List<TreeNode> PrepareSingleLineNodes(List<TreeNode> nodes,Dictionary<long,Dictionary<string,object>> all) {
+        var ordered=nodes.OrderBy(node=>node.Checked).ThenBy(node=>{
+            var leaf=node.Tag as OutstandingLeaf;
+            return leaf==null?PriorityNumber(all[(long)node.Tag]):leaf.Priority;
+        }).ToList();
+        RenumberSingleLineNodes(ordered);return ordered;
     }
     List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists) {
         var flat=new List<TreeNode>();foreach(var root in roots)CollectFlatTaskNodes(root,flat);
@@ -228,7 +235,7 @@ internal sealed partial class FloatingWindow {
             if(!nodes.ContainsKey(id))continue;
             if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id]))nodes[parents[id]].Nodes.Add(nodes[id]);else roots.Add(nodes[id]);
         }
-        if(prioritySort.Checked)SortTaskHierarchy(roots,all);
+        SortTaskHierarchy(roots,all,prioritySort.Checked);
         ApplyLocalAppearance(nodes,parents);
         NumberTasks(roots,all);
         int groupCount=roots.Count;
@@ -241,11 +248,7 @@ internal sealed partial class FloatingWindow {
         if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;
         if(singleLine.Checked){
-            roots=FlattenTaskNodes(roots,all,parents,sharedLists).OrderBy(node=>{
-                var leaf=node.Tag as OutstandingLeaf;
-                return leaf==null?PriorityNumber(all[(long)node.Tag]):leaf.Priority;
-            }).ToList();
-            RenumberSingleLineNodes(roots);
+            roots=PrepareSingleLineNodes(FlattenTaskNodes(roots,all,parents,sharedLists),all);
         }
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
