@@ -63,6 +63,7 @@ import Editor from '@/components/input/AsyncEditor'
 
 import { clearEditorDraft } from '@/helpers/editorDraftStorage'
 import { isEditorContentEmpty } from '@/helpers/editorContentEmpty'
+import {editorContentSignature} from '@/helpers/editorContentSignature'
 import { uploadFilesForEditor } from '@/helpers/attachments'
 import type { ITask } from '@/modelTypes/ITask'
 import { useTaskStore } from '@/stores/tasks'
@@ -164,7 +165,7 @@ const descriptionStorageKey = computed(() => `task-description-${props.modelValu
 const isEmpty = computed(() => isEditorContentEmpty(description.value))
 
 function markChanged() {
-	if (description.value === props.modelValue.description) {
+	if (editorContentSignature(description.value) === editorContentSignature(props.modelValue.description)) {
 		hasChanges.value = false
 		return
 	}
@@ -193,6 +194,7 @@ async function save() {
 
 
 	const submitted = description.value
+	const submittedSignature = editorContentSignature(submitted)
 	saved.value = false
 	saving.value = true
 
@@ -201,7 +203,7 @@ async function save() {
 			...props.modelValue,
 			description: submitted,
 		})
-		hasChanges.value = description.value !== submitted
+		hasChanges.value = editorContentSignature(description.value) !== submittedSignature
 		emit('update:modelValue', updated)
 
 		// Clear draft from localStorage when saved successfully

@@ -46,6 +46,7 @@ import {deleteTaskTraceDraft, forgetRememberedTaskTraceDraft, readTaskTraceDraft
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {undoGroupHeaders, undoInProgress, useTasktraceUndoGuard} from '@/helpers/tasktraceUndo'
 import {readTaskHistory} from '@/helpers/sharedOutstanding'
+import {editorContentSignature} from '@/helpers/editorContentSignature'
 
 const props = defineProps<{
 	taskId: number,
@@ -69,7 +70,7 @@ let pendingCreate: {identity: string, signature: string, id: string} | undefined
 let version = 0
 
 const imageCount = computed(() => countProgressImages(progress.value))
-const snapshot = computed(() => JSON.stringify([progress.value, references.value]))
+const snapshot = computed(() => JSON.stringify([editorContentSignature(progress.value), references.value]))
 const savedSnapshot = ref('')
 const unchanged = computed(() => snapshot.value === savedSnapshot.value)
 const cacheDay = computed(() => `${props.date}--${encodeURIComponent(props.author.trim().toLowerCase()) || 'member'}`)

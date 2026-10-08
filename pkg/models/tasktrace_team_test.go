@@ -203,6 +203,89 @@ func TestTaskTraceTeamStaleSnapshotDoesNotRevertMergedField(t *testing.T) {
 	require.Equal(t, currentBase.Title, value)
 }
 
+func TestTaskTraceTeamSharedBaseKeepsCollaboratorOutstandingAddition(t *testing.T) {
+	oldBase := TaskTraceTeamBase{}
+	addedHTML := `<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="new-item">协作者新增</li></ul>`
+	mergedBase := TaskTraceTeamBase{Outstanding: addedHTML}
+	alice := TaskTraceTeamSnapshot{
+		Actor: "alice",
+		Base:  map[string]TaskTraceTeamBase{"node": mergedBase},
+		Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: addedHTML}},
+	}
+	staleBob := TaskTraceTeamSnapshot{
+		Actor: "bob",
+		Base:  map[string]TaskTraceTeamBase{"node": oldBase},
+		Tasks: []TaskTraceTeamTask{{NodeID: "node"}},
+	}
+
+	value, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{alice, staleBob}, "node", "outstanding:new-item", taskTraceTeamBaseValue(mergedBase, "outstanding:new-item"), "")
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Equal(t, "协作者新增", value, "a stale member must accept the item already recorded in the shared merge base")
+
+	deleted := TaskTraceTeamSnapshot{
+		Actor: "alice",
+		Base:  map[string]TaskTraceTeamBase{"node": mergedBase},
+		Tasks: []TaskTraceTeamTask{{NodeID: "node"}},
+	}
+	value, options, conflict = taskTraceTeamFindField([]TaskTraceTeamSnapshot{deleted, staleBob}, "node", "outstanding:new-item", taskTraceTeamBaseValue(mergedBase, "outstanding:new-item"), "")
+	require.False(t, conflict)
+	require.Empty(t, options)
+	require.Empty(t, value, "a deletion based on the current shared base must still propagate")
+}
+
+func TestTaskTraceTeamLegacyShareStartsFromLatestAcceptedSnapshotBase(t *testing.T) {
+	old := TaskTraceTeamBase{}
+	addedHTML := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="new-item">协作者新增</li></ul>`
+	added := TaskTraceTeamBase{Outstanding: addedHTML}
+	earlier := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	snapshots := []TaskTraceTeamSnapshot{
+		{Actor: "bob", DeviceID: "desktop", Updated: earlier, Base: map[string]TaskTraceTeamBase{"node": old}, Tasks: []TaskTraceTeamTask{{NodeID: "node"}}},
+		{Actor: "alice", DeviceID: "laptop", Updated: earlier.Add(time.Minute), Base: map[string]TaskTraceTeamBase{"node": added}, Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: addedHTML}}},
+	}
+
+	base := taskTraceTeamLatestSharedBase(snapshots)
+	require.Equal(t, "协作者新增", taskTraceTeamBaseValue(base["node"], "outstanding:new-item"), "upgrading an old share must not let an older member baseline erase an accepted item")
+}
+
+func TestTaskTraceTeamSharedBaseConflictsWithEditFromStaleBase(t *testing.T) {
+	oldHTML := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">旧内容</li></ul>`
+	currentHTML := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">已同步内容</li></ul>`
+	staleEditHTML := `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one">离线修改</li></ul>`
+	oldBase := TaskTraceTeamBase{Outstanding: oldHTML}
+	currentBase := TaskTraceTeamBase{Outstanding: currentHTML}
+	staleEdit := TaskTraceTeamSnapshot{Actor: "bob", Base: map[string]TaskTraceTeamBase{"node": oldBase}, Tasks: []TaskTraceTeamTask{{NodeID: "node", Outstanding: staleEditHTML}}}
+
+	value, options, conflict := taskTraceTeamFindField([]TaskTraceTeamSnapshot{staleEdit}, "node", "outstanding:one", taskTraceTeamBaseValue(currentBase, "outstanding:one"), "")
+	require.True(t, conflict)
+	require.Equal(t, "已同步内容", value)
+	require.Len(t, options, 2)
+	require.Contains(t, []string{options[0].Author, options[1].Author}, "已同步版本")
+}
+
+func TestTaskTraceTeamSharedBaseKeepsAttachmentIdentityAcrossComputers(t *testing.T) {
+	shared := TaskTraceTeamAttachment{ID: "same-image", SourceTaskID: 11, SourceAttachmentID: 21}
+	snapshot := TaskTraceTeamSnapshot{Tasks: []TaskTraceTeamTask{{
+		NodeID:      "node",
+		Description: `<p><img src="/api/v1/tasks/11/attachments/21"></p>`,
+		Outstanding: `<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="one"><img src="/api/v2/tasks/11/attachments/21"></li></ul>`,
+		Attachments: []TaskTraceTeamAttachment{shared},
+	}}}
+
+	base := taskTraceTeamBaseFromSnapshot(snapshot)["node"]
+	require.Contains(t, base.Description, "tasktrace-team-attachment:same-image")
+	require.Contains(t, base.Outstanding, "tasktrace-team-attachment:same-image")
+	require.NotContains(t, base.Description, "/tasks/11/attachments/21")
+
+	binding := &TaskTraceTeamBinding{
+		NodeTasks:        map[string]int64{"node": 42},
+		LocalAttachments: map[string]int64{"node:same-image": 99},
+	}
+	rewritten := taskTraceTeamRewriteAttachments(base.Outstanding, 42, []TaskTraceTeamAttachment{shared}, binding)
+	require.Contains(t, rewritten, "/api/v1/tasks/42/attachments/99")
+	require.NotContains(t, rewritten, "tasktrace-team-attachment:")
+}
+
 func TestTaskTraceTeamSnapshotBaseDoesNotSharePersonalPriority(t *testing.T) {
 	body := `<h3>TaskTrace outstanding list</h3><ul><li data-id="one" data-priority="2">content</li></ul>`
 	stripped := taskTraceTeamStripOutstandingPriorities(body)

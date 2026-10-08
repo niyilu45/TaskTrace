@@ -234,6 +234,7 @@ import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {deleteTaskTraceDraft, forgetRememberedTaskTraceDraft, readTaskTraceDraft, rememberTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
+import {editorContentSignature} from '@/helpers/editorContentSignature'
 import {useTasktraceUndoGuard, undoGroupHeaders, undoInProgress} from '@/helpers/tasktraceUndo'
 
 const props = defineProps<{taskId: number}>()
@@ -289,7 +290,7 @@ type CachedProgressDraft = {progress?: string, references?: ProgressReference[]}
 const drafts = reactive(new Map<string, ProgressDraft>())
 const cachedSnapshots = new Map<string, string>()
 const pendingCreates = new Map<string, {signature: string, id: string}>()
-const snapshot = () => JSON.stringify([date.value, progress.value, references.value])
+const snapshot = () => JSON.stringify([date.value, editorContentSignature(progress.value), references.value])
 const draftKey = (taskId = props.taskId, day = date.value) => `${taskId}:${day}`
 
 function pendingCreateId(key: string, signature: string) {

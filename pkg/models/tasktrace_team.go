@@ -67,6 +67,7 @@ type TaskTraceTeamManifest struct {
 	Owner       string                                     `json:"owner"`
 	Members     []string                                   `json:"members"`
 	Permissions map[string][]TaskTraceTeamMemberPermission `json:"permissions,omitempty"`
+	Base        map[string]TaskTraceTeamBase               `json:"base,omitempty"`
 	TokenHash   string                                     `json:"token_hash"`
 	Created     time.Time                                  `json:"created"`
 	Updated     time.Time                                  `json:"updated"`
@@ -1113,9 +1114,57 @@ func taskTraceTeamProgressNotificationID(shareID, actor string, change *taskTrac
 func taskTraceTeamBaseFromSnapshot(snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTeamBase {
 	base := map[string]TaskTraceTeamBase{}
 	for _, task := range snapshot.Tasks {
-		base[task.NodeID] = TaskTraceTeamBase{Title: task.Title, Description: task.Description, Done: task.Done, Status: task.Status, Outstanding: task.Outstanding}
+		base[task.NodeID] = TaskTraceTeamBase{
+			Title:       task.Title,
+			Description: taskTraceTeamCanonicalHTML(task.Description, task.Attachments),
+			Done:        task.Done,
+			Status:      task.Status,
+			Outstanding: taskTraceTeamCanonicalHTML(taskTraceTeamStripOutstandingPriorities(task.Outstanding), task.Attachments),
+		}
 	}
 	return base
+}
+
+func taskTraceTeamCanonicalizeBase(base map[string]TaskTraceTeamBase, snapshot TaskTraceTeamSnapshot) map[string]TaskTraceTeamBase {
+	result := make(map[string]TaskTraceTeamBase, len(base))
+	tasks := taskTraceTeamTaskMap(snapshot)
+	for node, value := range base {
+		task := tasks[node]
+		value.Description = taskTraceTeamCanonicalHTML(value.Description, task.Attachments)
+		value.Outstanding = taskTraceTeamCanonicalHTML(taskTraceTeamStripOutstandingPriorities(value.Outstanding), task.Attachments)
+		result[node] = value
+	}
+	return result
+}
+
+func taskTraceTeamCopyBase(base map[string]TaskTraceTeamBase) map[string]TaskTraceTeamBase {
+	result := make(map[string]TaskTraceTeamBase, len(base))
+	for node, value := range base {
+		result[node] = value
+	}
+	return result
+}
+
+func taskTraceTeamLatestSharedBase(snapshots []TaskTraceTeamSnapshot) map[string]TaskTraceTeamBase {
+	var latest *TaskTraceTeamSnapshot
+	for index := range snapshots {
+		candidate := &snapshots[index]
+		if len(candidate.Base) == 0 {
+			continue
+		}
+		candidateKey := strings.ToLower(candidate.Actor) + "\x00" + candidate.DeviceID
+		latestKey := ""
+		if latest != nil {
+			latestKey = strings.ToLower(latest.Actor) + "\x00" + latest.DeviceID
+		}
+		if latest == nil || candidate.Updated.After(latest.Updated) || (candidate.Updated.Equal(latest.Updated) && candidateKey > latestKey) {
+			latest = candidate
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+	return taskTraceTeamCanonicalizeBase(latest.Base, *latest)
 }
 
 func taskTraceTeamWriteSnapshot(binding *TaskTraceTeamBinding, snapshot TaskTraceTeamSnapshot) error {
@@ -1371,6 +1420,31 @@ func taskTraceTeamBaseValue(base TaskTraceTeamBase, field string) string {
 	return ""
 }
 
+func taskTraceTeamSetBaseValue(base *TaskTraceTeamBase, field, value string) {
+	if strings.HasPrefix(field, "outstanding:") {
+		items, order := taskTraceTeamOutstandingItems(base.Outstanding)
+		id := strings.TrimPrefix(field, "outstanding:")
+		if value == "" {
+			delete(items, id)
+		} else {
+			items[id] = value
+		}
+		base.Outstanding = taskTraceTeamOutstandingHTML(items, order)
+		return
+	}
+	switch field {
+	case "title":
+		base.Title = value
+	case "description":
+		base.Description = value
+	case "done":
+		base.Done, _ = strconv.ParseBool(value)
+	case "status":
+		base.Status = TaskStatus(value)
+		base.Done = base.Status == TaskStatusDone
+	}
+}
+
 func taskTraceTeamNormalizeText(value string) string {
 	var normalized strings.Builder
 	normalized.Grow(len(value))
@@ -1488,6 +1562,7 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 	}
 	baseValue := taskTraceTeamCanonicalFieldValue(baseTask, field, base)
 	key := node + ":" + field
+	concurrentWithCanonical := false
 	for _, snapshot := range snapshots {
 		if requiredResolution != "" && snapshot.ResolutionAcks[key] != requiredResolution {
 			continue
@@ -1508,15 +1583,21 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 				values[canonical] = &fieldValue{value: value}
 			}
 			values[canonical].actors = append(values[canonical].actors, snapshot.Actor)
+			if snapshotBaseCanonical != baseValue && canonical != baseValue {
+				concurrentWithCanonical = true
+			}
 		}
 	}
 	if len(values) == 0 {
 		return base, nil, false
 	}
-	if len(values) == 1 {
+	if len(values) == 1 && !concurrentWithCanonical {
 		for _, grouped := range values {
 			return grouped.value, nil, false
 		}
+	}
+	if concurrentWithCanonical {
+		values[baseValue] = &fieldValue{value: base, actors: []string{"已同步版本"}}
 	}
 	options := make([]TaskTraceTeamConflictOption, 0, len(values))
 	for _, grouped := range values {
@@ -1981,6 +2062,7 @@ func taskTraceTeamRewriteAttachments(body string, taskID int64, attachments []Ta
 		if localID == 0 {
 			continue
 		}
+		body = strings.ReplaceAll(body, "tasktrace-team-attachment:"+attachment.ID, fmt.Sprintf("/api/v1/tasks/%d/attachments/%d", taskID, localID))
 		for _, version := range []string{"v1", "v2"} {
 			source := fmt.Sprintf("/api/%s/tasks/%d/attachments/%d", version, attachment.SourceTaskID, attachment.SourceAttachmentID)
 			target := fmt.Sprintf("/api/%s/tasks/%d/attachments/%d", version, taskID, localID)
@@ -2079,6 +2161,21 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
 		return err
 	}
+	manifestBaseChanged := false
+	if len(manifest.Base) == 0 {
+		previousSnapshots, snapshotErr := taskTraceTeamReadSnapshots(binding)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		manifest.Base = taskTraceTeamLatestSharedBase(previousSnapshots)
+		if len(manifest.Base) == 0 {
+			manifest.Base = taskTraceTeamCanonicalizeBase(binding.Base, local)
+		}
+		if len(manifest.Base) == 0 {
+			manifest.Base = taskTraceTeamBaseFromSnapshot(local)
+		}
+		manifestBaseChanged = true
+	}
 	if changed, permissionErr := taskTraceTeamReconcileManifestPermissions(s, binding, &manifest, local, actor); permissionErr != nil {
 		return permissionErr
 	} else if changed {
@@ -2126,6 +2223,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}{snapshot.Actor, task})
 		}
 	}
+	mergedBase := taskTraceTeamCopyBase(manifest.Base)
 	conflicts := []TaskTraceTeamConflict{}
 	for node, taskID := range binding.NodeTasks {
 		if !taskTraceTeamCan(&manifest, node, "", actor, false) {
@@ -2135,8 +2233,16 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if len(rows) == 0 {
 			continue
 		}
-		base := binding.Base[node]
+		base := mergedBase[node]
 		localTask, hasLocalTask := taskTraceTeamTaskMap(local)[node]
+		for key, resolution := range resolutions {
+			if resolution.NodeID != node || binding.ResolutionAcks[key] != resolution.ID {
+				continue
+			}
+			value := taskTraceTeamBaseValue(binding.Base[node], resolution.Field)
+			value = taskTraceTeamCanonicalFieldValue(localTask, resolution.Field, value)
+			taskTraceTeamSetBaseValue(&base, resolution.Field, value)
+		}
 		stored, err := GetTaskByIDSimple(s, taskID)
 		if err != nil {
 			return err
@@ -2207,10 +2313,12 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 				localPriorities[id] = value
 			}
 		}
-		outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, localPriorities)
 		attachments := taskTraceTeamAllAttachments(rows)
-		description = taskTraceTeamRewriteAttachments(description, taskID, attachments, binding)
-		outstanding = taskTraceTeamRewriteAttachments(outstanding, taskID, attachments, binding)
+		canonicalDescription := taskTraceTeamCanonicalHTML(description, attachments)
+		canonicalOutstanding := taskTraceTeamCanonicalHTML(outstanding, attachments)
+		description = taskTraceTeamRewriteAttachments(canonicalDescription, taskID, attachments, binding)
+		outstanding = taskTraceTeamRewriteAttachments(canonicalOutstanding, taskID, attachments, binding)
+		outstanding = taskTraceTeamApplyOutstandingPriorities(outstanding, localPriorities)
 		if status == "" {
 			if base.Done {
 				status = TaskStatusDone
@@ -2245,7 +2353,19 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if err := taskTraceTeamMergeComments(s, a, binding, node, actor, taskID, comments); err != nil {
 			return err
 		}
-		binding.Base[node] = TaskTraceTeamBase{Title: title, Description: description, Done: done, Status: status, Outstanding: outstanding}
+		merged := TaskTraceTeamBase{Title: title, Description: canonicalDescription, Done: done, Status: status, Outstanding: canonicalOutstanding}
+		if previous, exists := manifest.Base[node]; !exists || previous != merged {
+			manifestBaseChanged = true
+		}
+		mergedBase[node] = merged
+	}
+	binding.Base = taskTraceTeamCopyBase(mergedBase)
+	if manifestBaseChanged {
+		manifest.Base = taskTraceTeamCopyBase(mergedBase)
+		manifest.Updated = time.Now().UTC()
+		if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+			return err
+		}
 	}
 	binding.Conflicts = conflicts
 	binding.LastSync = time.Now().UTC()
@@ -2414,7 +2534,7 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if len(snapshot.Tasks) == 0 {
 		return nil, errors.New("task subtree is empty")
 	}
-	manifest := TaskTraceTeamManifest{Schema: taskTraceTeamSchema, ShareID: shareID, RootNode: snapshot.Tasks[0].NodeID, Owner: u.Username, Members: members, Permissions: map[string][]TaskTraceTeamMemberPermission{}, TokenHash: taskTraceTeamTokenHash(secret), Created: time.Now().UTC(), Updated: time.Now().UTC()}
+	manifest := TaskTraceTeamManifest{Schema: taskTraceTeamSchema, ShareID: shareID, RootNode: snapshot.Tasks[0].NodeID, Owner: u.Username, Members: members, Permissions: map[string][]TaskTraceTeamMemberPermission{}, Base: taskTraceTeamBaseFromSnapshot(snapshot), TokenHash: taskTraceTeamTokenHash(secret), Created: time.Now().UTC(), Updated: time.Now().UTC()}
 	if _, err := taskTraceTeamReconcileManifestPermissions(s, &binding, &manifest, snapshot, u.Username); err != nil {
 		return nil, err
 	}
@@ -2424,7 +2544,7 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if err := taskTraceTeamWriteSnapshot(&binding, snapshot); err != nil {
 		return nil, err
 	}
-	binding.Base = taskTraceTeamBaseFromSnapshot(snapshot)
+	binding.Base = taskTraceTeamCopyBase(manifest.Base)
 	binding.LastSnapshotHash = taskTraceTeamSnapshotHash(snapshot)
 	binding.LastSync = time.Now().UTC()
 	if task, err := GetTaskByIDSimple(s, request.TaskID); err == nil {
@@ -2509,7 +2629,11 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 			break
 		}
 	}
-	binding.Base = taskTraceTeamBaseFromSnapshot(owner)
+	if len(manifest.Base) > 0 {
+		binding.Base = taskTraceTeamCopyBase(manifest.Base)
+	} else {
+		binding.Base = taskTraceTeamBaseFromSnapshot(owner)
+	}
 	state.Bindings = append(state.Bindings, binding)
 	importedBinding := &state.Bindings[len(state.Bindings)-1]
 	release, err := taskTraceTeamAcquireShareLock(importedBinding)

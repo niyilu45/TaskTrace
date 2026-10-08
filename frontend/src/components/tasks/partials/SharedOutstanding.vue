@@ -296,6 +296,7 @@ import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, 
 import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 import {countProgressImages, persistProgressImages, stageProgressImages} from '@/helpers/progressEditorImages'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
+import {editorContentSignature} from '@/helpers/editorContentSignature'
 import Editor from '@/components/input/AsyncEditor'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
@@ -445,7 +446,7 @@ async function restoreDraft(id: string) {
 }
 
 function draftSignature(value: Pick<Draft, 'text' | 'note' | 'images' | 'priority'>) {
-	return JSON.stringify([value.text, value.note, value.priority, value.images.map(image => [image.preview, image.attachmentId])])
+	return JSON.stringify([value.text.replace(/\r\n?/g, '\n'), editorContentSignature(value.note), value.priority, value.images.map(image => image.attachmentId ? `attachment:${image.attachmentId}` : image.preview)])
 }
 
 function emptyDraftBase(): DraftBase {
@@ -467,13 +468,6 @@ function outstandingItemState(item: OutstandingItem) {
 		imageSources,
 		imageKeys: imageSources.map(imageSourceKey),
 	}
-}
-
-function editorContentSignature(html: string) {
-	const doc = new DOMParser().parseFromString(deduplicateHtmlImages(html || ''), 'text/html')
-	const images = Array.from(doc.querySelectorAll('img')).map(image => imageSourceKey(image.getAttribute('data-tasktrace-src') || image.getAttribute('data-src') || image.getAttribute('src') || ''))
-	doc.querySelectorAll('img').forEach(image => image.remove())
-	return JSON.stringify([doc.body.textContent?.trim() || '', images])
 }
 
 function sameValues(left: string[], right: string[]) {

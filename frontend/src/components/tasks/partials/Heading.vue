@@ -155,6 +155,7 @@ async function save(element: HTMLElement) {
 	// We only want to save if the title was actually changed.
 	// so we only continue if the task title changed.
 	if (title === props.task.title) {
+		titleHasChanges.value = false
 		return
 	}
 

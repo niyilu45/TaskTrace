@@ -65,6 +65,7 @@ async function paste(...names: string[]) {
 
 beforeEach(() => {
 	vi.clearAllMocks()
+	vi.mocked(readTaskTraceDraft).mockResolvedValue(null)
 	history = []
 	attachmentId = 0
 	root = document.createElement('div')
@@ -336,6 +337,22 @@ describe('outstanding item images', () => {
 		expect(wrapper.find('[aria-live="polite"]').exists()).toBe(false)
 		expect(wrapper.get<HTMLSelectElement>('select').element.value).toBe('7')
 		expect(deleteTaskTraceDraft).toHaveBeenCalledWith('outstanding', 42, 'new')
+	})
+
+	it('does not report browser-normalized rich text as an unsaved edit', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p><aside data-tasktrace-outstanding-note="true" hidden><P class="editor-paragraph" style="margin: 0" contenteditable="true">Existing note</P></aside></li>')}]
+		await open()
+		await click('编辑')
+		const opened = new Event('beforeunload', {cancelable: true})
+		window.dispatchEvent(opened)
+		expect(opened.defaultPrevented).toBe(false)
+		await wrapper.get('.mock-note-editor').setValue('<p>Existing note</p>')
+		await flushPromises()
+
+		const event = new Event('beforeunload', {cancelable: true})
+		window.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(false)
+		expect(wrapper.find('[aria-live="polite"]').exists()).toBe(false)
 	})
 
 	it('hides completed items until requested and keeps their original numbers', async () => {
