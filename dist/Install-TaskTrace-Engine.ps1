@@ -44,17 +44,115 @@ function Select-InstallDirectory([string]$RequestedDirectory) {
     }
     if (!$Interactive) { return [IO.Path]::GetFullPath($defaultInstallDirectory) }
     Add-Type -AssemblyName System.Windows.Forms
-    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dialog.Description = '选择 TaskTrace 安装目录。若目录中已有程序，只覆盖程序文件，并保留配置、data、teamData、.cache 和 backups。'
-    $dialog.SelectedPath = $defaultInstallDirectory
-    $dialog.ShowNewFolderButton = $true
+    Add-Type -AssemblyName System.Drawing
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = '选择 TaskTrace 安装目录'
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ClientSize = New-Object System.Drawing.Size(680, 178)
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = '安装路径（可以直接粘贴）：'
+    $label.AutoSize = $true
+    $label.Location = New-Object System.Drawing.Point(16, 18)
+    $form.Controls.Add($label)
+
+    $pathBox = New-Object System.Windows.Forms.TextBox
+    $pathBox.Text = [IO.Path]::GetFullPath($defaultInstallDirectory)
+    $pathBox.Location = New-Object System.Drawing.Point(16, 43)
+    $pathBox.Size = New-Object System.Drawing.Size(555, 27)
+    $pathBox.SelectAll()
+    $form.Controls.Add($pathBox)
+
+    $browseButton = New-Object System.Windows.Forms.Button
+    $browseButton.Text = '浏览...'
+    $browseButton.Location = New-Object System.Drawing.Point(581, 41)
+    $browseButton.Size = New-Object System.Drawing.Size(82, 29)
+    $browseButton.Add_Click({
+        $browser = New-Object System.Windows.Forms.FolderBrowserDialog
+        $browser.Description = '选择 TaskTrace 安装目录'
+        $browser.ShowNewFolderButton = $true
+        $candidate = [Environment]::ExpandEnvironmentVariables($pathBox.Text.Trim().Trim('"'))
+        if (Test-Path -LiteralPath $candidate -PathType Container) { $browser.SelectedPath = $candidate }
+        try {
+            if ($browser.ShowDialog($form) -eq [System.Windows.Forms.DialogResult]::OK) { $pathBox.Text = $browser.SelectedPath }
+        } finally { $browser.Dispose() }
+    })
+    $form.Controls.Add($browseButton)
+
+    $hint = New-Object System.Windows.Forms.Label
+    $hint.Text = '覆盖已有程序时，只替换程序文件；配置、data、teamData、.cache 和 backups 均会保留。'
+    $hint.AutoSize = $true
+    $hint.Location = New-Object System.Drawing.Point(16, 84)
+    $form.Controls.Add($hint)
+
+    $okButton = New-Object System.Windows.Forms.Button
+    $okButton.Text = '确定'
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $okButton.Location = New-Object System.Drawing.Point(493, 128)
+    $okButton.Size = New-Object System.Drawing.Size(80, 30)
+    $form.Controls.Add($okButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = '取消'
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancelButton.Location = New-Object System.Drawing.Point(583, 128)
+    $cancelButton.Size = New-Object System.Drawing.Size(80, 30)
+    $form.Controls.Add($cancelButton)
+    $form.AcceptButton = $okButton
+    $form.CancelButton = $cancelButton
     try {
-        if ($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return '' }
-        return [IO.Path]::GetFullPath($dialog.SelectedPath)
-    } finally { $dialog.Dispose() }
+        if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return '' }
+        $selected = [Environment]::ExpandEnvironmentVariables($pathBox.Text.Trim().Trim('"'))
+        if ([string]::IsNullOrWhiteSpace($selected)) { throw '安装路径不能为空。' }
+        return [IO.Path]::GetFullPath($selected)
+    } finally { $form.Dispose() }
+}
+
+function Confirm-ExistingInstallation([string]$Directory) {
+    $launcher = Join-Path $Directory 'TaskTrace.exe'
+    if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) { return $true }
+    $version = '未知版本'
+    $versionFile = Join-Path $Directory 'VERSION.txt'
+    if (Test-Path -LiteralPath $versionFile -PathType Leaf) {
+        try {
+            $storedVersion = [IO.File]::ReadAllText($versionFile).Trim()
+            if (![string]::IsNullOrWhiteSpace($storedVersion)) { $version = $storedVersion }
+        } catch { }
+    }
+    $message = "检测到该目录中已有 TaskTrace。`r`n`r`n现有版本：$version`r`n目录：$Directory`r`n`r`n继续后只覆盖程序文件，原有配置、data、teamData、.cache、backups 和其他用户文件均会保留。是否继续？"
+    if (!$Interactive) {
+        Write-InstallLine ('检测到已有 TaskTrace（' + $version + '），将只覆盖程序文件并保留配置和数据。') Yellow
+        return $true
+    }
+    Add-Type -AssemblyName System.Windows.Forms
+    $result = [System.Windows.Forms.MessageBox]::Show($message, 'TaskTrace：确认覆盖安装', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    return $result -eq [System.Windows.Forms.DialogResult]::Yes
+}
+
+function Get-RunningInstallationProcesses([string]$Directory) {
+    $targetDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    $found = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($name in @('TaskTrace', 'TaskTrace-server', 'TaskTrace-floating', 'TaskTrace-updater')) {
+        foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            try { $runningPath = $running.MainModule.FileName } catch { $runningPath = $null }
+            if ($runningPath -and [string]::Equals([IO.Path]::GetDirectoryName($runningPath).TrimEnd('\'), $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+                $found.Add($name)
+                break
+            }
+        }
+    }
+    return $found.ToArray()
 }
 
 function Install-ProgramFiles([string]$SourceDirectory, [string]$DestinationDirectory, [string[]]$Names) {
+    # Recheck after the build in case the user started this copy in the meantime.
+    $runningNames = @(Get-RunningInstallationProcesses $DestinationDirectory)
+    if ($runningNames.Count -gt 0) {
+        throw ('目标目录中的 TaskTrace 正在运行（' + ($runningNames -join '、') + '）。请退出后重新安装；尚未覆盖程序文件。')
+    }
     New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
     $transactionRoot = Join-Path $env:TEMP ('TaskTrace-install-' + [Guid]::NewGuid().ToString('N'))
     $backupRoot = Join-Path $transactionRoot 'previous-program'
@@ -251,6 +349,17 @@ try {
         }
         $outputDirectory = $selectedDirectory
         Write-InstallLine ('安装目录：' + $outputDirectory) Cyan
+        $runningPackageProcesses = @(Get-RunningInstallationProcesses $outputDirectory)
+        if ($runningPackageProcesses.Count -gt 0) {
+            $runningText = $runningPackageProcesses -join '、'
+            Write-InstallLine ('检测到目标目录中的 TaskTrace 正在运行（' + $runningText + '），尚未开始安装。') Red
+            Show-InstallResult 'TaskTrace：程序正在运行' ("检测到目标目录中的 TaskTrace 正在运行：$runningText`r`n`r`n请从系统托盘菜单选择退出 TaskTrace，确认程序完全退出后重新运行安装工具。`r`n`r`n当前没有下载、编译或覆盖任何文件。") $true
+            exit 2
+        }
+        if (!(Confirm-ExistingInstallation $outputDirectory)) {
+            Write-InstallLine '用户已取消覆盖安装。' Yellow
+            exit 0
+        }
     }
     Import-FreshBuildEnvironment
 	Write-InstallLog '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
@@ -378,26 +487,6 @@ try {
     if (!(Test-Path -LiteralPath $compiler -PathType Leaf)) {
         Add-DependencyIssue ('未找到 .NET Framework C# 编译器：' + $compiler) '在“启用或关闭 Windows 功能”中启用 .NET Framework 4.8，或安装 .NET Framework 4.8 Developer Pack。'
 	} else { Write-InstallLog ('C# 编译器：' + $compiler) }
-
-    # Dependency inspection does not write package files. A full build only
-    # conflicts with an instance launched from the package directory which is
-    # about to be replaced; TaskTrace copies in other folders may keep running.
-    if (!$CheckOnly) {
-        $outputPrefix = [IO.Path]::GetFullPath($outputDirectory).TrimEnd('\') + '\'
-        $runningPackageProcesses = New-Object 'System.Collections.Generic.List[string]'
-        foreach ($name in @('TaskTrace', 'TaskTrace-server', 'TaskTrace-floating')) {
-            foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-                try { $runningPath = $running.MainModule.FileName } catch { $runningPath = $null }
-                if ($runningPath -and $runningPath.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-                    $runningPackageProcesses.Add($name)
-                    break
-                }
-            }
-        }
-        if ($runningPackageProcesses.Count -gt 0) {
-            Add-DependencyIssue ('检测到本次输出目录中的 TaskTrace 正在运行（' + ($runningPackageProcesses -join '、') + '），无法安全覆盖程序文件。') '请从该 TaskTrace 的系统托盘菜单选择“退出 TaskTrace”，然后重新运行安装工具。'
-        }
-    }
 
     if ($issues.Count -gt 0) {
         Write-InstallLine ''
