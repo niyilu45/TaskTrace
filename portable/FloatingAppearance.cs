@@ -35,12 +35,12 @@ internal sealed partial class FloatingWindow {
             if(root.TryGetValue("outstanding",out raw)){var values=raw as Dictionary<string,object>;if(values!=null)foreach(var pair in values){string key=NormalizeAppearance(Convert.ToString(pair.Value));if(key!="")localOutstandingColors[pair.Key]=key;}}
         }catch{}
     }
-    void SaveLocalAppearance(){
+    void SaveLocalAppearance(bool reportFailure=false){
         try{
             Directory.CreateDirectory(data);string path=AppearancePath,temp=path+".tmp";
             File.WriteAllText(temp,json.Serialize(new {tasks=localTaskColors.ToDictionary(pair=>pair.Key.ToString(),pair=>pair.Value),outstanding=localOutstandingColors}));
             if(File.Exists(path))File.Replace(temp,path,null);else File.Move(temp,path);
-        }catch{}
+        }catch{if(reportFailure)throw;}
     }
     string LocalTaskAppearance(long id){string key;return localTaskColors.TryGetValue(id,out key)?NormalizeAppearance(key):"";}
     string LocalOutstandingAppearance(long taskId,string itemId){string key;return localOutstandingColors.TryGetValue(OutstandingAppearanceKey(taskId,itemId),out key)?NormalizeAppearance(key):"";}
@@ -54,11 +54,14 @@ internal sealed partial class FloatingWindow {
         foreach(var pair in nodes){var node=pair.Value as TaskNode;if(node==null)continue;node.LocalColorKey=LocalTaskAppearance(pair.Key);node.EffectiveColorKey=EffectiveTaskAppearance(pair.Key,parents);}
     }
     void ApplyLocalAppearanceToTree(){
-        foreach(var node in SimpleTaskNodes(tasks.Nodes)){
+        foreach(var node in AppearanceNodes(tasks.Nodes)){
             var task=node as TaskNode;if(task!=null){long id=(long)task.Tag;task.LocalColorKey=LocalTaskAppearance(id);task.EffectiveColorKey=EffectiveTaskAppearance(id,taskParents);}
-            foreach(TreeNode child in node.Nodes){var leaf=child.Tag as OutstandingLeaf;if(leaf!=null){leaf.LocalColorKey=LocalOutstandingAppearance(leaf.TaskId,leaf.Id);var owner=node as TaskNode;leaf.EffectiveColorKey=leaf.LocalColorKey!=""?leaf.LocalColorKey:(owner==null?"":owner.EffectiveColorKey);}}
+            var leaf=node.Tag as OutstandingLeaf;if(leaf!=null){leaf.LocalColorKey=LocalOutstandingAppearance(leaf.TaskId,leaf.Id);leaf.EffectiveColorKey=leaf.LocalColorKey!=""?leaf.LocalColorKey:EffectiveTaskAppearance(leaf.TaskId,taskParents);}
         }
         taskSurface.Rebuild(true);tasks.Invalidate();
+    }
+    static IEnumerable<TreeNode> AppearanceNodes(TreeNodeCollection nodes){
+        foreach(TreeNode node in nodes){yield return node;foreach(var child in AppearanceNodes(node.Nodes))yield return child;}
     }
     ToolStripMenuItem CreateAppearanceMenuItem(){
         var menu=new ToolStripMenuItem("背景色（仅本机）");
@@ -72,20 +75,33 @@ internal sealed partial class FloatingWindow {
         return menu;
     }
     void RefreshAppearanceMenu(ToolStripMenuItem menu){
-        var node=tasks.SelectedNode;var leaf=node==null?null:node.Tag as OutstandingLeaf;bool task=node!=null&&node.Tag is long;
-        menu.Enabled=task||leaf!=null;if(!menu.Enabled)return;
-        string selected=task?LocalTaskAppearance((long)node.Tag):LocalOutstandingAppearance(leaf.TaskId,leaf.Id);
+        var selection=SelectedActionNodes();menu.Enabled=selection.Count>0;menu.Text=selection.Count>1?"批量设置背景色（仅本机）":"背景色（仅本机）";if(!menu.Enabled)return;
+        var node=selection[0];var leaf=node.Tag as OutstandingLeaf;bool task=node.Tag is long;
+        var colors=selection.Select(item=>item.Tag is long?LocalTaskAppearance((long)item.Tag):LocalOutstandingAppearance(((OutstandingLeaf)item.Tag).TaskId,((OutstandingLeaf)item.Tag).Id)).Distinct().ToList();
+        string selected=colors.Count==1?colors[0]:null;
         bool inherits=leaf!=null||(task&&taskParents.ContainsKey((long)node.Tag));
         for(int index=0;index<menu.DropDownItems.Count;index++){
             var item=menu.DropDownItems[index] as ToolStripMenuItem;if(item==null)continue;
             string key=Convert.ToString(item.Tag);item.Checked=key==selected;
-            if(index==0)item.Text=leaf!=null?"继承所属任务":inherits?"继承父任务":"无背景";
+            if(index==0)item.Text=selection.Count>1?"继承 / 无背景":leaf!=null?"继承所属任务":inherits?"继承父任务":"无背景";
         }
     }
     void ApplySelectedAppearance(string key){
-        var node=tasks.SelectedNode;if(node==null)return;var leaf=node.Tag as OutstandingLeaf;
-        if(node.Tag is long){long id=(long)node.Tag;SetLocalTaskAppearance(id,key);status.Text=key==""?(taskParents.ContainsKey(id)?"已继承父任务背景色，仅保存在本机。":"已清除背景色，仅保存在本机。"):"背景色已保存到本机，不会同步给协作成员。";}
-        else if(leaf!=null){SetLocalOutstandingAppearance(leaf.TaskId,leaf.Id,key);status.Text=key==""?"已继承所属任务背景色，仅保存在本机。":"背景色已保存到本机，不会同步给协作成员。";}
+        var selection=SelectedActionNodes();if(selection.Count==0)return;key=NormalizeAppearance(key);
+        var beforeTasks=new Dictionary<long,string>(localTaskColors);var beforeOutstanding=new Dictionary<string,string>(localOutstandingColors);
+        try {
+            foreach(var node in selection){
+                var leaf=node.Tag as OutstandingLeaf;
+                if(node.Tag is long){long id=(long)node.Tag;if(key=="")localTaskColors.Remove(id);else localTaskColors[id]=key;}
+                else if(leaf!=null){string id=OutstandingAppearanceKey(leaf.TaskId,leaf.Id);if(key=="")localOutstandingColors.Remove(id);else localOutstandingColors[id]=key;}
+            }
+            SaveLocalAppearance(true);ApplyLocalAppearanceToTree();
+            status.Text="已设置 "+selection.Count+" 项背景色，仅保存在本机，不会同步给协作成员。";
+        }catch(Exception error){
+            localTaskColors.Clear();foreach(var pair in beforeTasks)localTaskColors[pair.Key]=pair.Value;
+            localOutstandingColors.Clear();foreach(var pair in beforeOutstanding)localOutstandingColors[pair.Key]=pair.Value;
+            Error(error);if(!selfTest)MessageBox.Show(this,"背景色未保存："+error.Message,"背景色",MessageBoxButtons.OK,MessageBoxIcon.Warning);
+        }
     }
     static Bitmap AppearanceSwatch(Color color){
         var image=new Bitmap(18,18);using(var graphics=Graphics.FromImage(image)){

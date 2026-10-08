@@ -8,7 +8,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
-internal sealed class TaskTreeSurface : Panel {
+internal sealed partial class TaskTreeSurface : Panel {
     sealed class Row {
         internal TreeNode Node;
         internal Rectangle Bounds,Expand,Check,Prefix,Image,Reminder,Priority,Title,Ancestors;
@@ -53,7 +53,7 @@ internal sealed class TaskTreeSurface : Panel {
         model=value;if(model==null)return;
         Font=model.Font;ForeColor=model.ForeColor;BackColor=model.BackColor;
         model.ViewChanged=QueueRebuild;
-        model.AfterSelect+=delegate {Invalidate();};
+        model.AfterSelect+=delegate {ModelSelectionChanged();};
         model.AfterExpand+=delegate {QueueRebuild();};
         model.AfterCollapse+=delegate {QueueRebuild();};
         Rebuild(false);
@@ -138,6 +138,7 @@ internal sealed class TaskTreeSurface : Panel {
     internal void Rebuild(bool preserveScroll) {
         if(model==null || IsDisposed)return;
         var visible=VisibleNodes(model.Nodes).ToList();
+        ReconcileSelection(visible);
         // Selection, focus and unchanged background reads invalidate the native model too.
         // Reuse the measured rows unless content, geometry or display options actually changed.
         if(ReuseLayout(visible,preserveScroll))return;
@@ -196,7 +197,7 @@ internal sealed class TaskTreeSurface : Panel {
             if(bounds.Bottom<0 || bounds.Top>ClientSize.Height)continue;
             var expand=OffsetRectangle(row.Expand,offset);var check=OffsetRectangle(row.Check,offset);var prefix=OffsetRectangle(row.Prefix,offset);
             var image=OffsetRectangle(row.Image,offset);var reminder=OffsetRectangle(row.Reminder,offset);var priority=OffsetRectangle(row.Priority,offset);var title=OffsetRectangle(row.Title,offset);var ancestors=OffsetRectangle(row.Ancestors,offset);
-            bool selected=model.SelectedNode==row.Node;Color tint=FloatingWindow.AppearanceColor(row.Appearance);Color background=tint.IsEmpty?BackColor:tint;Color foreground=NodeColor(row.Node,ForeColor);
+            bool selected=IsSelected(row.Node);Color tint=FloatingWindow.AppearanceColor(row.Appearance);Color background=tint.IsEmpty?BackColor:tint;Color foreground=NodeColor(row.Node,ForeColor);
             if(selected){background=Blend(background,Color.FromArgb(182,216,255),tint.IsEmpty?.72f:.38f);foreground=Color.FromArgb(24,42,67);}
             var band=new Rectangle(2,bounds.Top+1,Math.Max(1,ClientSize.Width-5),Math.Max(1,bounds.Height-2));
             using(var path=RoundedRectangle(band,6))using(var backgroundBrush=new SolidBrush(background))e.Graphics.FillPath(backgroundBrush,path);
@@ -215,7 +216,7 @@ internal sealed class TaskTreeSurface : Panel {
             var titleFlags=TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix|TextFormatFlags.EndEllipsis|(row.Wrap?TextFormatFlags.WordBreak|TextFormatFlags.TextBoxControl:TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine);
             TextRenderer.DrawText(e.Graphics,row.TitleText,row.Font,title,foreground,titleFlags);
             if(!row.Ancestors.IsEmpty)TextRenderer.DrawText(e.Graphics,row.AncestorText,row.Font,ancestors,selected?Color.FromArgb(90,104,124):Color.FromArgb(120,130,145),single);
-            if(selected && Focused)ControlPaint.DrawFocusRectangle(e.Graphics,new Rectangle(band.Left+2,band.Top+2,Math.Max(1,band.Width-4),Math.Max(1,band.Height-4)),foreground,background);
+            if(selected && Focused && model.SelectedNode==row.Node)ControlPaint.DrawFocusRectangle(e.Graphics,new Rectangle(band.Left+2,band.Top+2,Math.Max(1,band.Width-4),Math.Max(1,band.Height-4)),foreground,background);
             if(row.Node==dropNode){int y=dropZone<0?bounds.Top:dropZone>0?bounds.Bottom-2:bounds.Top+bounds.Height/2;using(var pen=new Pen(Color.FromArgb(36,94,210),2))e.Graphics.DrawLine(pen,Math.Max(2,bounds.Left+2),y,Math.Max(2,bounds.Right-4),y);}
         }
     }
@@ -224,10 +225,14 @@ internal sealed class TaskTreeSurface : Panel {
     enum Part {None,Expand,Check,Priority,Image,Reminder,Title}
     static Part HitPart(Row row,Point point) {if(row==null)return Part.None;if(row.Expand.Contains(point)&&row.HasChildren)return Part.Expand;if(row.Check.Contains(point))return Part.Check;if(row.Priority.Contains(point))return Part.Priority;if(row.Image.Contains(point))return Part.Image;if(row.Reminder.Contains(point))return Part.Reminder;return row.Bounds.Contains(point)?Part.Title:Part.None;}
     protected override void OnMouseDown(MouseEventArgs e) {
+        HandleItemMouseDown(e,ModifierKeys);
+    }
+    void HandleItemMouseDown(MouseEventArgs e,Keys modifiers) {
         base.OnMouseDown(e);Focus();var row=RowAt(e.Location);Point point=row==null?Point.Empty:ContentPoint(row,e.Location);
-        if(row==null){if(e.Button==MouseButtons.Left&&BlankDragEnabled!=null&&BlankDragEnabled()&&BlankDragRequested!=null)BlankDragRequested(e.Location);return;}
-        model.SelectedNode=row.Node;pressedNode=row.Node;pressedAt=e.Location;Part part=HitPart(row,point);
+        if(row==null){if(e.Button==MouseButtons.Right)ClearSelection();if(e.Button==MouseButtons.Left&&BlankDragEnabled!=null&&BlankDragEnabled()&&BlankDragRequested!=null)BlankDragRequested(e.Location);return;}
+        SelectItem(row.Node,modifiers,e.Button);pressedNode=row.Node;pressedAt=e.Location;Part part=HitPart(row,point);
         if(e.Button!=MouseButtons.Left)return;
+        if((modifiers&(Keys.Control|Keys.Shift))!=Keys.None){pressedNode=null;dragNode=null;return;}
         if(part==Part.Expand){if(row.Node.IsExpanded)row.Node.Collapse();else row.Node.Expand();Rebuild(true);pressedNode=null;}
         else if(part==Part.Check){if(CompletionClicked!=null)CompletionClicked(row.Node);pressedNode=null;}
         else if(part==Part.Priority){if(PriorityClicked!=null)PriorityClicked(row.Node);pressedNode=null;}
@@ -237,7 +242,7 @@ internal sealed class TaskTreeSurface : Panel {
         Invalidate();
     }
     protected override void OnMouseUp(MouseEventArgs e) {base.OnMouseUp(e);pressedNode=null;dragNode=null;dragging=false;}
-    protected override void OnMouseDoubleClick(MouseEventArgs e) {base.OnMouseDoubleClick(e);var row=RowAt(e.Location);if(e.Button==MouseButtons.Left&&row!=null&&HitPart(row,ContentPoint(row,e.Location))==Part.Title&&NodeDoubleClicked!=null)NodeDoubleClicked(row.Node);}
+    protected override void OnMouseDoubleClick(MouseEventArgs e) {base.OnMouseDoubleClick(e);var row=RowAt(e.Location);if((ModifierKeys&(Keys.Control|Keys.Shift))==Keys.None&&e.Button==MouseButtons.Left&&row!=null&&HitPart(row,ContentPoint(row,e.Location))==Part.Title&&NodeDoubleClicked!=null)NodeDoubleClicked(row.Node);}
     protected override void OnMouseMove(MouseEventArgs e) {
         base.OnMouseMove(e);var row=RowAt(e.Location);TreeNode node=row==null?null:row.Node;
         if(node!=hoverNode){hoverNode=node;if(HoverChanged!=null)HoverChanged(node,e.Location);}
@@ -248,8 +253,10 @@ internal sealed class TaskTreeSurface : Panel {
     protected override void OnMouseLeave(EventArgs e) {base.OnMouseLeave(e);hoverNode=null;if(HoverChanged!=null)HoverChanged(null,Point.Empty);}
     protected override bool IsInputKey(Keys keyData) {if((keyData&Keys.KeyCode)==Keys.Up||(keyData&Keys.KeyCode)==Keys.Down||(keyData&Keys.KeyCode)==Keys.Left||(keyData&Keys.KeyCode)==Keys.Right)return true;return base.IsInputKey(keyData);}
     protected override void OnKeyDown(KeyEventArgs e) {
+        if(model==null)return;
+        if(e.Control&&!e.Alt&&e.KeyCode==Keys.A){SelectAllItems();e.Handled=true;e.SuppressKeyPress=true;return;}
         var current=rows.FindIndex(row=>row.Node==model.SelectedNode);
-        if(e.KeyCode==Keys.Up||e.KeyCode==Keys.Down){int next=Math.Max(0,Math.Min(rows.Count-1,current+(e.KeyCode==Keys.Up?-1:1)));if(rows.Count>0){model.SelectedNode=rows[next].Node;EnsureVisible(rows[next]);}e.Handled=true;}
+        if(e.KeyCode==Keys.Up||e.KeyCode==Keys.Down){int next=Math.Max(0,Math.Min(rows.Count-1,current+(e.KeyCode==Keys.Up?-1:1)));if(rows.Count>0){SelectItem(rows[next].Node,e.Modifiers,MouseButtons.Left);EnsureVisible(rows[next]);}e.Handled=true;}
         else if(e.KeyCode==Keys.Space&&model.SelectedNode!=null){if(CompletionClicked!=null)CompletionClicked(model.SelectedNode);e.Handled=true;}
         else if(e.KeyCode==Keys.Enter&&model.SelectedNode!=null){if(NodeDoubleClicked!=null)NodeDoubleClicked(model.SelectedNode);e.Handled=true;}
         else if(e.KeyCode==Keys.Left&&model.SelectedNode!=null){if(model.SelectedNode.IsExpanded)model.SelectedNode.Collapse();else if(model.SelectedNode.Parent!=null)model.SelectedNode=model.SelectedNode.Parent;Rebuild(true);e.Handled=true;}
@@ -281,6 +288,7 @@ internal sealed class TaskTreeSurface : Panel {
     internal TreeNode NodeAt(Point point){var row=RowAt(point);return row==null?null:row.Node;}
     internal void TestClick(Rectangle bounds,int clicks){var point=new Point(bounds.Left+bounds.Width/2,bounds.Top+bounds.Height/2);OnMouseDown(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));if(clicks>1)OnMouseDoubleClick(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));OnMouseUp(new MouseEventArgs(MouseButtons.Left,clicks,point.X,point.Y,0));}
     internal void TestKey(Keys key){OnKeyDown(new KeyEventArgs(key));}
+    internal void TestSelectionClick(Rectangle bounds,MouseButtons button,Keys modifiers){var point=new Point(bounds.Left+Math.Min(10,bounds.Width/2),bounds.Top+bounds.Height/2);HandleItemMouseDown(new MouseEventArgs(button,1,point.X,point.Y,0),modifiers);OnMouseUp(new MouseEventArgs(button,1,point.X,point.Y,0));}
 }
 
 internal sealed partial class TaskTreeView {
@@ -293,6 +301,7 @@ internal sealed partial class FloatingWindow {
     readonly TaskTreeSurface taskSurface=new TaskTreeSurface{Dock=DockStyle.Fill,AccessibleName="任务与子任务"};
     Control hoverSurface;
     void InitializeTaskSurface() {
+        taskSurface.ModelUpdating=delegate{return rendering;};
         taskSurface.Bind(tasks);taskSurface.ContextMenuStrip=tasks.ContextMenuStrip;
         taskSurface.MouseDown+=delegate{ShowSimpleModeRestore();};taskSurface.MouseClick+=delegate{ShowSimpleModeRestore();};
         taskSurface.CompletionClicked=delegate(TreeNode node){if(tasks.CompletionClicked!=null)tasks.CompletionClicked(node);};
