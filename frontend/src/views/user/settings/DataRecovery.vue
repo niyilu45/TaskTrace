@@ -64,6 +64,7 @@
 		<div class="backup-actions">
 			<XButton
 				:loading="backupSaving"
+				:disabled="backupManagementBusy || Object.keys(noteDrafts).length > 0"
 				@click="saveBackupSettings"
 			>
 				保存备份设置
@@ -71,6 +72,7 @@
 			<XButton
 				variant="secondary"
 				:loading="backupRunning"
+				:disabled="backupManagementBusy || Object.keys(noteDrafts).length > 0"
 				@click="runBackupNow"
 			>
 				立即备份
@@ -101,34 +103,88 @@
 		<XButton
 			class="mbs-4"
 			:loading="backupDetecting"
+			:disabled="backupManagementBusy || Object.keys(noteDrafts).length > 0"
 			@click="detectBackups"
 		>
 			查看可恢复备份
 		</XButton>
-		<p v-if="backupDetection && backupCandidates.length === 0">
+		<p v-if="backupList && backupEntries.length === 0">
 			当前备份目录中没有可恢复的数据。
 		</p>
 		<div
-			v-else-if="backupCandidates.length > 0"
+			v-else-if="backupEntries.length > 0"
 			class="candidate-list mbs-4"
 		>
 			<article
-				v-for="candidate in backupCandidates"
-				:key="candidate.data_directory"
-				class="candidate"
+				v-for="backup in backupEntries"
+				:key="backup.id"
+				class="candidate candidate--backup"
+				:data-backup-id="backup.id"
 			>
 				<div class="candidate__details">
-					<strong>{{ formatDate(candidate.modified_at) }}</strong>
-					<span>事项 {{ candidate.tasks || 0 }} · 项目 {{ candidate.projects || 0 }} · 用户 {{ candidate.users || 0 }}</span>
-					<span>{{ candidate.data_directory }}</span>
-					<span v-if="candidate.team_data_directory">团队数据：{{ candidate.team_data_directory }}（{{ candidate.team_shares || 0 }} 组协作任务）</span>
+					<strong>{{ formatDate(backup.created_at) }}</strong>
+					<span>事项 {{ backup.candidate.tasks || 0 }} · 项目 {{ backup.candidate.projects || 0 }} · 用户 {{ backup.candidate.users || 0 }}</span>
+					<span>{{ backup.candidate.data_directory }}</span>
+					<span v-if="backup.candidate.team_data_directory">团队数据：{{ backup.candidate.team_data_directory }}（{{ backup.candidate.team_shares || 0 }} 组协作任务）</span>
+					<p class="backup-note">
+						备注：{{ backup.note || '暂无备注' }}
+					</p>
 				</div>
-				<XButton
-					variant="secondary"
-					@click="selectCandidate(candidate, 'backup')"
+				<div class="backup-actions candidate__actions">
+					<XButton
+						variant="secondary"
+						:disabled="backupManagementBusy || noteDrafts[backup.id] !== undefined"
+						@click="selectCandidate(backup.candidate, 'backup')"
+					>
+						恢复此备份
+					</XButton>
+					<XButton
+						variant="tertiary"
+						:disabled="backupManagementBusy || noteDrafts[backup.id] !== undefined"
+						@click="noteDrafts[backup.id] = backup.note || ''"
+					>
+						{{ backup.note ? '编辑备注' : '添加备注' }}
+					</XButton>
+					<XButton
+						variant="tertiary"
+						danger
+						:disabled="backupManagementBusy || noteDrafts[backup.id] !== undefined"
+						@click="backupToDelete = backup"
+					>
+						删除备份
+					</XButton>
+				</div>
+				<div
+					v-if="noteDrafts[backup.id] !== undefined"
+					class="backup-note-editor"
 				>
-					恢复此备份
-				</XButton>
+					<label :for="`backup-note-${backup.id}`">备份备注（最多 2000 字）</label>
+					<textarea
+						:id="`backup-note-${backup.id}`"
+						v-model="noteDrafts[backup.id]"
+						class="textarea"
+						rows="3"
+						maxlength="2000"
+						:disabled="backupManagementBusy"
+						placeholder="例如：项目交付前的备份"
+					/>
+					<div class="backup-actions">
+						<XButton
+							:loading="noteSavingId === backup.id"
+							:disabled="backupManagementBusy"
+							@click="saveBackupNote(backup)"
+						>
+							保存备注
+						</XButton>
+						<XButton
+							variant="tertiary"
+							:disabled="backupManagementBusy"
+							@click="delete noteDrafts[backup.id]"
+						>
+							取消备注
+						</XButton>
+					</div>
+				</div>
 			</article>
 		</div>
 	</Card>
@@ -261,6 +317,41 @@
 			</p>
 		</template>
 	</Modal>
+	<Modal
+		:enabled="Boolean(backupToDelete)"
+		aria-label="删除备份"
+		@close="closeBackupDelete"
+	>
+		<h2>删除这份备份？</h2>
+		<p>{{ formatDate(backupToDelete?.created_at) }}</p>
+		<p class="backup-note">
+			备注：{{ backupToDelete?.note || '暂无备注' }}
+		</p>
+		<p class="data-path">
+			{{ backupToDelete?.candidate.data_directory }}
+		</p>
+		<p>将永久删除这份备份中的个人数据、团队数据和备注，无法撤销。当前使用的数据和其他备份不受影响。</p>
+		<p class="help">
+			手动删除不受“最低保留份数”限制。
+		</p>
+		<div class="backup-actions mbs-4">
+			<XButton
+				variant="secondary"
+				:disabled="backupDeleting"
+				@click="closeBackupDelete"
+			>
+				取消
+			</XButton>
+			<XButton
+				danger
+				:loading="backupDeleting"
+				:disabled="backupDeleting"
+				@click="deleteBackup"
+			>
+				确认删除备份
+			</XButton>
+		</div>
+	</Modal>
 </template>
 
 <script setup lang="ts">
@@ -278,6 +369,11 @@ import {
 	tasktraceDataBackupSettingsRead,
 	tasktraceDataBackupSettingsWrite,
 	tasktraceDataBackupStatus,
+	tasktraceDataBackupsList,
+	tasktraceDataBackupNoteWrite,
+	tasktraceDataBackupDelete,
+	type TaskTraceBackupList,
+	type TaskTraceRecoverableBackup,
 	type TaskTraceBackupSettings,
 	type TaskTraceBackupStatus,
 	type TaskTraceDataCandidate,
@@ -295,12 +391,18 @@ const manualTeamPath = ref('')
 const detecting = ref(false)
 const importing = ref(false)
 const detection = ref<TaskTraceDataDetection>()
-const backupDetection = ref<TaskTraceDataDetection>()
+const backupList = ref<TaskTraceBackupList>()
+type ManagedBackup = TaskTraceRecoverableBackup & {id: string, candidate: TaskTraceDataCandidate}
+const noteDrafts = ref<Record<string, string>>({})
+const noteSavingId = ref('')
+const backupToDelete = ref<ManagedBackup>()
+const backupDeleting = ref(false)
 const selectedCandidate = ref<TaskTraceDataCandidate>()
 const selectedSource = ref<'backup' | 'data'>('data')
 const imported = ref<TaskTraceDataImportResult>()
 const candidates = computed(() => detection.value?.candidates || [])
-const backupCandidates = computed(() => backupDetection.value?.candidates || [])
+const backupEntries = computed(() => (backupList.value?.backups || []).filter((backup): backup is ManagedBackup => Boolean(backup.id && backup.candidate)))
+const backupManagementBusy = computed(() => Boolean(noteSavingId.value) || backupDeleting.value || backupDetecting.value || backupRunning.value || backupSaving.value || importing.value)
 
 watch([manualPath, manualTeamPath], () => {
 	detection.value = undefined
@@ -360,11 +462,15 @@ async function persistBackupSettings(showMessage = true) {
 	validateBackupSettings()
 	const {data} = await tasktraceDataBackupSettingsWrite({body: backupSettings.value})
 	backupSettings.value = data
+	// The saved destination may have changed: never reuse identifiers or drafts
+	// from a different directory after the next list request.
+	backupList.value = undefined
+	noteDrafts.value = {}
 	if (showMessage) success({message: '定时备份设置已保存。'})
 }
 
 async function saveBackupSettings() {
-	if (backupSaving.value) return
+	if (backupManagementBusy.value || Object.keys(noteDrafts.value).length > 0) return
 	backupSaving.value = true
 	try {
 		await persistBackupSettings()
@@ -378,7 +484,7 @@ async function saveBackupSettings() {
 }
 
 async function runBackupNow() {
-	if (backupRunning.value) return
+	if (backupManagementBusy.value || Object.keys(noteDrafts.value).length > 0) return
 	backupRunning.value = true
 	try {
 		await persistBackupSettings(false)
@@ -394,19 +500,54 @@ async function runBackupNow() {
 }
 
 async function detectBackups() {
-	if (backupDetecting.value) return
+	if (backupManagementBusy.value || Object.keys(noteDrafts.value).length > 0) return
 	backupDetecting.value = true
-	backupDetection.value = undefined
+	backupList.value = undefined
 	try {
-		if (!backupStatus.value?.directory) await loadBackupSettings()
-		const path = backupStatus.value?.directory
-		if (!path) throw new Error('请先保存备份路径。')
-		const {data} = await tasktraceDataRecoveryDetect({query: {path}})
-		backupDetection.value = data
+		const {data} = await tasktraceDataBackupsList()
+		backupList.value = data
 	} catch (cause) {
 		showError(cause)
 	} finally {
 		backupDetecting.value = false
+	}
+}
+
+async function saveBackupNote(backup: ManagedBackup) {
+	if (backupManagementBusy.value || noteDrafts.value[backup.id] === undefined) return
+	noteSavingId.value = backup.id
+	try {
+		const {data} = await tasktraceDataBackupNoteWrite({path: {id: backup.id}, body: {note: noteDrafts.value[backup.id]}})
+		backup.note = data.note || ''
+		delete noteDrafts.value[backup.id]
+		success({message: '备份备注已保存。'})
+	} catch (cause) {
+		showError(cause)
+	} finally {
+		noteSavingId.value = ''
+	}
+}
+
+function closeBackupDelete() {
+	if (!backupDeleting.value) backupToDelete.value = undefined
+}
+
+async function deleteBackup() {
+	if (!backupToDelete.value || backupManagementBusy.value) return
+	const backup = backupToDelete.value
+	backupDeleting.value = true
+	try {
+		await tasktraceDataBackupDelete({path: {id: backup.id}})
+		if (backupList.value) backupList.value.backups = backupEntries.value.filter(item => item.id !== backup.id)
+		if (selectedCandidate.value?.data_directory === backup.candidate.data_directory) selectedCandidate.value = undefined
+		backupToDelete.value = undefined
+		success({message: '备份已删除。'})
+		const {data} = await tasktraceDataBackupStatus()
+		backupStatus.value = data
+	} catch (cause) {
+		showError(cause)
+	} finally {
+		backupDeleting.value = false
 	}
 }
 
@@ -509,6 +650,29 @@ function formatDate(value?: string) {
 	span { color: var(--grey-500); }
 }
 
+.candidate--backup {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.candidate__actions {
+	max-inline-size: 18rem;
+}
+
+.backup-note {
+	margin: 0;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--text);
+}
+
+.backup-note-editor {
+	display: grid;
+	grid-column: 1 / -1;
+	gap: .75rem;
+	min-inline-size: 0;
+}
+
 .data-path {
 	padding: .75rem;
 	border-radius: .5rem;
@@ -528,6 +692,14 @@ function formatDate(value?: string) {
 }
 
 @media (width <= 48rem) {
+	.candidate--backup {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.candidate__actions {
+		max-inline-size: none;
+	}
+
 	.candidate {
 		align-items: stretch;
 		flex-direction: column;

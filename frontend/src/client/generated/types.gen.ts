@@ -2668,6 +2668,32 @@ export type TaskReminder = {
     reminder?: string;
 };
 
+export type TaskTraceBackupList = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Recoverable backups, newest first. Unrelated folders are excluded.
+     */
+    backups?: Array<TaskTraceRecoverableBackup> | null;
+    /**
+     * Configured absolute backup directory used for this listing.
+     */
+    directory?: string;
+};
+
+export type TaskTraceBackupNote = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * User note for this backup, up to 2000 characters. An empty string clears it.
+     */
+    note?: string;
+};
+
 export type TaskTraceBackupRunResult = {
     /**
      * A URL to the JSON Schema for this object.
@@ -2923,6 +2949,25 @@ export type TaskTraceOutstandingMove = {
      * Source task, taken from the URL.
      */
     readonly task_id?: number;
+};
+
+export type TaskTraceRecoverableBackup = {
+    /**
+     * Validated personal and team data available for recovery.
+     */
+    candidate?: TaskTraceDataCandidate;
+    /**
+     * Original backup creation time; editing a note does not change it.
+     */
+    created_at?: string;
+    /**
+     * Opaque identifier bound to this backup and its configured directory.
+     */
+    id?: string;
+    /**
+     * User note stored with this backup.
+     */
+    note?: string;
 };
 
 export type TaskTraceTeamBindingStatus = {
@@ -5373,6 +5418,24 @@ export type TaskRelationWritable = {
     relation_kind?: 'subtask' | 'parenttask' | 'related' | 'duplicateof' | 'duplicates' | 'blocking' | 'blocked' | 'precedes' | 'follows' | 'copiedfrom' | 'copiedto';
 };
 
+export type TaskTraceBackupListWritable = {
+    /**
+     * Recoverable backups, newest first. Unrelated folders are excluded.
+     */
+    backups?: Array<TaskTraceRecoverableBackupWritable> | null;
+    /**
+     * Configured absolute backup directory used for this listing.
+     */
+    directory?: string;
+};
+
+export type TaskTraceBackupNoteWritable = {
+    /**
+     * User note for this backup, up to 2000 characters. An empty string clears it.
+     */
+    note?: string;
+};
+
 export type TaskTraceBackupSettingsWritable = {
     /**
      * Local time of day when the automatic backup runs, in HH:mm format.
@@ -5441,6 +5504,21 @@ export type TaskTraceOutstandingMoveWritable = {
      * Destination task in the same project; may equal the source to reorder.
      */
     target_task_id?: number;
+};
+
+export type TaskTraceRecoverableBackupWritable = {
+    /**
+     * Original backup creation time; editing a note does not change it.
+     */
+    created_at?: string;
+    /**
+     * Opaque identifier bound to this backup and its configured directory.
+     */
+    id?: string;
+    /**
+     * User note stored with this backup.
+     */
+    note?: string;
 };
 
 export type TaskTraceTeamBindingStatusWritable = {
@@ -11106,6 +11184,91 @@ export type TasktraceDataBackupStatusResponses = {
 };
 
 export type TasktraceDataBackupStatusResponse = TasktraceDataBackupStatusResponses[keyof TasktraceDataBackupStatusResponses];
+
+export type TasktraceDataBackupsListData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backups';
+};
+
+export type TasktraceDataBackupsListErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupsListError = TasktraceDataBackupsListErrors[keyof TasktraceDataBackupsListErrors];
+
+export type TasktraceDataBackupsListResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupList;
+};
+
+export type TasktraceDataBackupsListResponse = TasktraceDataBackupsListResponses[keyof TasktraceDataBackupsListResponses];
+
+export type TasktraceDataBackupDeleteData = {
+    body?: never;
+    path: {
+        /**
+         * Opaque backup identifier returned by the backup list.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/tasktrace/data-recovery/backups/{id}';
+};
+
+export type TasktraceDataBackupDeleteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupDeleteError = TasktraceDataBackupDeleteErrors[keyof TasktraceDataBackupDeleteErrors];
+
+export type TasktraceDataBackupDeleteResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type TasktraceDataBackupDeleteResponse = TasktraceDataBackupDeleteResponses[keyof TasktraceDataBackupDeleteResponses];
+
+export type TasktraceDataBackupNoteWriteData = {
+    body: TaskTraceBackupNoteWritable;
+    path: {
+        /**
+         * Opaque backup identifier returned by the backup list.
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/tasktrace/data-recovery/backups/{id}/note';
+};
+
+export type TasktraceDataBackupNoteWriteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupNoteWriteError = TasktraceDataBackupNoteWriteErrors[keyof TasktraceDataBackupNoteWriteErrors];
+
+export type TasktraceDataBackupNoteWriteResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupNote;
+};
+
+export type TasktraceDataBackupNoteWriteResponse = TasktraceDataBackupNoteWriteResponses[keyof TasktraceDataBackupNoteWriteResponses];
 
 export type TasktraceDataRecoveryImportData = {
     body: TaskTraceDataImportRequestWritable;
