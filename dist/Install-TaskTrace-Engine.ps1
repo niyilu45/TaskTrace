@@ -132,27 +132,104 @@ function Confirm-ExistingInstallation([string]$Directory) {
     return $result -eq [System.Windows.Forms.DialogResult]::Yes
 }
 
+function Initialize-InstallProcessInspection {
+    if ('TaskTraceInstallNative' -as [type]) { return }
+    # Limited process queries work across x86/x64 and normally also for elevated
+    # processes; MainModule requires more access and used to silently miss them.
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class TaskTraceInstallNative {
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, int id);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref uint size);
+    [DllImport("kernel32.dll")]
+    static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+    public static string ProcessPath(int id) {
+        IntPtr handle = OpenProcess(0x1000, false, id);
+        if(handle == IntPtr.Zero) return null;
+        try {
+            var path = new StringBuilder(32768);
+            uint size = (uint)path.Capacity;
+            return QueryFullProcessImageName(handle, 0, path, ref size) ? path.ToString() : null;
+        } finally { CloseHandle(handle); }
+    }
+    public static string DirectoryPath(string directory) {
+        string full = Path.GetFullPath(directory);
+        // Resolve junctions, short names and mapped paths before comparison.
+        using(var handle = CreateFile(full, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+            if(handle.IsInvalid) return full.TrimEnd('\\');
+            var path = new StringBuilder(32768);
+            uint length = GetFinalPathNameByHandle(handle, path, (uint)path.Capacity, 0);
+            if(length == 0 || length >= path.Capacity) return full.TrimEnd('\\');
+            string resolved = path.ToString();
+            if(resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) resolved = @"\\" + resolved.Substring(8);
+            else if(resolved.StartsWith(@"\\?\", StringComparison.OrdinalIgnoreCase)) resolved = resolved.Substring(4);
+            return resolved.TrimEnd('\\');
+        }
+    }
+}
+'@
+}
+
+function Get-InstallProcessImagePath([Diagnostics.Process]$Process) {
+    Initialize-InstallProcessInspection
+    return [TaskTraceInstallNative]::ProcessPath($Process.Id)
+}
+
 function Get-RunningInstallationProcesses([string]$Directory) {
-    $targetDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    Initialize-InstallProcessInspection
+    $targetDirectory = [TaskTraceInstallNative]::DirectoryPath($Directory)
     $found = New-Object 'System.Collections.Generic.List[string]'
     foreach ($name in @('TaskTrace', 'TaskTrace-server', 'TaskTrace-floating', 'TaskTrace-updater')) {
         foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-            try { $runningPath = $running.MainModule.FileName } catch { $runningPath = $null }
-            if ($runningPath -and [string]::Equals([IO.Path]::GetDirectoryName($runningPath).TrimEnd('\'), $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) {
-                $found.Add($name)
-                break
-            }
+            try {
+                $runningPath = Get-InstallProcessImagePath $running
+                if (!$runningPath) {
+                    $running.Refresh()
+                    try { if ($running.HasExited) { continue } } catch { }
+                    $found.Add($name + '（PID ' + $running.Id + '，无法确认运行路径，请先退出该程序）')
+                    continue
+                }
+                $runningDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($runningPath))
+                if ([string]::Equals($runningDirectory, $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+                    $found.Add($name + '（PID ' + $running.Id + '）')
+                }
+            } finally { $running.Dispose() }
         }
     }
     return $found.ToArray()
 }
 
+function Assert-InstallationAvailable([string]$Directory) {
+    $runningNames = @(Get-RunningInstallationProcesses $Directory)
+    if ($runningNames.Count -gt 0) {
+        throw ('检测到 TaskTrace 正在运行或无法确认运行路径：' + ($runningNames -join '、') + '。请从系统托盘退出后重新安装；尚未覆盖程序文件。')
+    }
+    # Also catch a renamed launcher, updater or another tool holding a target
+    # file. Opening existing program files here never changes their contents.
+    foreach ($name in @('TaskTrace.exe', 'TaskTrace-server.exe', 'TaskTrace-floating.exe', 'TaskTrace-updater.exe', 'Launch-TaskTrace.ps1')) {
+        $path = Join-Path $Directory $name
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $probe = $null
+        try { $probe = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+        catch {
+            throw ('程序文件被占用或没有写入权限：' + $path + '。请退出 TaskTrace，并检查该目录的写入权限后重试。原程序和数据尚未修改。原因：' + $_.Exception.Message)
+        } finally { if ($null -ne $probe) { $probe.Dispose() } }
+    }
+}
+
 function Install-ProgramFiles([string]$SourceDirectory, [string]$DestinationDirectory, [string[]]$Names) {
     # Recheck after the build in case the user started this copy in the meantime.
-    $runningNames = @(Get-RunningInstallationProcesses $DestinationDirectory)
-    if ($runningNames.Count -gt 0) {
-        throw ('目标目录中的 TaskTrace 正在运行（' + ($runningNames -join '、') + '）。请退出后重新安装；尚未覆盖程序文件。')
-    }
+    Assert-InstallationAvailable $DestinationDirectory
     New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
     $transactionRoot = Join-Path $env:TEMP ('TaskTrace-install-' + [Guid]::NewGuid().ToString('N'))
     $backupRoot = Join-Path $transactionRoot 'previous-program'
@@ -349,11 +426,13 @@ try {
         }
         $outputDirectory = $selectedDirectory
         Write-InstallLine ('安装目录：' + $outputDirectory) Cyan
-        $runningPackageProcesses = @(Get-RunningInstallationProcesses $outputDirectory)
-        if ($runningPackageProcesses.Count -gt 0) {
-            $runningText = $runningPackageProcesses -join '、'
-            Write-InstallLine ('检测到目标目录中的 TaskTrace 正在运行（' + $runningText + '），尚未开始安装。') Red
-            Show-InstallResult 'TaskTrace：程序正在运行' ("检测到目标目录中的 TaskTrace 正在运行：$runningText`r`n`r`n请从系统托盘菜单选择退出 TaskTrace，确认程序完全退出后重新运行安装工具。`r`n`r`n当前没有下载、编译或覆盖任何文件。") $true
+        $stage = '检查程序运行状态及文件占用'
+        Write-InstallLine '首先检查程序运行状态及安装目录文件占用...'
+        try { Assert-InstallationAvailable $outputDirectory }
+        catch {
+            Write-InstallLine $_.Exception.Message Red
+            Write-InstallLine '安装尚未开始，没有下载依赖、编译或覆盖任何程序和数据。' Yellow
+            Show-InstallResult 'TaskTrace：请先解除程序占用' ($_.Exception.Message + "`r`n`r`n安装尚未开始，没有下载依赖、编译或覆盖任何程序和数据。") $true
             exit 2
         }
         if (!(Confirm-ExistingInstallation $outputDirectory)) {
@@ -361,6 +440,7 @@ try {
             exit 0
         }
     }
+    $stage = '检查构建环境'
     Import-FreshBuildEnvironment
 	Write-InstallLog '已重新读取当前用户和系统的 PATH，避免双击安装器使用旧环境。'
     $env:TASKTRACE_NPM_PROXY = Select-DependencyProxy 'https://registry.npmjs.org/'

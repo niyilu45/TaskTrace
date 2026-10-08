@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $tokens = $null
 $parseErrors = $null
@@ -6,7 +6,7 @@ $installer = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repo
 if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
 # Exercise the production deployment and allowlist without building binaries or
 # executing the interactive installer. All file operations use a fresh temp root.
-foreach ($name in @('Get-RunningInstallationProcesses', 'Install-ProgramFiles')) {
+foreach ($name in @('Initialize-InstallProcessInspection', 'Get-InstallProcessImagePath', 'Get-RunningInstallationProcesses', 'Assert-InstallationAvailable', 'Install-ProgramFiles')) {
     $definition = $installer.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if ($null -eq $definition) { throw ('Missing installer function: ' + $name) }
     . ([ScriptBlock]::Create($definition.Extent.Text))
@@ -67,12 +67,22 @@ try {
     $locked = [IO.File]::Open((Join-Path $target $programNames[1]), 'Open', 'Read', 'Read')
     $failed = $false
     try { Install-ProgramFiles $source $target $programNames } catch { $failed = $true }
+    if (!$failed) { throw 'Expected the occupied file to fail preflight.' }
+    Assert-Hashes $installed $target
+    # Simulate the same file being locked only after the preflight passed, so
+    # the original transactional rollback remains covered as well.
+    $availabilityCheck = (Get-Item Function:Assert-InstallationAvailable).ScriptBlock
+    try {
+        Set-Item Function:Assert-InstallationAvailable { param([string]$Directory) }
+        $failed = $false
+        try { Install-ProgramFiles $source $target $programNames } catch { $failed = $true }
+    } finally { Set-Item Function:Assert-InstallationAvailable $availabilityCheck }
     $locked.Dispose()
     $locked = $null
     if (!$failed) { throw 'Expected the locked program to reject replacement.' }
     Assert-Hashes $installed $target
     if (@(Get-ChildItem -LiteralPath $target -Filter '*.tasktrace-installing').Count -ne 0) { throw 'Pending installer files remain.' }
-    Write-Host ('PASS: upgrade and rollback preserve all ' + $protected.Count + ' configuration/data/team/attachment/cache/backup files byte-for-byte.')
+    Write-Host ('PASS: upgrade, early lock rejection and late-lock rollback preserve all ' + $protected.Count + ' configuration/data/team/attachment/cache/backup files byte-for-byte.')
 } finally {
     if ($null -ne $locked) { $locked.Dispose() }
     $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
