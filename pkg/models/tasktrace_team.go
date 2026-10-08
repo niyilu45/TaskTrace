@@ -994,6 +994,7 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 			}
 		}
 		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Owner: owner, Assignees: assignees, Done: task.Done, Status: task.Status, Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
+		var outstandingID int64
 		for _, comment := range comments {
 			author := actor
 			if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok && marker.Author != "" {
@@ -1003,7 +1004,12 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 			}
 			id := taskTraceTeamCommentID(binding.ShareID, node, comment, author)
 			if taskTraceTeamIsOutstanding(comment.Comment) {
-				shared.Outstanding = taskTraceTeamAddMarker(comment.Comment, id, author)
+				// Match the web/floating canonical list selection. Imported comment
+				// timestamps may be out of order and must not revive an older list.
+				if comment.ID > outstandingID {
+					shared.Outstanding = taskTraceTeamAddMarker(comment.Comment, id, author)
+					outstandingID = comment.ID
+				}
 				continue
 			}
 			shared.Comments = append(shared.Comments, TaskTraceTeamComment{ID: id, Body: taskTraceTeamAddMarker(comment.Comment, id, author), Author: author, Created: comment.Created, Updated: comment.Updated})

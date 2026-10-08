@@ -335,12 +335,23 @@ func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTra
 func taskTraceTeamFilterSnapshotsPermissions(snapshots []TaskTraceTeamSnapshot, binding *TaskTraceTeamBinding, manifest *TaskTraceTeamManifest) []TaskTraceTeamSnapshot {
 	filtered := make([]TaskTraceTeamSnapshot, 0, len(snapshots))
 	for _, snapshot := range snapshots {
+		// Permission filtering substitutes trusted values, not user edits. Keep
+		// each substituted field's base in step or a stale read-only snapshot can
+		// look like an intentional deletion during the three-way merge.
+		snapshot.Base = taskTraceTeamCopyBase(snapshot.Base)
 		tasks := make([]TaskTraceTeamTask, 0, len(snapshot.Tasks))
 		for _, task := range snapshot.Tasks {
 			if !taskTraceTeamCan(manifest, task.NodeID, "", snapshot.Actor, false) {
 				continue
 			}
-			base, hasBase := binding.Base[task.NodeID]
+			base, hasBase := manifest.Base[task.NodeID]
+			if !hasBase {
+				base, hasBase = binding.Base[task.NodeID]
+			}
+			acknowledged, hasAcknowledged := snapshot.Base[task.NodeID]
+			if !hasAcknowledged {
+				acknowledged = base
+			}
 			if !taskTraceTeamCan(manifest, task.NodeID, "", snapshot.Actor, true) {
 				if !hasBase {
 					continue
@@ -350,28 +361,41 @@ func taskTraceTeamFilterSnapshotsPermissions(snapshots []TaskTraceTeamSnapshot, 
 				task.Done = base.Done
 				task.Status = base.Status
 				task.Comments = nil
+				acknowledged.Title = base.Title
+				acknowledged.Description = base.Description
+				acknowledged.Done = base.Done
+				acknowledged.Status = base.Status
 			}
 			items, order := taskTraceTeamOutstandingItems(task.Outstanding)
 			baseItems, baseOrder := taskTraceTeamOutstandingItems(base.Outstanding)
+			ackItems, ackOrder := taskTraceTeamOutstandingItems(acknowledged.Outstanding)
+			ids := map[string]bool{}
 			for id := range items {
+				ids[id] = true
+			}
+			for id := range ackItems {
+				ids[id] = true
+			}
+			for _, id := range baseOrder {
+				ids[id] = true
+			}
+			for id := range ids {
 				if taskTraceTeamCan(manifest, task.NodeID, id, snapshot.Actor, true) {
 					continue
 				}
 				if value, ok := baseItems[id]; ok {
 					items[id] = value
+					ackItems[id] = value
 				} else {
 					delete(items, id)
+					delete(ackItems, id)
 				}
 			}
-			for _, id := range baseOrder {
-				if !taskTraceTeamCan(manifest, task.NodeID, id, snapshot.Actor, true) {
-					if _, ok := items[id]; !ok {
-						items[id] = baseItems[id]
-						order = append(order, id)
-					}
-				}
-			}
+			order = append(order, baseOrder...)
+			ackOrder = append(ackOrder, baseOrder...)
 			task.Outstanding = taskTraceTeamOutstandingHTML(items, order)
+			acknowledged.Outstanding = taskTraceTeamOutstandingHTML(ackItems, ackOrder)
+			snapshot.Base[task.NodeID] = acknowledged
 			tasks = append(tasks, task)
 		}
 		snapshot.Tasks = tasks
