@@ -59,7 +59,7 @@ cd 解压后的TaskTrace目录
 dist\Install-TaskTrace.cmd
 ```
 
-生成结果位于 `dist/TaskTrace-local`。复制或覆盖其他电脑上的现有程序时，请使用同时生成的 `dist/TaskTrace-program-files.zip`，其中不含 `data`、`teamData`、`.cache` 和本机设置。不要直接复制已经运行过的 `dist/TaskTrace-local` 整个目录。这些工具只在生成程序时使用；运行成品不依赖 Node.js、pnpm、Go、GCC 或开发环境。正式发布 ZIP 仍生成在 `Releases`，构建前请先退出正在运行的 TaskTrace。详细说明见 [源码安装说明](dist/README.md)。
+生成结果位于 `dist/TaskTrace-local`。复制或覆盖其他电脑上的现有程序时，请使用同时生成的 `dist/TaskTrace-program-files.zip`，其中不含 `data`、`teamData`、`.cache` 和本机设置。不要直接复制已经运行过的 `dist/TaskTrace-local` 整个目录。网页“设置 → 数据保护与恢复”可以检测旧版数据并复制到新的纯数据目录，导入过程不会覆盖当前数据。这些工具只在生成程序时使用；运行成品不依赖 Node.js、pnpm、Go、GCC 或开发环境。正式发布 ZIP 仍生成在 `Releases`，构建前请先退出正在运行的 TaskTrace。详细说明见 [源码安装说明](dist/README.md)。
 
 ## 上游与许可证
 

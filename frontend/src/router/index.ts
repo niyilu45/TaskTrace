@@ -101,6 +101,11 @@ const router = createRouter({
 			redirect: {name: 'user.settings.general'},
 			children: [
 				{
+					path: '/user/settings/data-recovery',
+					name: 'user.settings.dataRecovery',
+					component: () => import('@/views/user/settings/DataRecovery.vue'),
+				},
+				{
 					path: '/user/settings/updates',
 					name: 'user.settings.updates',
 					component: () => import('@/views/user/settings/Updates.vue'),

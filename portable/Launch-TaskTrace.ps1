@@ -52,7 +52,7 @@ try {
     $stage = 'Read settings and data directory'
     $settingsFile = Join-Path $packageRoot 'tasktrace-settings.json'
     if (!(Test-Path -LiteralPath $settingsFile)) {
-        [IO.File]::WriteAllText($settingsFile, '{"dataDirectory":"data"}', [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($settingsFile, '{"dataDirectory":"data","teamDataDirectory":"teamData"}', [Text.UTF8Encoding]::new($false))
     }
     $settings = [IO.File]::ReadAllText($settingsFile) | ConvertFrom-Json
     if ($settings.dataDirectory -isnot [string] -or [string]::IsNullOrWhiteSpace($settings.dataDirectory)) { throw 'Invalid dataDirectory in tasktrace-settings.json.' }
@@ -60,7 +60,12 @@ try {
     if (![IO.Path]::IsPathRooted($configuredPath)) { $configuredPath = Join-Path $packageRoot $configuredPath }
     $dataRoot = [IO.Path]::GetFullPath($configuredPath)
     New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
-    $teamRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'teamData'))
+    $configuredTeamPath = 'teamData'
+    if ($settings.PSObject.Properties.Name -contains 'teamDataDirectory' -and $settings.teamDataDirectory -is [string] -and ![string]::IsNullOrWhiteSpace($settings.teamDataDirectory)) {
+        $configuredTeamPath = [Environment]::ExpandEnvironmentVariables($settings.teamDataDirectory.Trim())
+    }
+    if ([IO.Path]::IsPathRooted($configuredTeamPath)) { $teamRoot = [IO.Path]::GetFullPath($configuredTeamPath) }
+    else { $teamRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot $configuredTeamPath)) }
     New-Item -ItemType Directory -Path $teamRoot -Force | Out-Null
     # The folder's NTFS/share properties provide suggestions only. A task link is
     # still authoritative, so collaboration keeps working with NAS shares and
@@ -78,11 +83,16 @@ try {
     try {
         $resolvedTeamRoot = [IO.Path]::GetFullPath($teamRoot).TrimEnd('\')
         $matchingShare = Get-CimInstance -ClassName Win32_Share -ErrorAction Stop | Where-Object {
-            $_.Path -and ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\') -eq $resolvedTeamRoot)
-        } | Select-Object -First 1
+            if (!$_.Path) { return $false }
+            $resolvedSharePath = [IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\')
+            $resolvedTeamRoot -eq $resolvedSharePath -or $resolvedTeamRoot.StartsWith($resolvedSharePath + '\', [StringComparison]::OrdinalIgnoreCase)
+        } | Sort-Object { ([IO.Path]::GetFullPath([string]$_.Path).TrimEnd('\')).Length } -Descending | Select-Object -First 1
         if ($null -ne $matchingShare) {
             $teamShareName = [string]$matchingShare.Name
+            $resolvedSharePath = [IO.Path]::GetFullPath([string]$matchingShare.Path).TrimEnd('\')
+            $shareSuffix = $resolvedTeamRoot.Substring($resolvedSharePath.Length).TrimStart('\')
             $teamLinkPath = '\\' + $env:COMPUTERNAME + '\' + $teamShareName
+            if ($shareSuffix) { $teamLinkPath += '\' + $shareSuffix }
             $teamLinkPaths = @($teamLinkPath)
             try {
                 $ipv4Addresses = @([Net.Dns]::GetHostAddresses([Net.Dns]::GetHostName()) | Where-Object {
@@ -91,6 +101,7 @@ try {
                 } | ForEach-Object { $_.IPAddressToString } | Sort-Object -Unique)
                 foreach ($ipv4Address in $ipv4Addresses) {
                     $ipPath = '\\' + $ipv4Address + '\' + $teamShareName
+                    if ($shareSuffix) { $ipPath += '\' + $shareSuffix }
                     if ($teamLinkPaths -notcontains $ipPath) { $teamLinkPaths += $ipPath }
                 }
                 if ($teamLinkPaths.Count -gt 1) { $teamLinkPath = $teamLinkPaths[1] }

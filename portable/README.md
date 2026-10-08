@@ -128,12 +128,17 @@
 - 默认使用程序旁的 data，兼容旧版数据。首次运行生成 tasktrace-settings.json，也可手动修改，例如：
 
 ```json
-{"dataDirectory":"D:/TaskTraceData"}
+{
+  "dataDirectory": "D:/TaskTraceData",
+  "teamDataDirectory": "D:/TaskTraceTeamData"
+}
 ```
 
 支持绝对路径、中文、空格、相对程序目录的路径和 %USERPROFILE% 等环境变量。配置文件损坏或目录不可写时会报错，不会自动切换到其他目录。
 
-切换目录不自动搬移数据：如需迁移，请先退出程序，备份并将旧目录全部内容复制到新的空目录，再修改配置并启动。选择已有 TaskTrace 数据目录会直接使用其中的数据。
+网页“设置 → 数据保护与恢复”可以自动检测程序附近的旧数据，也可以粘贴旧程序目录或旧 data 目录。导入时先将个人数据和团队数据复制到新的 `data/imports/...`、`teamData/imports/...` 纯数据目录，校验数据库中的事项、项目和用户数量，再备份并更新本机配置；当前数据不会被覆盖，退出并重新启动 TaskTrace 后才切换到导入的数据。
+
+手动切换目录不自动搬移数据：如需迁移，请先退出程序，备份并将旧目录全部内容复制到新的空目录，再修改配置并启动。选择已有 TaskTrace 数据目录会直接使用其中的数据。
 发布 ZIP 仅含 tasktrace-settings.example.json 示例，不含生效配置，因此覆盖升级不会覆盖原目录选择。升级时保留 tasktrace-settings.json 及其指向的数据目录。
 以下说明中的 data 均指配置后实际使用的数据目录。
 
@@ -149,7 +154,7 @@
 首页原来固定只查询未完成事项，现已改为按选择查询。项目列表仍使用其原有筛选；若项目设置了自定义过滤条件，可在该项目的“筛选”中调整。
 
 ## 旧版升级
-退出旧版本后，将新版程序文件覆盖到原目录，保留 data。只有一个有效账号时自动沿用原账号及其数据，不修改原密码。若已有多个账号，启动器会提示先在 data/local-user-id.txt 填入要使用的数字用户 ID，避免擅自选择他人的工作区。
+退出旧版本后，只使用正式 Release ZIP 或源码安装器生成的 `dist/TaskTrace-program-files.zip` 覆盖原目录。两个压缩包均不含 `data`、`teamData`、`.cache` 和 `tasktrace-settings.json`。不要复制已经运行过的 `dist/TaskTrace-local` 整个目录。只有一个有效账号时自动沿用原账号及其数据，不修改原密码。若已有多个账号，启动器会提示先在 data/local-user-id.txt 填入要使用的数字用户 ID，避免擅自选择他人的工作区。
 
 ## 数据和备份
 data/tasktrace.db：本地数据库。

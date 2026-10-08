@@ -38,6 +38,10 @@ const navigationItems = computed(() => {
 			routeName: 'user.settings.updates',
 		},
 		{
+			title: '数据保护与恢复',
+			routeName: 'user.settings.dataRecovery',
+		},
+		{
 			title: t('user.settings.newPasswordTitle'),
 			routeName: 'user.settings.password-update',
 			condition: isLocalUser.value,

@@ -16,6 +16,8 @@ dist\TaskTrace-program-files.zip
 
 这个压缩包只包含程序文件，明确排除 `data`、`teamData`、`.cache` 和 `tasktrace-settings.json`。退出目标电脑上正在运行的 TaskTrace 后，将压缩包内容解压并覆盖到原程序目录；原数据库、团队协作仓库、草稿缓存和本机数据目录设置都会保留。不要把已经运行过的 `dist\TaskTrace-local` 整个目录复制到另一台电脑，因为其中可能带有构建电脑生成的空数据库和本机配置。
 
+如果旧数据仍在其他目录，启动 TaskTrace 后进入“设置 → 数据保护与恢复”。程序可以自动检测旧版目录，也可以按用户填写的完整路径检测；确认导入后会复制到新的纯数据目录、校验数据库并备份配置，不会覆盖当前数据。
+
 ## 构建依赖
 
 - Windows 10/11 x64、Windows PowerShell 5.1 或 PowerShell 7

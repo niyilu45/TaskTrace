@@ -2078,7 +2078,7 @@ export type State = {
      */
     readonly release_url?: string;
     /**
-     * Current updater state: idle, checking, downloading, ready, or error.
+     * Current updater state: idle, queued, checking, downloading, ready, or error.
      */
     readonly status?: string;
 };
@@ -2437,7 +2437,7 @@ export type TaskCommentReadBody = {
      */
     readonly id?: number;
     /**
-     * The maximum permission the requesting user has on this comment's parent task (0=read, 1=read/write, 2=admin). Editing or deleting a comment also requires being its author, so this can over-state what the user may do to the comment.
+     * The maximum permission the requesting user has on this comment's parent task (0=read, 1=read/write, 2=admin). A collaboration task owner may edit or delete every comment.
      */
     readonly max_permission?: number;
     /**
@@ -2668,6 +2668,94 @@ export type TaskReminder = {
     reminder?: string;
 };
 
+export type TaskTraceDataCandidate = {
+    /**
+     * Absolute directory containing the detected TaskTrace database and local files.
+     */
+    readonly data_directory?: string;
+    /**
+     * Size of tasktrace.db in bytes.
+     */
+    readonly database_size?: number;
+    /**
+     * Last modification time of tasktrace.db.
+     */
+    readonly modified_at?: string;
+    /**
+     * Number of project rows found in the candidate database.
+     */
+    readonly projects?: number;
+    /**
+     * Number of task rows found in the candidate database.
+     */
+    readonly tasks?: number;
+    /**
+     * Detected teamData directory next to the old program, when present.
+     */
+    readonly team_data_directory?: string;
+    /**
+     * Number of user rows found in the candidate database.
+     */
+    readonly users?: number;
+};
+
+export type TaskTraceDataDetection = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Valid old TaskTrace datasets found outside the current data directory.
+     */
+    readonly candidates?: Array<TaskTraceDataCandidate> | null;
+    /**
+     * Data directory used by the running TaskTrace process.
+     */
+    readonly current_data_directory?: string;
+    /**
+     * teamData directory used by the running TaskTrace process.
+     */
+    readonly current_team_data_directory?: string;
+};
+
+export type TaskTraceDataImportRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Detected old TaskTrace data directory to copy into protected local storage.
+     */
+    data_directory?: string;
+    /**
+     * Optional old teamData directory to copy together with the personal data.
+     */
+    team_data_directory?: string;
+};
+
+export type TaskTraceDataImportResult = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Backup of the previous tasktrace-settings.json, when one existed.
+     */
+    readonly backup_settings?: string;
+    /**
+     * New protected data directory prepared from the old dataset.
+     */
+    readonly data_directory?: string;
+    /**
+     * Whether TaskTrace must be restarted before it uses the imported data.
+     */
+    readonly restart_required?: boolean;
+    /**
+     * New protected teamData directory prepared from the old dataset.
+     */
+    readonly team_data_directory?: string;
+};
+
 export type TaskTraceDraftState = {
     /**
      * A URL to the JSON Schema for this object.
@@ -2804,6 +2892,10 @@ export type TaskTraceTeamMemberAccessRequest = {
      * A URL to the JSON Schema for this object.
      */
     readonly $schema?: string;
+    /**
+     * The maximum access granted through the teamData Windows share.
+     */
+    access?: 'read' | 'write';
     /**
      * A canonical or resolvable Windows account name.
      */
@@ -3025,8 +3117,17 @@ export type TaskTraceTeamPermissionsRequest = {
 export type TaskTraceTeamRepositoryInfo = {
     candidates?: Array<string> | null;
     computer?: string;
+    /**
+     * Windows accounts with access to teamData and their maximum access level.
+     */
+    readonly members?: Array<TaskTraceTeamRepositoryMember> | null;
     path?: string;
     shared?: boolean;
+};
+
+export type TaskTraceTeamRepositoryMember = {
+    readonly access?: 'read' | 'write';
+    readonly account_name?: string;
 };
 
 export type TaskTraceTeamResolution = {
@@ -3055,7 +3156,7 @@ export type TaskTraceTeamStatus = {
     profiles?: Array<TaskTraceTeamMemberProfile> | null;
     repository?: TaskTraceTeamRepositoryInfo;
     /**
-     * Accounts with teamData read/write access that do not belong to any collaboration team.
+     * Accounts with teamData access that do not belong to any collaboration team.
      */
     readonly unassigned_members?: Array<string> | null;
     username?: string;
@@ -5171,6 +5272,17 @@ export type TaskRelationWritable = {
     relation_kind?: 'subtask' | 'parenttask' | 'related' | 'duplicateof' | 'duplicates' | 'blocking' | 'blocked' | 'precedes' | 'follows' | 'copiedfrom' | 'copiedto';
 };
 
+export type TaskTraceDataImportRequestWritable = {
+    /**
+     * Detected old TaskTrace data directory to copy into protected local storage.
+     */
+    data_directory?: string;
+    /**
+     * Optional old teamData directory to copy together with the personal data.
+     */
+    team_data_directory?: string;
+};
+
 export type TaskTraceDraftStateWritable = {
     content?: string;
     exists?: boolean;
@@ -5231,6 +5343,10 @@ export type TaskTraceTeamImportRequestWritable = {
 };
 
 export type TaskTraceTeamMemberAccessRequestWritable = {
+    /**
+     * The maximum access granted through the teamData Windows share.
+     */
+    access?: 'read' | 'write';
     /**
      * A canonical or resolvable Windows account name.
      */
@@ -5306,6 +5422,13 @@ export type TaskTraceTeamPermissionsRequestWritable = {
     task_id?: number;
 };
 
+export type TaskTraceTeamRepositoryInfoWritable = {
+    candidates?: Array<string> | null;
+    computer?: string;
+    path?: string;
+    shared?: boolean;
+};
+
 export type TaskTraceTeamResolveRequestWritable = {
     resolutions?: Array<TaskTraceTeamResolution> | null;
     share_id?: string;
@@ -5317,7 +5440,7 @@ export type TaskTraceTeamStatusWritable = {
     enabled?: boolean;
     notifications?: Array<TaskTraceTeamNotification> | null;
     profiles?: Array<TaskTraceTeamMemberProfile> | null;
-    repository?: TaskTraceTeamRepositoryInfo;
+    repository?: TaskTraceTeamRepositoryInfoWritable;
     username?: string;
 };
 
@@ -10700,6 +10823,61 @@ export type TasksTeamShareResponses = {
 };
 
 export type TasksTeamShareResponse = TasksTeamShareResponses[keyof TasksTeamShareResponses];
+
+export type TasktraceDataRecoveryDetectData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Optional old program or data directory to validate in addition to automatic detection.
+         */
+        path?: string;
+    };
+    url: '/tasktrace/data-recovery';
+};
+
+export type TasktraceDataRecoveryDetectErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataRecoveryDetectError = TasktraceDataRecoveryDetectErrors[keyof TasktraceDataRecoveryDetectErrors];
+
+export type TasktraceDataRecoveryDetectResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceDataDetection;
+};
+
+export type TasktraceDataRecoveryDetectResponse = TasktraceDataRecoveryDetectResponses[keyof TasktraceDataRecoveryDetectResponses];
+
+export type TasktraceDataRecoveryImportData = {
+    body: TaskTraceDataImportRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/import';
+};
+
+export type TasktraceDataRecoveryImportErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataRecoveryImportError = TasktraceDataRecoveryImportErrors[keyof TasktraceDataRecoveryImportErrors];
+
+export type TasktraceDataRecoveryImportResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceDataImportResult;
+};
+
+export type TasktraceDataRecoveryImportResponse = TasktraceDataRecoveryImportResponses[keyof TasktraceDataRecoveryImportResponses];
 
 export type TasktraceDraftDeleteData = {
     body?: never;
