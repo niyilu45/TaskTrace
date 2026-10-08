@@ -329,7 +329,7 @@ function validateBackupSettings() {
 	const retentionDays = Number(settings.retention_days)
 	const minimumBackups = Number(settings.minimum_backups)
 	if (!settings.directory?.trim()) throw new Error('请填写备份路径。')
-	if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(settings.daily_time || '')) throw new Error('请选择每天备份的时间。')
+	if (!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(settings.daily_time || '')) throw new Error('请选择每天备份的时间。')
 	if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) {
 		throw new Error('保留天数必须是 1 到 3650 之间的整数。')
 	}
