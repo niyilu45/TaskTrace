@@ -508,6 +508,12 @@ internal sealed partial class FloatingWindow {
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && !writing && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
+                Action discardOutstandingChanges=delegate{
+                    updateDiscarded=true;
+                    autoTimer.Stop();
+                    lastCached="";
+                    DeleteDraftCaches("outstanding",id);
+                };
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
                     try{
@@ -534,6 +540,7 @@ internal sealed partial class FloatingWindow {
                         var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注多图验收");
                         if(editorImages.Count!=2 || noteImages.Count!=2 || previews.Controls.OfType<Panel>().Count()!=4 || !Plain(shared.Items.Last().NoteHtml).Contains("备注修改验收"))throw new Exception("Saved outstanding or note images did not create every thumbnail");
                         await ShowImagePreview(editorImages[0],dialog,true);
+                        input.Text+="未保存内容验收";cacheOutstanding();if(!HasDraftCache("outstanding",id,draftKey()))throw new Exception("Outstanding discard test could not create a draft cache");discardOutstandingChanges();if(dirty() || HasDraftCache("outstanding",id,draftKey()))throw new Exception("Discarding outstanding changes left dirty state or a draft cache");
                         using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-outstanding-editor-test.png"));}
                     }catch(Exception e){verificationError=e;}finally{dialog.Close();}
                 };
@@ -544,7 +551,7 @@ internal sealed partial class FloatingWindow {
                     if(!dirty()){DeleteDraftCache("outstanding",id,draftKey());return;}
                     var choice=MessageBox.Show(dialog,"当前遗留事项尚未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
                     if(choice==DialogResult.Cancel){e.Cancel=true;return;}
-                    if(choice==DialogResult.No){DeleteDraftCaches("outstanding",id);return;}
+                    if(choice==DialogResult.No){discardOutstandingChanges();return;}
                     e.Cancel=true;closeSavePending=true;autoTimer.Stop();
                     dialog.BeginInvoke(new Action(async delegate{
                         bool saved=false;try{saved=await write(false);}catch(Exception error){feedback.Text=error.Message;}
@@ -553,7 +560,7 @@ internal sealed partial class FloatingWindow {
                         MessageBox.Show(dialog,feedback.Text,"遗留事项未保存",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                     }));
                 };
-                using(var updateRegistration=RegisterUnsavedUpdateEditor("遗留事项编辑窗口",dirty,async delegate{return !writing && await write(false);},delegate{updateDiscarded=true;DeleteDraftCaches("outstanding",id);autoTimer.Stop();}))
+                using(var updateRegistration=RegisterUnsavedUpdateEditor("遗留事项编辑窗口",dirty,async delegate{return !writing && await write(false);},discardOutstandingChanges))
                 try{await ShowEditorWindowAsync(dialog,owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
