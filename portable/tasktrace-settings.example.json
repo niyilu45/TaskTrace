@@ -1,1 +1,11 @@
-{"dataDirectory":"data","teamDataDirectory":"teamData"}
+{
+  "dataDirectory": "data",
+  "teamDataDirectory": "teamData",
+  "backup": {
+    "enabled": false,
+    "directory": "backups",
+    "interval_minutes": 60,
+    "retention_days": 30,
+    "minimum_backups": 3
+  }
+}

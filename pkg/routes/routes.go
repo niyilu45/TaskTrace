@@ -85,6 +85,7 @@ import (
 	"code.vikunja.io/api/pkg/routes/caldav"
 	"code.vikunja.io/api/pkg/routes/feeds"
 	vmiddleware "code.vikunja.io/api/pkg/routes/middleware"
+	"code.vikunja.io/api/pkg/tasktracedata"
 	"code.vikunja.io/api/pkg/version"
 	"code.vikunja.io/api/pkg/web/handler"
 	ws "code.vikunja.io/api/pkg/websocket"
@@ -492,6 +493,9 @@ func registerAPIRoutesV2(e *echo.Echo, a *echo.Group, noAuthRateLimit, refreshRa
 
 	// Resources self-register via init(); RegisterAll runs them all + AutoPatch.
 	apiv2.RegisterAll(api)
+	// Start local backups only for the live server. Canonical OpenAPI generation
+	// also runs RegisterAll and must never touch a user's data.
+	tasktracedata.StartBackupScheduler()
 	m, err := mcpmodule.New(api, corsOriginAllowed)
 	if err != nil {
 		panic(err)

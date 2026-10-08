@@ -30,6 +30,84 @@ func RegisterTaskTraceDataRecoveryRoutes(api huma.API) {
 		Path:        "/tasktrace/data-recovery/import",
 		Tags:        tags,
 	}, taskTraceDataRecoveryImport)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-data-backup-settings-read",
+		Summary:     "Read TaskTrace backup settings",
+		Description: "Returns the local automatic-backup schedule, destination, retention period, and minimum retained backup count.",
+		Method:      http.MethodGet,
+		Path:        "/tasktrace/data-recovery/backup/settings",
+		Tags:        tags,
+	}, taskTraceDataBackupSettingsRead)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-data-backup-settings-write",
+		Summary:     "Update TaskTrace backup settings",
+		Description: "Stores the local automatic-backup schedule and retention policy without changing current personal or team data.",
+		Method:      http.MethodPut,
+		Path:        "/tasktrace/data-recovery/backup/settings",
+		Tags:        tags,
+	}, taskTraceDataBackupSettingsWrite)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-data-backup-status",
+		Summary:     "Read TaskTrace backup status",
+		Description: "Returns the resolved destination, backup count, last result, and next scheduled check.",
+		Method:      http.MethodGet,
+		Path:        "/tasktrace/data-recovery/backup/status",
+		Tags:        tags,
+	}, taskTraceDataBackupStatus)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-data-backup-run",
+		Summary:     "Run a TaskTrace backup check",
+		Description: "Creates a consistent local backup of personal and team data when content changed, then removes expired backups while keeping the configured minimum count.",
+		Method:      http.MethodPost,
+		Path:        "/tasktrace/data-recovery/backup/run",
+		Tags:        tags,
+	}, taskTraceDataBackupRun)
+}
+
+func taskTraceDataBackupSettingsRead(ctx context.Context, _ *struct{}) (*singleBody[tasktracedata.TaskTraceBackupSettings], error) {
+	if err := requireTaskTraceDataRecovery(ctx); err != nil {
+		return nil, err
+	}
+	settings, err := tasktracedata.ReadBackupSettings()
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("read backup settings", err)
+	}
+	return &singleBody[tasktracedata.TaskTraceBackupSettings]{Body: &settings}, nil
+}
+
+func taskTraceDataBackupSettingsWrite(ctx context.Context, in *struct {
+	Body tasktracedata.TaskTraceBackupSettings
+}) (*singleBody[tasktracedata.TaskTraceBackupSettings], error) {
+	if err := requireTaskTraceDataRecovery(ctx); err != nil {
+		return nil, err
+	}
+	settings, err := tasktracedata.WriteBackupSettings(in.Body)
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("save backup settings", err)
+	}
+	return &singleBody[tasktracedata.TaskTraceBackupSettings]{Body: &settings}, nil
+}
+
+func taskTraceDataBackupStatus(ctx context.Context, _ *struct{}) (*singleBody[tasktracedata.TaskTraceBackupStatus], error) {
+	if err := requireTaskTraceDataRecovery(ctx); err != nil {
+		return nil, err
+	}
+	status, err := tasktracedata.BackupStatus()
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("read backup status", err)
+	}
+	return &singleBody[tasktracedata.TaskTraceBackupStatus]{Body: &status}, nil
+}
+
+func taskTraceDataBackupRun(ctx context.Context, _ *struct{}) (*singleBody[tasktracedata.TaskTraceBackupRunResult], error) {
+	if err := requireTaskTraceDataRecovery(ctx); err != nil {
+		return nil, err
+	}
+	result, err := tasktracedata.RunBackup()
+	if err != nil {
+		return nil, huma.Error422UnprocessableEntity("run data backup", err)
+	}
+	return &singleBody[tasktracedata.TaskTraceBackupRunResult]{Body: &result}, nil
 }
 
 func requireTaskTraceDataRecovery(ctx context.Context) error {

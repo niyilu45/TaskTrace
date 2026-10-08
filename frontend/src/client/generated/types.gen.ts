@@ -2668,6 +2668,103 @@ export type TaskReminder = {
     reminder?: string;
 };
 
+export type TaskTraceBackupRunResult = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Whether a new backup was created.
+     */
+    readonly created?: boolean;
+    /**
+     * Time when this backup check completed.
+     */
+    readonly created_at?: string;
+    /**
+     * SHA-256 content digest used to detect unchanged data.
+     */
+    readonly digest?: string;
+    /**
+     * New backup directory, or the configured backup root when creation was skipped.
+     */
+    readonly directory?: string;
+    /**
+     * Human-readable result of the backup check.
+     */
+    readonly message?: string;
+    /**
+     * Number of expired backup folders removed after the check.
+     */
+    readonly removed?: number;
+    /**
+     * Whether creation was skipped because the data was unchanged.
+     */
+    readonly skipped?: boolean;
+};
+
+export type TaskTraceBackupSettings = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory.
+     */
+    directory?: string;
+    /**
+     * Whether TaskTrace periodically checks for data changes and creates a backup.
+     */
+    enabled?: boolean;
+    /**
+     * Minutes between automatic backup checks.
+     */
+    interval_minutes?: number;
+    /**
+     * Minimum number of newest backups retained even when they are older than the retention period.
+     */
+    minimum_backups?: number;
+    /**
+     * Backups older than this many days may be removed.
+     */
+    retention_days?: number;
+};
+
+export type TaskTraceBackupStatus = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Number of valid backups currently stored in the configured directory.
+     */
+    readonly backup_count?: number;
+    /**
+     * Resolved absolute backup directory.
+     */
+    readonly directory?: string;
+    /**
+     * Creation time of the newest stored backup.
+     */
+    readonly last_backup_at?: string;
+    /**
+     * Time of the most recent automatic or manual backup check in this process.
+     */
+    readonly last_checked_at?: string;
+    /**
+     * Result of the most recent backup check.
+     */
+    readonly last_message?: string;
+    /**
+     * Estimated time of the next automatic check when scheduled backups are enabled.
+     */
+    readonly next_check_at?: string;
+    /**
+     * Whether a backup check is currently running.
+     */
+    readonly running?: boolean;
+};
+
 export type TaskTraceDataCandidate = {
     /**
      * Absolute directory containing the detected TaskTrace database and local files.
@@ -5270,6 +5367,29 @@ export type TaskRelationWritable = {
      * The kind of relation, describing the direction from the base task to the other task (e.g. subtask, blocking, related). The inverse relation is created automatically.
      */
     relation_kind?: 'subtask' | 'parenttask' | 'related' | 'duplicateof' | 'duplicates' | 'blocking' | 'blocked' | 'precedes' | 'follows' | 'copiedfrom' | 'copiedto';
+};
+
+export type TaskTraceBackupSettingsWritable = {
+    /**
+     * Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory.
+     */
+    directory?: string;
+    /**
+     * Whether TaskTrace periodically checks for data changes and creates a backup.
+     */
+    enabled?: boolean;
+    /**
+     * Minutes between automatic backup checks.
+     */
+    interval_minutes?: number;
+    /**
+     * Minimum number of newest backups retained even when they are older than the retention period.
+     */
+    minimum_backups?: number;
+    /**
+     * Backups older than this many days may be removed.
+     */
+    retention_days?: number;
 };
 
 export type TaskTraceDataImportRequestWritable = {
@@ -10853,6 +10973,131 @@ export type TasktraceDataRecoveryDetectResponses = {
 };
 
 export type TasktraceDataRecoveryDetectResponse = TasktraceDataRecoveryDetectResponses[keyof TasktraceDataRecoveryDetectResponses];
+
+export type TasktraceDataBackupRunData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backup/run';
+};
+
+export type TasktraceDataBackupRunErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupRunError = TasktraceDataBackupRunErrors[keyof TasktraceDataBackupRunErrors];
+
+export type TasktraceDataBackupRunResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceBackupRunResult;
+};
+
+export type TasktraceDataBackupRunResponse = TasktraceDataBackupRunResponses[keyof TasktraceDataBackupRunResponses];
+
+export type TasktraceDataBackupSettingsReadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backup/settings';
+};
+
+export type TasktraceDataBackupSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupSettingsReadError = TasktraceDataBackupSettingsReadErrors[keyof TasktraceDataBackupSettingsReadErrors];
+
+export type TasktraceDataBackupSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupSettings;
+};
+
+export type TasktraceDataBackupSettingsReadResponse = TasktraceDataBackupSettingsReadResponses[keyof TasktraceDataBackupSettingsReadResponses];
+
+export type PatchTasktraceDataBackupSettingsReadData = {
+    body: Array<JsonPatchOp> | null;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backup/settings';
+};
+
+export type PatchTasktraceDataBackupSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type PatchTasktraceDataBackupSettingsReadError = PatchTasktraceDataBackupSettingsReadErrors[keyof PatchTasktraceDataBackupSettingsReadErrors];
+
+export type PatchTasktraceDataBackupSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupSettings;
+};
+
+export type PatchTasktraceDataBackupSettingsReadResponse = PatchTasktraceDataBackupSettingsReadResponses[keyof PatchTasktraceDataBackupSettingsReadResponses];
+
+export type TasktraceDataBackupSettingsWriteData = {
+    body: TaskTraceBackupSettingsWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backup/settings';
+};
+
+export type TasktraceDataBackupSettingsWriteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupSettingsWriteError = TasktraceDataBackupSettingsWriteErrors[keyof TasktraceDataBackupSettingsWriteErrors];
+
+export type TasktraceDataBackupSettingsWriteResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupSettings;
+};
+
+export type TasktraceDataBackupSettingsWriteResponse = TasktraceDataBackupSettingsWriteResponses[keyof TasktraceDataBackupSettingsWriteResponses];
+
+export type TasktraceDataBackupStatusData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/data-recovery/backup/status';
+};
+
+export type TasktraceDataBackupStatusErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceDataBackupStatusError = TasktraceDataBackupStatusErrors[keyof TasktraceDataBackupStatusErrors];
+
+export type TasktraceDataBackupStatusResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceBackupStatus;
+};
+
+export type TasktraceDataBackupStatusResponse = TasktraceDataBackupStatusResponses[keyof TasktraceDataBackupStatusResponses];
 
 export type TasktraceDataRecoveryImportData = {
     body: TaskTraceDataImportRequestWritable;
