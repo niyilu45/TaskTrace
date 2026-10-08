@@ -8,6 +8,14 @@
 dist\TaskTrace-local\TaskTrace.exe
 ```
 
+如果要复制到另一台电脑，或覆盖另一套已经在使用的 TaskTrace，请使用安装器同时生成的安全复制包：
+
+```text
+dist\TaskTrace-program-files.zip
+```
+
+这个压缩包只包含程序文件，明确排除 `data`、`teamData`、`.cache` 和 `tasktrace-settings.json`。退出目标电脑上正在运行的 TaskTrace 后，将压缩包内容解压并覆盖到原程序目录；原数据库、团队协作仓库、草稿缓存和本机数据目录设置都会保留。不要把已经运行过的 `dist\TaskTrace-local` 整个目录复制到另一台电脑，因为其中可能带有构建电脑生成的空数据库和本机配置。
+
 ## 构建依赖
 
 - Windows 10/11 x64、Windows PowerShell 5.1 或 PowerShell 7

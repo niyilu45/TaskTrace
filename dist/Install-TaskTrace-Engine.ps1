@@ -387,12 +387,38 @@ try {
     foreach ($file in @('TaskTrace.exe', 'TaskTrace-server.exe', 'TaskTrace-floating.exe', 'Launch-TaskTrace.ps1', 'SOURCE-COMMIT.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $outputDirectory $file) -PathType Leaf)) { throw ('生成结果不完整，缺少 ' + $file) }
     }
+    $stage = '生成安全复制包'
+    $copyArchive = Join-Path $PSScriptRoot 'TaskTrace-program-files.zip'
+    $programFileNames = @(
+        'TaskTrace.exe',
+        'TaskTrace-updater.exe',
+        'Configure-TaskTrace.cmd',
+        'Configure-TaskTrace.ps1',
+        'tasktrace-settings.example.json',
+        'TaskTrace-server.exe',
+        'TaskTrace-floating.exe',
+        'Launch-TaskTrace.ps1',
+        'README.md',
+        'LICENSE',
+        'UPSTREAM-COMMIT.txt',
+        'SOURCE-COMMIT.txt',
+        'VERSION.txt'
+    )
+    $programFiles = @($programFileNames | ForEach-Object {
+        $programFile = Join-Path $outputDirectory $_
+        if (!(Test-Path -LiteralPath $programFile -PathType Leaf)) { throw ('无法生成安全复制包，缺少 ' + $_) }
+        $programFile
+    })
+    Compress-Archive -LiteralPath $programFiles -DestinationPath $copyArchive -Force
+    if (!(Test-Path -LiteralPath $copyArchive -PathType Leaf)) { throw '安全复制包生成失败。' }
     Write-InstallLine ''
     Write-InstallLine '免安装程序生成成功。' Green
-    Write-InstallLine ('程序位置：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
+    Write-InstallLine ('本机测试程序：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
+    Write-InstallLine ('复制到其他电脑请使用：' + $copyArchive) Green
+    Write-InstallLine '安全复制包不含 data、teamData、.cache 和 tasktrace-settings.json，覆盖程序目录时不会覆盖运行数据。' Yellow
     Write-InstallLine '运行程序不再需要 Node.js、pnpm、Go、GCC 或 C# 编译器。'
     Write-InstallLine ('详细记录：' + $logFile)
-    Show-InstallResult 'TaskTrace：生成成功' ("免安装程序已经生成。`r`n`r`n双击运行：`r`n" + (Join-Path $outputDirectory 'TaskTrace.exe') + "`r`n`r`n详细记录：" + $logFile)
+    Show-InstallResult 'TaskTrace：生成成功' ("免安装程序已经生成。`r`n`r`n本机测试：`r`n" + (Join-Path $outputDirectory 'TaskTrace.exe') + "`r`n`r`n复制或覆盖其他电脑的软件目录时，请解压并使用下面的安全复制包：`r`n" + $copyArchive + "`r`n`r`n该压缩包不含 data、teamData、.cache 和 tasktrace-settings.json。`r`n`r`n详细记录：" + $logFile)
     exit 0
 } catch {
     Write-InstallLine ''
