@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,17 +64,24 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 		return TaskTraceDataDetection{}, fmt.Errorf("resolve current team data directory: %w", err)
 	}
 
-	paths := knownCandidatePaths()
+	var paths []string
 	if strings.TrimSpace(extraPath) != "" {
 		manualPaths, manualErr := resolveCandidateDirectories(extraPath)
 		if manualErr != nil {
 			return TaskTraceDataDetection{}, manualErr
 		}
-		paths = append(paths, manualPaths...)
+		paths = manualPaths
+	} else {
+		for _, path := range knownCandidatePaths() {
+			if discovered, scanErr := resolveCandidateDirectories(path); scanErr == nil {
+				paths = append(paths, discovered...)
+			}
+		}
 	}
 
 	seen := map[string]bool{}
 	candidates := make([]TaskTraceDataCandidate, 0, len(paths))
+	var inspectionError error
 	for _, path := range paths {
 		candidatePath, candidateErr := canonicalDirectory(path)
 		if candidateErr != nil || samePath(candidatePath, currentData) {
@@ -87,7 +95,12 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 		candidate, inspectErr := inspectCandidate(candidatePath)
 		if inspectErr == nil {
 			candidates = append(candidates, candidate)
+		} else if inspectionError == nil {
+			inspectionError = inspectErr
 		}
+	}
+	if strings.TrimSpace(extraPath) != "" && len(candidates) == 0 && inspectionError != nil {
+		return TaskTraceDataDetection{}, fmt.Errorf("找到数据库但无法读取，请确认已完整复制 data 文件夹：%w", inspectionError) //nolint:gosmopolitan // Actionable local recovery message for the Chinese desktop UI.
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -99,34 +112,6 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 		CurrentTeamDataDirectory: currentTeam,
 		Candidates:               candidates,
 	}, nil
-}
-
-func resolveCandidateDirectories(path string) ([]string, error) {
-	if direct, err := resolveCandidateDirectory(path); err == nil {
-		return []string{direct}, nil
-	}
-	root, err := canonicalDirectory(strings.TrimSpace(os.ExpandEnv(path)))
-	if err != nil {
-		return nil, err
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, fmt.Errorf("read backup directory: %w", err)
-	}
-	candidates := make([]string, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), backupDirectoryPrefix) {
-			continue
-		}
-		dataDirectory := filepath.Join(root, entry.Name(), "data")
-		if _, inspectErr := inspectCandidate(dataDirectory); inspectErr == nil {
-			candidates = append(candidates, dataDirectory)
-		}
-	}
-	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no TaskTrace backups were found in %s", root)
-	}
-	return candidates, nil
 }
 
 func Import(request TaskTraceDataImportRequest) (TaskTraceDataImportResult, error) {
@@ -177,7 +162,7 @@ func Import(request TaskTraceDataImportRequest) (TaskTraceDataImportResult, erro
 		sourceTeam = sourceCandidate.TeamDataDirectory
 	}
 	if sourceTeam != "" {
-		sourceTeam, err = canonicalDirectory(sourceTeam)
+		sourceTeam, err = resolveTeamDataDirectory(sourceData, sourceTeam)
 		if err != nil {
 			return TaskTraceDataImportResult{}, fmt.Errorf("resolve old team data directory: %w", err)
 		}
@@ -226,7 +211,12 @@ func inspectCandidate(dataDirectory string) (TaskTraceDataCandidate, error) {
 		return TaskTraceDataCandidate{}, fmt.Errorf("candidate database %s is not a file", databasePath)
 	}
 
-	engine, err := xorm.NewEngine("sqlite3", "file:"+filepath.ToSlash(databasePath)+"?mode=ro&_busy_timeout=2000")
+	databaseURI := &url.URL{Scheme: "file", Path: filepath.ToSlash(databasePath)}
+	// Windows drive letters need the leading slash in a file URI; escape #, ? and spaces.
+	if filepath.VolumeName(databasePath) != "" && !strings.HasPrefix(databaseURI.Path, "/") {
+		databaseURI.Path = "/" + databaseURI.Path
+	}
+	engine, err := xorm.NewEngine("sqlite3", databaseURI.String()+"?mode=ro&_busy_timeout=2000")
 	if err != nil {
 		return TaskTraceDataCandidate{}, fmt.Errorf("open candidate database: %w", err)
 	}
@@ -240,7 +230,8 @@ func inspectCandidate(dataDirectory string) (TaskTraceDataCandidate, error) {
 		}
 	}
 
-	teamDirectory := filepath.Join(filepath.Dir(dataDirectory), "teamData")
+	dataBase, relative := dataLayout(dataDirectory)
+	teamDirectory := filepath.Join(filepath.Dir(dataBase), "teamData", relative)
 	if teamInfo, teamErr := os.Stat(teamDirectory); teamErr != nil || !teamInfo.IsDir() {
 		teamDirectory = ""
 	}
@@ -256,23 +247,21 @@ func inspectCandidate(dataDirectory string) (TaskTraceDataCandidate, error) {
 }
 
 func resolveCandidateDirectory(path string) (string, error) {
-	path = strings.TrimSpace(os.ExpandEnv(path))
-	if path == "" {
-		return "", errors.New("select an old TaskTrace data directory")
-	}
-	absolute, err := filepath.Abs(path)
+	absolute, err := detectionRoot(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve selected path: %w", err)
+		return "", err
 	}
-	if info, statErr := os.Stat(absolute); statErr == nil && !info.IsDir() && strings.EqualFold(filepath.Base(absolute), "tasktrace.db") {
-		absolute = filepath.Dir(absolute)
+	if info, statErr := os.Stat(filepath.Join(absolute, "tasktrace.db")); statErr == nil && info.Mode().IsRegular() {
+		return absolute, nil
 	}
-	for _, candidate := range []string{absolute, filepath.Join(absolute, "data")} {
-		if info, statErr := os.Stat(filepath.Join(candidate, "tasktrace.db")); statErr == nil && info.Mode().IsRegular() {
-			return canonicalDirectory(candidate)
-		}
+	candidates, err := resolveCandidateDirectories(absolute)
+	if err != nil {
+		return "", err
 	}
-	return "", fmt.Errorf("no tasktrace.db was found in %s or its data subdirectory", absolute)
+	if len(candidates) != 1 {
+		return "", errors.New("检测到多份数据，请在检测结果中选择要导入的具体数据目录") //nolint:gosmopolitan // Actionable local recovery message for the Chinese desktop UI.
+	}
+	return candidates[0], nil
 }
 
 func knownCandidatePaths() []string {

@@ -149,33 +149,36 @@
 		</dl>
 
 		<FormField
-			label="旧程序目录或旧 data 目录"
+			label="数据目录或程序目录"
 			layout="two-col"
 			class="mbs-4"
 		>
 			<FormInput
 				v-model="manualPath"
-				placeholder="例如 D:\旧版TaskTrace 或 D:\旧版TaskTrace\data"
+				placeholder="例如 D:\TaskTrace数据 或 D:\TaskTrace数据\data"
 			/>
 		</FormField>
 		<FormField
-			label="旧 teamData 目录（可选）"
+			label="配套 teamData 目录（可选）"
 			layout="two-col"
 			class="mbs-3"
 		>
 			<FormInput
 				v-model="manualTeamPath"
-				placeholder="仅在团队数据不位于旧程序旁时填写"
+				placeholder="data 与 teamData 分开存放时，填写团队数据路径"
 			/>
 		</FormField>
 		<p class="help mbe-4">
-			留空时自动检测当前程序附近的旧版本；也可以粘贴受影响电脑上的完整目录。
+			支持新版和旧版数据。可以粘贴单独复制的 data 文件夹或其上一级目录，也会检测其中的 imports 数据子目录。
+		</p>
+		<p class="help mbe-4">
+			配套的 teamData 放在 data 旁边时会自动匹配；分开存放时请填写上面的团队数据路径。留空检测路径时自动查找当前程序附近的数据。
 		</p>
 		<XButton
 			:loading="detecting"
 			@click="detect"
 		>
-			检测旧数据
+			检测数据
 		</XButton>
 	</Card>
 
@@ -185,7 +188,7 @@
 		class="mts-4"
 	>
 		<p v-if="candidates.length === 0">
-			没有检测到可导入的旧数据。请填写旧程序目录或旧 data 目录后重新检测。
+			没有检测到可导入的数据。请填写包含 tasktrace.db 的 data 文件夹或其上一级目录后重新检测；当前正在使用的数据不会重复列出。
 		</p>
 		<div
 			v-else
@@ -205,7 +208,7 @@
 				</div>
 				<XButton
 					variant="secondary"
-					@click="selectCandidate(candidate, 'old')"
+					@click="selectCandidate(candidate, 'data')"
 				>
 					导入此数据
 				</XButton>
@@ -219,7 +222,7 @@
 		class="mts-4"
 	>
 		<p>
-			旧数据已复制到新的纯数据目录，当前数据没有被覆盖。请从系统托盘退出 TaskTrace，再重新启动程序。
+			所选数据已复制到新的纯数据目录，当前数据没有被覆盖。请从系统托盘退出 TaskTrace，再重新启动程序。
 		</p>
 		<dl class="current-paths mbs-4">
 			<div><dt>个人数据</dt><dd>{{ imported.data_directory }}</dd></div>
@@ -238,7 +241,7 @@
 		@submit="importCandidate"
 	>
 		<template #header>
-			{{ selectedSource === 'backup' ? '从备份恢复' : '导入旧数据' }}
+			{{ selectedSource === 'backup' ? '从备份恢复' : '导入数据' }}
 		</template>
 		<template #text>
 			<p>程序会把选中的个人数据和团队数据复制到新的纯数据目录，并先备份当前配置。</p>
@@ -284,7 +287,7 @@ const importing = ref(false)
 const detection = ref<TaskTraceDataDetection>()
 const backupDetection = ref<TaskTraceDataDetection>()
 const selectedCandidate = ref<TaskTraceDataCandidate>()
-const selectedSource = ref<'backup' | 'old'>('old')
+const selectedSource = ref<'backup' | 'data'>('data')
 const imported = ref<TaskTraceDataImportResult>()
 const candidates = computed(() => detection.value?.candidates || [])
 const backupCandidates = computed(() => backupDetection.value?.candidates || [])
@@ -391,7 +394,7 @@ async function detectBackups() {
 	}
 }
 
-function selectCandidate(candidate: TaskTraceDataCandidate, source: 'backup' | 'old') {
+function selectCandidate(candidate: TaskTraceDataCandidate, source: 'backup' | 'data') {
 	selectedSource.value = source
 	selectedCandidate.value = candidate
 }
@@ -399,6 +402,8 @@ function selectCandidate(candidate: TaskTraceDataCandidate, source: 'backup' | '
 async function detect() {
 	if (detecting.value) return
 	detecting.value = true
+	detection.value = undefined
+	selectedCandidate.value = undefined
 	try {
 		const options = manualPath.value.trim() ? {query: {path: manualPath.value.trim()}} : undefined
 		const {data} = await tasktraceDataRecoveryDetect(options)
@@ -416,11 +421,11 @@ async function importCandidate() {
 	try {
 		const {data} = await tasktraceDataRecoveryImport({body: {
 			data_directory: selectedCandidate.value.data_directory,
-			team_data_directory: manualTeamPath.value.trim() || selectedCandidate.value.team_data_directory || '',
+			team_data_directory: (selectedSource.value === 'data' ? manualTeamPath.value.trim() : '') || selectedCandidate.value.team_data_directory || '',
 		}})
 		imported.value = data
 		selectedCandidate.value = undefined
-		success({message: selectedSource.value === 'backup' ? '备份已安全恢复。退出并重新启动 TaskTrace 后生效。' : '旧数据已安全复制。退出并重新启动 TaskTrace 后生效。'})
+		success({message: selectedSource.value === 'backup' ? '备份已安全恢复。退出并重新启动 TaskTrace 后生效。' : '数据已安全复制。退出并重新启动 TaskTrace 后生效。'})
 	} catch (cause) {
 		showError(cause)
 	} finally {

@@ -102,3 +102,46 @@ describe('data recovery backup time', () => {
 		expect(messages.error).toHaveBeenCalledWith(expect.objectContaining({message: '请选择每天备份的时间。'}))
 	})
 })
+
+describe('copied data detection', () => {
+	const candidate = {
+		data_directory: 'D:/copy/data/imports/selected',
+		team_data_directory: 'D:/copy/teamData/imports/selected',
+		tasks: 3,
+		projects: 1,
+		users: 1,
+	}
+
+	it('detects the entered copy path and imports the exact selected dataset', async () => {
+		const page = await mountSettings()
+		await page.get('input[placeholder*="TaskTrace数据"]').setValue('  D:/copy/data  ')
+		sdk.tasktraceDataRecoveryDetect.mockResolvedValue({data: {candidates: [candidate]}})
+		await clickAction(page, '检测数据')
+		expect(sdk.tasktraceDataRecoveryDetect).toHaveBeenLastCalledWith({query: {path: 'D:/copy/data'}})
+		expect(page.text()).toContain(candidate.data_directory)
+		expect(page.text()).toContain('支持新版和旧版数据')
+		expect(page.text()).not.toContain('检测旧数据')
+		await page.get('input[placeholder="data 与 teamData 分开存放时，填写团队数据路径"]').setValue('D:/separate/teamData')
+		sdk.tasktraceDataRecoveryImport.mockResolvedValue({data: {data_directory: 'new/data', team_data_directory: 'new/team', restart_required: true}})
+		await clickAction(page, '导入此数据')
+		page.findComponent({name: 'Modal'}).vm.$emit('submit')
+		await flushPromises()
+		expect(sdk.tasktraceDataRecoveryImport).toHaveBeenCalledExactlyOnceWith({body: {
+			data_directory: candidate.data_directory,
+			team_data_directory: 'D:/separate/teamData',
+		}})
+		expect(page.text()).toContain('所选数据已复制')
+	})
+
+	it('clears previous results when another copied directory cannot be read', async () => {
+		sdk.tasktraceDataRecoveryDetect.mockResolvedValue({data: {candidates: [candidate]}})
+		const page = await mountSettings()
+		expect(page.text()).toContain(candidate.data_directory)
+		const failure = new Error('找到数据库但无法读取，请确认已完整复制 data 文件夹')
+		sdk.tasktraceDataRecoveryDetect.mockRejectedValue(failure)
+		await clickAction(page, '检测数据')
+		expect(messages.error).toHaveBeenCalledWith(failure)
+		expect(page.text()).not.toContain(candidate.data_directory)
+		expect(sdk.tasktraceDataRecoveryImport).not.toHaveBeenCalled()
+	})
+})
