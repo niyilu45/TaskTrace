@@ -2709,6 +2709,10 @@ export type TaskTraceBackupSettings = {
      */
     readonly $schema?: string;
     /**
+     * Local time of day when the automatic backup runs, in HH:mm format.
+     */
+    daily_time?: string;
+    /**
      * Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory.
      */
     directory?: string;
@@ -2716,10 +2720,6 @@ export type TaskTraceBackupSettings = {
      * Whether TaskTrace periodically checks for data changes and creates a backup.
      */
     enabled?: boolean;
-    /**
-     * Minutes between automatic backup checks.
-     */
-    interval_minutes?: number;
     /**
      * Minimum number of newest backups retained even when they are older than the retention period.
      */
@@ -2790,6 +2790,10 @@ export type TaskTraceDataCandidate = {
      * Detected teamData directory next to the old program, when present.
      */
     readonly team_data_directory?: string;
+    /**
+     * Number of shared task groups in the selected team data repository.
+     */
+    readonly team_shares?: number;
     /**
      * Number of user rows found in the candidate database.
      */
@@ -5371,6 +5375,10 @@ export type TaskRelationWritable = {
 
 export type TaskTraceBackupSettingsWritable = {
     /**
+     * Local time of day when the automatic backup runs, in HH:mm format.
+     */
+    daily_time?: string;
+    /**
      * Directory where TaskTrace backup folders are stored. Relative paths are resolved from the portable program directory.
      */
     directory?: string;
@@ -5378,10 +5386,6 @@ export type TaskTraceBackupSettingsWritable = {
      * Whether TaskTrace periodically checks for data changes and creates a backup.
      */
     enabled?: boolean;
-    /**
-     * Minutes between automatic backup checks.
-     */
-    interval_minutes?: number;
     /**
      * Minimum number of newest backups retained even when they are older than the retention period.
      */
@@ -10949,9 +10953,13 @@ export type TasktraceDataRecoveryDetectData = {
     path?: never;
     query?: {
         /**
-         * Optional old program or data directory to validate in addition to automatic detection.
+         * Optional program or data directory to detect. Omit to scan nearby locations.
          */
         path?: string;
+        /**
+         * Optional separately copied teamData directory to validate and pair with the personal data.
+         */
+        team_path?: string;
     };
     url: '/tasktrace/data-recovery';
 };

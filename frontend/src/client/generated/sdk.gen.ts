@@ -3041,9 +3041,9 @@ export const tasksTeamShare = <ThrowOnError extends boolean = true>(options: Opt
 });
 
 /**
- * Detect old TaskTrace data
+ * Detect TaskTrace data
  *
- * Scans known local portable-app locations and optionally validates a supplied directory. The current live database is excluded.
+ * Scans current and legacy data layouts and validates an optional separate teamData directory. The current live database is excluded.
  */
 export const tasktraceDataRecoveryDetect = <ThrowOnError extends boolean = true>(options?: Options<TasktraceDataRecoveryDetectData, ThrowOnError>): RequestResult<TasktraceDataRecoveryDetectResponses, TasktraceDataRecoveryDetectErrors, ThrowOnError> => (options?.client ?? client).get<TasktraceDataRecoveryDetectResponses, TasktraceDataRecoveryDetectErrors, ThrowOnError>({
     security: [{

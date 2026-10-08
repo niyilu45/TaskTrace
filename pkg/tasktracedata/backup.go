@@ -303,8 +303,8 @@ func runBackup(now time.Time) (TaskTraceBackupRunResult, error) {
 	if err = writeFileAtomic(filepath.Join(staging, "backup-manifest.json"), manifestBytes, 0o600); err != nil {
 		return TaskTraceBackupRunResult{}, fmt.Errorf("write backup manifest: %w", err)
 	}
-	if err = os.Rename(staging, final); err != nil {
-		return TaskTraceBackupRunResult{}, fmt.Errorf("publish backup: %w", err)
+	if err = renameDataFile(staging, final); err != nil {
+		return TaskTraceBackupRunResult{}, fmt.Errorf("完成备份时无法重命名目录，请检查备份路径的写入权限或文件占用（当前数据和已有备份未更改）：%w", err) //nolint:gosmopolitan // Actionable Windows backup error for the local UI.
 	}
 	removed, pruneErr := pruneBackups(backupRoot, settings, now)
 	if pruneErr != nil {
@@ -346,7 +346,7 @@ func snapshotSQLite(source, destination string) error {
 	if _, err := os.Stat(source); err != nil {
 		return fmt.Errorf("read TaskTrace database: %w", err)
 	}
-	engine, err := xorm.NewEngine("sqlite3", "file:"+filepath.ToSlash(source)+"?_busy_timeout=10000")
+	engine, err := xorm.NewEngine("sqlite3", sqliteFileURI(source)+"?mode=ro&_busy_timeout=10000")
 	if err != nil {
 		return fmt.Errorf("open TaskTrace database for backup: %w", err)
 	}
@@ -579,22 +579,26 @@ func writeFileAtomic(path string, content []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, content, mode); err != nil {
+	file, err := os.CreateTemp(filepath.Dir(path), ".tasktrace-write-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err == nil {
-		return nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(temporary)
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	defer file.Close()
+	if err = file.Chmod(mode); err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		_ = os.Remove(temporary)
+	if _, err = file.Write(content); err != nil {
 		return err
 	}
-	return nil
+	if err = file.Sync(); err != nil {
+		return err
+	}
+	if err = file.Close(); err != nil {
+		return err
+	}
+	return renameDataFile(temporary, path)
 }
 
 func setBackupRunState(running bool, message string) {

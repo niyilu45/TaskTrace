@@ -16,8 +16,8 @@ func RegisterTaskTraceDataRecoveryRoutes(api huma.API) {
 	tags := []string{"tasktrace-data-recovery"}
 	Register(api, huma.Operation{
 		OperationID: "tasktrace-data-recovery-detect",
-		Summary:     "Detect old TaskTrace data",
-		Description: "Scans known local portable-app locations and optionally validates a supplied directory. The current live database is excluded.",
+		Summary:     "Detect TaskTrace data",
+		Description: "Scans current and legacy data layouts and validates an optional separate teamData directory. The current live database is excluded.",
 		Method:      http.MethodGet,
 		Path:        "/tasktrace/data-recovery",
 		Tags:        tags,
@@ -121,14 +121,15 @@ func requireTaskTraceDataRecovery(ctx context.Context) error {
 }
 
 func taskTraceDataRecoveryDetect(ctx context.Context, in *struct {
-	Path string `query:"path" doc:"Optional old program or data directory to validate in addition to automatic detection."`
+	Path     string `query:"path" doc:"Optional program or data directory to detect. Omit to scan nearby locations."`
+	TeamPath string `query:"team_path" doc:"Optional separately copied teamData directory to validate and pair with the personal data."`
 }) (*singleBody[tasktracedata.TaskTraceDataDetection], error) {
 	if err := requireTaskTraceDataRecovery(ctx); err != nil {
 		return nil, err
 	}
-	detection, err := tasktracedata.Detect(in.Path)
+	detection, err := tasktracedata.Detect(in.Path, in.TeamPath)
 	if err != nil {
-		return nil, huma.Error422UnprocessableEntity("detect old TaskTrace data", err)
+		return nil, huma.Error422UnprocessableEntity("检测数据失败", err) //nolint:gosmopolitan // Local recovery UI message.
 	}
 	return &singleBody[tasktracedata.TaskTraceDataDetection]{Body: &detection}, nil
 }

@@ -21,6 +21,7 @@ import (
 type TaskTraceDataCandidate struct {
 	DataDirectory     string    `json:"data_directory" readOnly:"true" doc:"Absolute directory containing the detected TaskTrace database and local files."`
 	TeamDataDirectory string    `json:"team_data_directory,omitempty" readOnly:"true" doc:"Detected teamData directory next to the old program, when present."`
+	TeamShares        int       `json:"team_shares" readOnly:"true" doc:"Number of shared task groups in the selected team data repository."`
 	DatabaseSize      int64     `json:"database_size" readOnly:"true" doc:"Size of tasktrace.db in bytes."`
 	ModifiedAt        time.Time `json:"modified_at" readOnly:"true" doc:"Last modification time of tasktrace.db."`
 	Tasks             int64     `json:"tasks" readOnly:"true" doc:"Number of task rows found in the candidate database."`
@@ -50,7 +51,7 @@ func Enabled() bool {
 	return packageRoot() != "" && dataRoot() != "" && teamDataRoot() != ""
 }
 
-func Detect(extraPath string) (TaskTraceDataDetection, error) {
+func Detect(extraPath string, selectedTeam ...string) (TaskTraceDataDetection, error) {
 	if !Enabled() {
 		return TaskTraceDataDetection{}, errors.New("TaskTrace local data recovery is unavailable")
 	}
@@ -94,6 +95,16 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 		seen[key] = true
 		candidate, inspectErr := inspectCandidate(candidatePath)
 		if inspectErr == nil {
+			if len(selectedTeam) > 0 && strings.TrimSpace(selectedTeam[0]) != "" {
+				candidate.TeamDataDirectory, err = resolveTeamDataDirectory(candidatePath, selectedTeam[0])
+				if err != nil {
+					return TaskTraceDataDetection{}, fmt.Errorf("检测配套团队数据失败：%w", err) //nolint:gosmopolitan // Explain which of the two recovery paths failed.
+				}
+			}
+			candidate.TeamShares, err = countTeamShares(candidate.TeamDataDirectory)
+			if err != nil {
+				return TaskTraceDataDetection{}, fmt.Errorf("检测团队数据失败：%w", err) //nolint:gosmopolitan // Distinguish a team repository error from a personal database error.
+			}
 			candidates = append(candidates, candidate)
 		} else if inspectionError == nil {
 			inspectionError = inspectErr
@@ -115,6 +126,8 @@ func Detect(extraPath string) (TaskTraceDataDetection, error) {
 }
 
 func Import(request TaskTraceDataImportRequest) (TaskTraceDataImportResult, error) {
+	backupRunMu.Lock()
+	defer backupRunMu.Unlock()
 	if !Enabled() {
 		return TaskTraceDataImportResult{}, errors.New("TaskTrace local data recovery is unavailable")
 	}
@@ -172,16 +185,19 @@ func Import(request TaskTraceDataImportRequest) (TaskTraceDataImportResult, erro
 	} else if err = os.MkdirAll(stagedTeam, 0o700); err != nil {
 		return TaskTraceDataImportResult{}, fmt.Errorf("prepare imported team data directory: %w", err)
 	}
+	if err = rebaseImportedTeamBindings(stagedData, stagedTeam, destinationTeam); err != nil {
+		return TaskTraceDataImportResult{}, fmt.Errorf("restore collaboration paths: %w", err)
+	}
 	if err = os.MkdirAll(filepath.Dir(destinationData), 0o700); err != nil {
 		return TaskTraceDataImportResult{}, fmt.Errorf("prepare protected data directory: %w", err)
 	}
 	if err = os.MkdirAll(filepath.Dir(destinationTeam), 0o700); err != nil {
 		return TaskTraceDataImportResult{}, fmt.Errorf("prepare protected team data directory: %w", err)
 	}
-	if err = os.Rename(stagedData, destinationData); err != nil {
+	if err = renameDataFile(stagedData, destinationData); err != nil {
 		return TaskTraceDataImportResult{}, fmt.Errorf("activate protected data directory: %w", err)
 	}
-	if err = os.Rename(stagedTeam, destinationTeam); err != nil {
+	if err = renameDataFile(stagedTeam, destinationTeam); err != nil {
 		_ = os.RemoveAll(destinationData)
 		return TaskTraceDataImportResult{}, fmt.Errorf("activate protected team data directory: %w", err)
 	}
@@ -211,12 +227,7 @@ func inspectCandidate(dataDirectory string) (TaskTraceDataCandidate, error) {
 		return TaskTraceDataCandidate{}, fmt.Errorf("candidate database %s is not a file", databasePath)
 	}
 
-	databaseURI := &url.URL{Scheme: "file", Path: filepath.ToSlash(databasePath)}
-	// Windows drive letters need the leading slash in a file URI; escape #, ? and spaces.
-	if filepath.VolumeName(databasePath) != "" && !strings.HasPrefix(databaseURI.Path, "/") {
-		databaseURI.Path = "/" + databaseURI.Path
-	}
-	engine, err := xorm.NewEngine("sqlite3", databaseURI.String()+"?mode=ro&_busy_timeout=2000")
+	engine, err := xorm.NewEngine("sqlite3", sqliteFileURI(databasePath)+"?mode=ro&_busy_timeout=2000")
 	if err != nil {
 		return TaskTraceDataCandidate{}, fmt.Errorf("open candidate database: %w", err)
 	}
@@ -244,6 +255,15 @@ func inspectCandidate(dataDirectory string) (TaskTraceDataCandidate, error) {
 		Projects:          counts[1],
 		Users:             counts[2],
 	}, nil
+}
+
+func sqliteFileURI(path string) string {
+	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(path)}
+	// Windows drive letters need a leading slash; escape #, ? and spaces.
+	if filepath.VolumeName(path) != "" && !strings.HasPrefix(uri.Path, "/") {
+		uri.Path = "/" + uri.Path
+	}
+	return uri.String()
 }
 
 func resolveCandidateDirectory(path string) (string, error) {
@@ -290,6 +310,8 @@ func knownCandidatePaths() []string {
 }
 
 func writeImportedSettings(dataDirectory, teamDirectory, stamp string) (string, error) {
+	backupSettingsMu.Lock()
+	defer backupSettingsMu.Unlock()
 	settingsPath := filepath.Join(packageRoot(), "tasktrace-settings.json")
 	settings := map[string]any{}
 	content, err := os.ReadFile(settingsPath)
@@ -312,21 +334,7 @@ func writeImportedSettings(dataDirectory, teamDirectory, stamp string) (string, 
 	if err != nil {
 		return backup, fmt.Errorf("encode imported TaskTrace settings: %w", err)
 	}
-	temporary := settingsPath + ".tmp"
-	if err = os.WriteFile(temporary, next, 0o600); err != nil {
-		return backup, fmt.Errorf("write imported TaskTrace settings: %w", err)
-	}
-	if err = os.Remove(settingsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(temporary)
-		return backup, fmt.Errorf("replace imported TaskTrace settings: %w", err)
-	}
-	if err = os.Rename(temporary, settingsPath); err != nil {
-		_ = os.Remove(temporary)
-		if backup != "" {
-			if content, backupErr := os.ReadFile(backup); backupErr == nil {
-				_ = os.WriteFile(settingsPath, content, 0o600)
-			}
-		}
+	if err = writeFileAtomic(settingsPath, next, 0o600); err != nil {
 		return backup, fmt.Errorf("activate imported TaskTrace settings: %w", err)
 	}
 	return backup, nil
@@ -388,7 +396,7 @@ func copyDirectory(source, destination string) error {
 		if closeInputErr != nil {
 			return closeInputErr
 		}
-		return os.Rename(temporary, target)
+		return renameDataFile(temporary, target)
 	})
 }
 

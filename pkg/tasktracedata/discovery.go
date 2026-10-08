@@ -85,8 +85,8 @@ func resolveCandidateDirectories(path string) ([]string, error) {
 				continue
 			}
 			name := strings.ToLower(entry.Name())
-			if name == "data" || name == "imports" || name == "current" || name == "tasktrace-local" || name == "dist" || name == "releases" || name == "backups" ||
-				strings.EqualFold(filepath.Base(directory), "imports") || strings.HasPrefix(name, strings.ToLower(backupDirectoryPrefix)) {
+			if name == "data" || name == "imports" || name == "storage" || name == "current" || name == "tasktrace-local" || name == "dist" || name == "releases" || name == "backups" ||
+				strings.EqualFold(filepath.Base(directory), "imports") || strings.EqualFold(filepath.Base(directory), "storage") || strings.HasPrefix(name, strings.ToLower(backupDirectoryPrefix)) {
 				queue = append(queue, filepath.Join(directory, entry.Name()))
 			}
 		}
@@ -107,9 +107,14 @@ func dataLayout(directory string) (base, relative string) {
 			base = ancestor
 			break
 		}
-		if strings.EqualFold(name, "imports") || strings.EqualFold(name, "current") {
+		if strings.EqualFold(name, "imports") || strings.EqualFold(name, "storage") {
 			base = filepath.Dir(ancestor)
 			break
+		}
+		// current can itself be inside imports/storage; keep looking for that
+		// outer container so the full relative path is preserved when pairing.
+		if strings.EqualFold(name, "current") {
+			base = filepath.Dir(ancestor)
 		}
 	}
 	relative, _ = filepath.Rel(base, directory)
@@ -134,6 +139,13 @@ func resolveTeamDataDirectory(dataDirectory, selected string) (string, error) {
 	}
 	if info, statErr := os.Stat(matched); statErr == nil && info.IsDir() {
 		return matched, nil
+	}
+	// A separately copied teamData can already be the active repository even
+	// when personal data still lives under imports/<stamp> or storage/<name>.
+	if count, countErr := countTeamShares(root); countErr != nil {
+		return "", countErr
+	} else if count > 0 {
+		return root, nil
 	}
 	if info, statErr := os.Stat(filepath.Join(root, "imports")); (statErr == nil && info.IsDir()) || strings.EqualFold(filepath.Base(root), "imports") {
 		return "", errors.New("所选 teamData 包含多份数据，但没有找到与所选个人数据对应的目录，请填写配套的具体团队数据目录")

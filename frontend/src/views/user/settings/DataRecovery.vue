@@ -121,6 +121,7 @@
 					<strong>{{ formatDate(candidate.modified_at) }}</strong>
 					<span>事项 {{ candidate.tasks || 0 }} · 项目 {{ candidate.projects || 0 }} · 用户 {{ candidate.users || 0 }}</span>
 					<span>{{ candidate.data_directory }}</span>
+					<span v-if="candidate.team_data_directory">团队数据：{{ candidate.team_data_directory }}（{{ candidate.team_shares || 0 }} 组协作任务）</span>
 				</div>
 				<XButton
 					variant="secondary"
@@ -172,7 +173,7 @@
 			支持新版和旧版数据。可以粘贴单独复制的 data 文件夹或其上一级目录，也会检测其中的 imports 数据子目录。
 		</p>
 		<p class="help mbe-4">
-			配套的 teamData 放在 data 旁边时会自动匹配；分开存放时请填写上面的团队数据路径。留空检测路径时自动查找当前程序附近的数据。
+			配套的 teamData 放在 data 旁边时会自动匹配；分开存放时请填写上面的团队数据路径，再点击“检测数据”同时检查两个目录。留空检测路径时自动查找当前程序附近的数据。
 		</p>
 		<XButton
 			:loading="detecting"
@@ -203,7 +204,7 @@
 					<strong>{{ candidate.data_directory || '未知目录' }}</strong>
 					<span>事项 {{ candidate.tasks || 0 }} · 项目 {{ candidate.projects || 0 }} · 用户 {{ candidate.users || 0 }}</span>
 					<span>数据库 {{ formatBytes(candidate.database_size) }} · {{ formatDate(candidate.modified_at) }}</span>
-					<span v-if="candidate.team_data_directory">团队数据：{{ candidate.team_data_directory }}</span>
+					<span v-if="candidate.team_data_directory">团队数据：{{ candidate.team_data_directory }}（{{ candidate.team_shares || 0 }} 组协作任务）</span>
 					<span v-else>未检测到配套的 teamData</span>
 				</div>
 				<XButton
@@ -247,14 +248,23 @@
 			<p>程序会把选中的个人数据和团队数据复制到新的纯数据目录，并先备份当前配置。</p>
 			<p><strong>不会覆盖或删除当前数据。</strong>导入完成后需要退出并重新启动 TaskTrace。</p>
 			<p class="data-path">
-				{{ selectedCandidate?.data_directory }}
+				个人数据：{{ selectedCandidate?.data_directory }}
+			</p>
+			<p
+				v-if="selectedCandidate?.team_data_directory"
+				class="data-path"
+			>
+				团队数据：{{ selectedCandidate.team_data_directory }}（{{ selectedCandidate.team_shares || 0 }} 组协作任务）
+			</p>
+			<p v-else>
+				本次未选择团队数据。如需一同恢复，请取消并填写配套 teamData 目录后重新检测。
 			</p>
 		</template>
 	</Modal>
 </template>
 
 <script setup lang="ts">
-import {computed, onMounted, ref} from 'vue'
+import {computed, onMounted, ref, watch} from 'vue'
 import Card from '@/components/misc/Card.vue'
 import FormField from '@/components/input/FormField.vue'
 import FormInput from '@/components/input/FormInput.vue'
@@ -291,6 +301,11 @@ const selectedSource = ref<'backup' | 'data'>('data')
 const imported = ref<TaskTraceDataImportResult>()
 const candidates = computed(() => detection.value?.candidates || [])
 const backupCandidates = computed(() => backupDetection.value?.candidates || [])
+
+watch([manualPath, manualTeamPath], () => {
+	detection.value = undefined
+	if (selectedSource.value === 'data') selectedCandidate.value = undefined
+})
 
 type DailyBackupSettings = TaskTraceBackupSettings & {daily_time?: string}
 const backupSettings = ref<DailyBackupSettings>({
@@ -381,6 +396,7 @@ async function runBackupNow() {
 async function detectBackups() {
 	if (backupDetecting.value) return
 	backupDetecting.value = true
+	backupDetection.value = undefined
 	try {
 		if (!backupStatus.value?.directory) await loadBackupSettings()
 		const path = backupStatus.value?.directory
@@ -404,10 +420,12 @@ async function detect() {
 	detecting.value = true
 	detection.value = undefined
 	selectedCandidate.value = undefined
+	const path = manualPath.value.trim()
+	const teamPath = manualTeamPath.value.trim()
 	try {
-		const options = manualPath.value.trim() ? {query: {path: manualPath.value.trim()}} : undefined
+		const options = path || teamPath ? {query: {...(path ? {path} : {}), ...(teamPath ? {team_path: teamPath} : {})}} : undefined
 		const {data} = await tasktraceDataRecoveryDetect(options)
-		detection.value = data
+		if (manualPath.value.trim() === path && manualTeamPath.value.trim() === teamPath) detection.value = data
 	} catch (cause) {
 		showError(cause)
 	} finally {
@@ -421,7 +439,7 @@ async function importCandidate() {
 	try {
 		const {data} = await tasktraceDataRecoveryImport({body: {
 			data_directory: selectedCandidate.value.data_directory,
-			team_data_directory: (selectedSource.value === 'data' ? manualTeamPath.value.trim() : '') || selectedCandidate.value.team_data_directory || '',
+			team_data_directory: selectedCandidate.value.team_data_directory || '',
 		}})
 		imported.value = data
 		selectedCandidate.value = undefined
