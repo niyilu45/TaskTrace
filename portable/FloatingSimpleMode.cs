@@ -364,6 +364,8 @@ internal sealed partial class FloatingWindow {
                 if(width!=350)using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-full-toolbar-"+width+"-test.png"));}
             }
             if(toolbar.Controls.Cast<Control>().Any(control=>new[]{"收起","展开","展开/收起","刷新","撤销","查看图片","新事项","按优先级"}.Contains(control.Text)))throw new Exception("A removed toolbar action is still visible");
+            // Keep the wide test window on-screen so mode switching does not intentionally clamp it.
+            var fullScreen=Screen.FromControl(this).WorkingArea;Location=new Point(fullScreen.Left+Math.Max(0,(fullScreen.Width-Width)/2),fullScreen.Top+Math.Max(0,(fullScreen.Height-Height)/2));
             var fullArea=Bounds;tasks.SelectedNode=normalLeaf;tasks.TopNode=owner;
             var top=tasks.TopNode;int loads=taskLoadVersion,reads=simpleOutstandingVersion;
             string context=TaskViewContext();
@@ -371,7 +373,7 @@ internal sealed partial class FloatingWindow {
             if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || child.Parent!=owner || !owner.IsExpanded || !child.IsExpanded || tasks.TopNode!=top || !simpleActions.Controls.Cast<Control>().Where(control=>control.Visible).SequenceEqual(new Control[]{restoreSimple,minimizeSimple}))throw new Exception("Simple layout switch changed shared tree state or exposed another footer action");
             SetSimpleMode(false);assertToolbar();
             if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || !child.IsExpanded || tasks.TopNode!=top || taskLoadVersion!=loads || simpleOutstandingVersion!=reads || TaskViewContext()!=context)throw new Exception("Mode switching refreshed data or lost shared tree state");
-            if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions");
+            if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions: expected="+fullArea+" actual="+Bounds+" action="+fullAddOutstanding.Visible+" screen="+Screen.FromRectangle(Bounds).WorkingArea);
             File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; task-tree expand/collapse; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts with one compact toolbar row and no clipped actions; removed toolbar actions absent; mode switches retained.");
             File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: simple mode exposes full and minimize buttons; task-tree expand/collapse and direct outstanding items remain usable; full and minimize remain available while busy; narrow footer fits; focus preserves viewport.");
         } finally {
