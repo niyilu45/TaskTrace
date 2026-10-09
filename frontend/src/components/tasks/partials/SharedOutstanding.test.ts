@@ -100,6 +100,63 @@ afterEach(() => {
 })
 
 describe('outstanding item images', () => {
+	it('opens a compact composer with a collapsed note without marking the empty draft dirty', async () => {
+		await open()
+		await startNew()
+		const header = wrapper.get('.outstanding-composer-header')
+		expect(header.get('label').text()).toBe('新增遗留事项')
+		expect(header.get<HTMLSelectElement>('select').element.value).toBe('7')
+		expect(header.get('button').text()).toBe('添加遗留事项')
+		expect(header.get('button').attributes('disabled')).toBeDefined()
+		expect(wrapper.find('input[type="file"]').exists()).toBe(false)
+		expect(wrapper.text()).not.toContain('选择图片')
+		expect(wrapper.find('.mock-note-editor').exists()).toBe(false)
+		expect(wrapper.get('.outstanding-note-toggle').attributes('aria-expanded')).toBe('false')
+		await click('添加遗留事项备注')
+		expect(wrapper.get('.outstanding-note-toggle').attributes('aria-expanded')).toBe('true')
+		expect(wrapper.find('.mock-note-editor').exists()).toBe(true)
+		await click('收起遗留事项备注')
+		const event = new Event('beforeunload', {cancelable: true})
+		window.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(false)
+		expect(create).not.toHaveBeenCalled()
+	})
+
+	it('preserves a collapsed note and its images when only text and priority change', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first"><p>Original</p><aside data-tasktrace-outstanding-note="true" hidden><p>Keep note</p><img src="/api/v1/tasks/42/attachments/8"></aside></li>')}]
+		await open()
+		await click('编辑')
+		expect(wrapper.find('.mock-note-editor').exists()).toBe(false)
+		await wrapper.get('textarea').setValue('Renamed')
+		await wrapper.get('select').setValue('3')
+		await click('保存修改')
+		expect(history[0].comment).toContain('Renamed')
+		expect(history[0].comment).toContain('data-priority="3"')
+		expect(history[0].comment).toContain('Keep note')
+		expect(history[0].comment).toContain('attachments/8')
+		expect(upload).not.toHaveBeenCalled()
+	})
+
+	it('retains a new note across collapse and item switches and saves it from the header', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first">Existing</li>')}]
+		await open()
+		await startNew()
+		await wrapper.get('textarea').setValue('New item')
+		await click('添加遗留事项备注')
+		await wrapper.get('.mock-note-editor').setValue('<p>New note</p>')
+		await click('收起遗留事项备注')
+		await click('查看/编辑遗留事项备注')
+		expect(wrapper.get<HTMLTextAreaElement>('.mock-note-editor').element.value).toBe('<p>New note</p>')
+		await click('编辑')
+		expect(wrapper.find('.mock-note-editor').exists()).toBe(false)
+		await click('返回新增事项')
+		expect(wrapper.find('.mock-note-editor').exists()).toBe(false)
+		await click('添加遗留事项')
+		expect(history[0].comment).toContain('New item')
+		expect(history[0].comment).toContain('New note')
+		expect(history[0].comment).toContain('Existing')
+	})
+
 	it('announces busy synchronously throughout image upload and releases it after saving', async () => {
 		let finishUpload!: (result: never) => void
 		upload.mockImplementationOnce(() => new Promise<never>(resolve => { finishUpload = resolve }))
@@ -191,6 +248,7 @@ describe('outstanding item images', () => {
 		history = [{id: 1, comment: shared('<li data-id="first" data-priority="5"><p>Original</p><aside data-tasktrace-outstanding-note="true" hidden><p>Old note</p></aside></li>')}]
 		await open()
 		await click('编辑')
+		await click('查看/编辑遗留事项备注')
 		await wrapper.get('.mock-note-editor').setValue('<p>My updated note</p>')
 		history[0].comment = shared('<li data-id="first" data-priority="2"><p>Renamed elsewhere</p><aside data-tasktrace-outstanding-note="true" hidden><p>Old note</p></aside></li>')
 		await click('保存修改')
@@ -235,6 +293,7 @@ describe('outstanding item images', () => {
 		expect(wrapper.get('.rendered-outstanding').text()).toBe('Visible item')
 		expect(wrapper.text()).not.toContain('Existing note')
 		await click('编辑')
+		await click('查看/编辑遗留事项备注')
 		const note = wrapper.get('.mock-note-editor')
 		expect((note.element as HTMLTextAreaElement).value).toContain('Existing note')
 		await note.setValue('<p>Updated note</p><p><img src="/api/v1/tasks/42/attachments/9"></p>')
@@ -263,6 +322,7 @@ describe('outstanding item images', () => {
 		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p></li>')}]
 		await open()
 		await click('编辑')
+		await click('添加遗留事项备注')
 		await wrapper.get('.mock-note-editor').setValue('<p>Note</p><img src="#" data-src="/api/v1/tasks/42/attachments/8"><p>between</p><img src="#" data-src="/api/v1/tasks/42/attachments/9">')
 		await click('保存修改')
 		expect(history[0].comment.match(/<img /g)).toHaveLength(2)
@@ -272,6 +332,7 @@ describe('outstanding item images', () => {
 		wrapper.unmount()
 		await open()
 		await click('编辑')
+		await click('查看/编辑遗留事项备注')
 		const note = (wrapper.get('.mock-note-editor').element as HTMLTextAreaElement).value
 		expect(note.match(/<img /g)).toHaveLength(2)
 	})
@@ -343,6 +404,7 @@ describe('outstanding item images', () => {
 		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p><aside data-tasktrace-outstanding-note="true" hidden><P class="editor-paragraph" style="margin: 0" contenteditable="true">Existing note</P></aside></li>')}]
 		await open()
 		await click('编辑')
+		await click('查看/编辑遗留事项备注')
 		const opened = new Event('beforeunload', {cancelable: true})
 		window.dispatchEvent(opened)
 		expect(opened.defaultPrevented).toBe(false)

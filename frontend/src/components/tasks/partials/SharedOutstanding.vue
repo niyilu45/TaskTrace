@@ -129,8 +129,37 @@
 			class="outstanding-composer"
 			:aria-busy="busy"
 		>
-			<div class="outstanding-actions">
+			<div class="outstanding-composer-header">
 				<label :for="`outstanding-text-${taskId}`">{{ activeId ? activeIndex >= 0 ? `编辑第 ${activeIndex + 1} 条遗留事项` : '原遗留事项已移除或移动' : '新增遗留事项' }}</label>
+				<select
+					:id="`outstanding-priority-${taskId}`"
+					v-model.number="draft.priority"
+					class="select outstanding-priority-select"
+					aria-label="遗留事项优先级（0 最高，9 最低）"
+					title="优先级（0 最高，9 最低）"
+					:disabled="blocked"
+				>
+					<option
+						v-for="value in 10"
+						:key="value - 1"
+						:value="value - 1"
+					>
+						P{{ value - 1 }}
+					</option>
+				</select>
+				<button
+					type="button"
+					class="button is-primary is-small"
+					:disabled="blocked || !canSave"
+					@click="save"
+				>
+					{{ busy ? '正在保存…' : activeId ? '保存修改' : '添加遗留事项' }}
+				</button>
+			</div>
+			<div
+				v-if="activeId"
+				class="outstanding-actions"
+			>
 				<button
 					v-if="activeId && activeIndex < 0 && !loading"
 					type="button"
@@ -141,7 +170,6 @@
 					另存为新遗留事项
 				</button>
 				<button
-					v-if="activeId"
 					type="button"
 					class="button is-small"
 					:disabled="blocked"
@@ -160,31 +188,11 @@
 				:aria-describedby="`outstanding-hint-${taskId}`"
 				:disabled="blocked"
 			/>
-			<label
-				class="outstanding-priority-field"
-				:for="`outstanding-priority-${taskId}`"
-			>
-				<span>优先级（0 最高，9 最低）</span>
-				<select
-					:id="`outstanding-priority-${taskId}`"
-					v-model.number="draft.priority"
-					class="select"
-					:disabled="blocked"
-				>
-					<option
-						v-for="value in 10"
-						:key="value - 1"
-						:value="value - 1"
-					>
-						{{ value - 1 }}
-					</option>
-				</select>
-			</label>
 			<p
 				:id="`outstanding-hint-${taskId}`"
 				class="outstanding-hint"
 			>
-				在此处按 Ctrl+V 粘贴图片，或选择图片文件；保存后所有日期共享。
+				可按 Ctrl+V 粘贴图片；保存后所有日期共享。
 			</p>
 			<div
 				v-if="draft.images.length"
@@ -213,7 +221,21 @@
 					</button>
 				</figure>
 			</div>
-			<div class="outstanding-note-editor">
+			<button
+				type="button"
+				class="button is-small outstanding-note-toggle"
+				:aria-expanded="noteExpanded"
+				:aria-controls="`outstanding-note-panel-${taskId}`"
+				:disabled="blocked"
+				@click="noteExpanded = !noteExpanded"
+			>
+				{{ noteExpanded ? '收起遗留事项备注' : isEditorContentEmpty(draft.note) ? '添加遗留事项备注' : '查看/编辑遗留事项备注' }}
+			</button>
+			<div
+				v-if="noteExpanded"
+				:id="`outstanding-note-panel-${taskId}`"
+				class="outstanding-note-editor"
+			>
 				<label :for="`outstanding-note-${taskId}`">备注（仅在编辑窗口显示）</label>
 				<p>备注不会出现在悬浮窗事项列表中。可直接粘贴图片，图片会嵌入备注正文。</p>
 				<div :id="`outstanding-note-${taskId}`">
@@ -231,35 +253,6 @@
 				<p class="outstanding-hint">
 					备注内有 {{ noteImageCount }} 张图片。自动保存只缓存到 .cache，点击保存后才会正式提交。
 				</p>
-			</div>
-			<div class="outstanding-actions">
-				<input
-					ref="fileInput"
-					class="outstanding-file-input"
-					type="file"
-					accept="image/*"
-					multiple
-					:disabled="blocked"
-					tabindex="-1"
-					aria-label="选择遗留事项图片"
-					@change="chooseImages"
-				>
-				<button
-					type="button"
-					class="button"
-					:disabled="blocked"
-					@click="fileInput?.click()"
-				>
-					选择图片
-				</button>
-				<button
-					type="button"
-					class="button is-primary"
-					:disabled="blocked || !canSave"
-					@click="save"
-				>
-					{{ busy ? '正在保存…' : activeId ? '保存修改' : '添加遗留事项' }}
-				</button>
 			</div>
 		</div>
 		<p
@@ -313,8 +306,8 @@ const items = ref<OutstandingItem[]>([])
 const drafts = reactive(new Map<string, Draft>())
 const activeId = ref('')
 const showComposer = ref(false)
+const noteExpanded = ref(false)
 const textInput = ref<HTMLTextAreaElement>()
-const fileInput = ref<HTMLInputElement>()
 const busy = ref(false)
 const noteUploading = ref(false)
 watch(busy, value => emit('busy', value), {flush: 'sync'})
@@ -387,6 +380,7 @@ async function selectItem(id: string) {
 	if (!drafts.has(`${props.taskId}:${id}`)) await restoreDraft(id)
 	activeId.value = id
 	showComposer.value = true
+	noteExpanded.value = false
 	await nextTick()
 	textInput.value?.focus()
 }
@@ -545,12 +539,6 @@ function pasteImages(event: ClipboardEvent) {
 	event.preventDefault()
 	event.stopPropagation()
 	addImages(files)
-}
-
-function chooseImages(event: Event) {
-	const input = event.target as HTMLInputElement
-	addImages(Array.from(input.files || []))
-	input.value = ''
 }
 
 function removeImage(index: number) {
@@ -809,13 +797,23 @@ onBeforeUnmount(() => {
 	line-height: 1.6;
 }
 
-.outstanding-priority-field {
+.outstanding-composer-header {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	gap: .75rem;
+	gap: .5rem;
+	min-inline-size: 0;
 
-	.select { inline-size: 7rem; }
+	label {
+		min-inline-size: 0;
+		margin: 0;
+	}
+
+	.outstanding-priority-select {
+		flex: 0 0 auto;
+		inline-size: 4rem;
+	}
+
+	.button { flex: 0 0 auto; }
 }
 
 .is-completed .readonly-rich-text {
@@ -863,6 +861,8 @@ onBeforeUnmount(() => {
 	p { margin: 0; }
 }
 
+.outstanding-note-toggle { justify-self: start; }
+
 .outstanding-actions {
 	display: flex;
 	align-items: center;
@@ -871,7 +871,6 @@ onBeforeUnmount(() => {
 }
 
 .outstanding-hint { font-size: .875rem; }
-.outstanding-file-input { display: none; }
 
 .outstanding-images {
 	display: flex;
