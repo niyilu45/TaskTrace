@@ -336,8 +336,10 @@ internal sealed partial class FloatingWindow {
             if(wrappedImageBounds.Bottom!=wrappedPlainBounds.Top)throw new Exception("Wrapped rows contain an unexpected blank line");
             if(Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Wrapped text changed the task font size");
             var prefix=taskSurface.PrefixBounds(imageLeaf);var image=taskSurface.ImageBounds(imageLeaf);var reminder=taskSurface.ReminderBounds(imageLeaf);var priority=taskSurface.PriorityBounds(imageLeaf);var title=taskSurface.TitleBounds(imageLeaf);
-            if(prefix.IsEmpty || image.IsEmpty || reminder.IsEmpty || priority.IsEmpty || title.IsEmpty || prefix.Right>=image.Left || image.Right>=reminder.Left || reminder.Right>=priority.Left || priority.Right>=title.Left)throw new Exception("Sequence, image, reminder, priority, and title spacing overlap");
-            if(priority.Top!=title.Top || reminder.Top!=priority.Top || image.Top!=reminder.Top || prefix.Top!=image.Top)throw new Exception("Reminder or priority text is vertically misaligned");
+            bool stackedTitle=title.Top>priority.Top;
+            if(prefix.IsEmpty || image.IsEmpty || reminder.IsEmpty || priority.IsEmpty || title.IsEmpty || prefix.Right>=image.Left || image.Right>=reminder.Left || reminder.Right>=priority.Left ||
+                (stackedTitle?(title.Left!=prefix.Left || title.Top<priority.Bottom):priority.Right>=title.Left))throw new Exception("Sequence, image, reminder, priority, and title spacing overlap: prefix="+prefix+" image="+image+" reminder="+reminder+" priority="+priority+" title="+title);
+            if((!stackedTitle && priority.Top!=title.Top) || reminder.Top!=priority.Top || image.Top!=reminder.Top || prefix.Top!=image.Top)throw new Exception("Reminder or priority text is vertically misaligned");
             using(var bitmap=new Bitmap(Width,Height)){DrawToBitmap(bitmap,new Rectangle(Point.Empty,Size));bitmap.Save(Path.Combine(data,"floating-variable-rows-full-test.png"));}
             SetSimpleMode(true);Size=new Size(260,430);taskSurface.Rebuild(false);taskSurface.Update();
             if(taskSurface.NodeBounds(longNode).Height<=taskSurface.NodeBounds(shortNode).Height || Math.Abs(tasks.DisplayFont(shortNode).SizeInPoints-tasks.DisplayFont(longNode).SizeInPoints)>.01f)throw new Exception("Simple mode did not retain the shared variable-row renderer and font size");
