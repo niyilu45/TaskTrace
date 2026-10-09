@@ -44,7 +44,9 @@ try {
         'tasktrace-settings.json', 'data\tasktrace.db', 'data\tasktrace.db-wal', 'data\tasktrace.db-shm',
         'data\files\outstanding-note.png', 'data\team-sync.json', 'data\storage\original\tasktrace.db',
         'teamData\storage\shared\manifest.json', 'teamData\storage\shared\members\alice.json',
-        'teamData\storage\shared\attachments\picture.png', '.cache\outstanding.json', 'backups\previous\data\tasktrace.db', 'personal-note.txt'
+        'teamData\storage\shared\attachments\picture.png', '.cache\outstanding.json', 'backups\previous\data\tasktrace.db', 'personal-note.txt',
+        'data\team-sync-recovery\checkpoint.json', 'data\imports\restored\tasktrace.db',
+        'data\imports\restored\tasktrace.db-wal', 'teamData\imports\restored\shares\task\manifest.json'
     )
     foreach ($name in $protected) {
         Write-TestFile (Join-Path $target $name) ('saved data: ' + $name)

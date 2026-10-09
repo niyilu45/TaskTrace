@@ -61,6 +61,7 @@ func GetTables() []interface{} {
 		&TaskAttachment{},
 		&TaskComment{},
 		&TaskTraceUndoEntry{},
+		&TaskTraceTeamSyncCheckpoint{},
 		&Bucket{},
 		&UnsplashPhoto{},
 		&SavedFilter{},
