@@ -1701,7 +1701,37 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 	}
 	if strings.HasPrefix(record.Field, "outstanding:") {
 		binding.Base[record.NodeID] = base
-		return taskTraceTeamUpsertOutstanding(s, a, taskID, base.Outstanding)
+		// The baseline may predate items saved since the last sync or included
+		// in a restored backup. Resolve only the selected item in the live list;
+		// replacing the whole list with the baseline silently loses those saves.
+		list, err := taskTraceReadOutstanding(s, taskID)
+		if err != nil {
+			return err
+		}
+		id := strings.TrimPrefix(record.Field, "outstanding:")
+		index := taskTraceFindItem(list.items, id)
+		if index >= 0 {
+			if value == "" {
+				list.items = append(list.items[:index], list.items[index+1:]...)
+			} else {
+				list.items[index].content = value
+			}
+		} else if value != "" {
+			list.items = append(list.items, taskTraceOutstandingItem{id: id, content: value})
+		}
+		if len(list.items) == 0 {
+			return taskTraceTeamUpsertOutstanding(s, a, taskID, "")
+		}
+		doer, err := user.GetFromAuth(a)
+		if err != nil {
+			return err
+		}
+		task, err := GetTaskByIDSimple(s, taskID)
+		if err != nil {
+			return err
+		}
+		_, err = taskTraceWriteOutstanding(s, a, doer, task, list)
+		return err
 	}
 	stored, err := GetTaskByIDSimple(s, taskID)
 	if err != nil {
@@ -1714,11 +1744,16 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 			base.Status = TaskStatusTodo
 		}
 	}
-	if record.Field != "description" {
-		base.Description = stored.Description
-	}
 	binding.Base[record.NodeID] = base
-	return taskTraceTeamApplyTaskFields(s, a, taskID, base.Title, base.Description, base.Done, base.Status)
+	switch record.Field {
+	case "title":
+		stored.Title = base.Title
+	case "description":
+		stored.Description = base.Description
+	case "done", "status":
+		stored.Done, stored.Status = base.Done, base.Status
+	}
+	return taskTraceTeamApplyTaskFields(s, a, taskID, stored.Title, stored.Description, stored.Done, stored.Status)
 }
 
 func taskTraceTeamApplyPendingResolutions(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, records map[string]taskTraceTeamResolutionRecord) error {
@@ -1830,7 +1865,23 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 	if err := s.Where("task_id = ?", taskID).Find(&local); err != nil {
 		return err
 	}
-	byID, duplicates := taskTraceTeamLocalCommentsByID(binding, nodeID, actor, local)
+	// Outstanding lists are merged per item above, never through the ordinary
+	// comment stream. Legacy snapshots (including tombstones without a body)
+	// must not recreate, replace, or delete the canonical list afterwards.
+	protected := map[string]bool{}
+	ordinary := make([]*TaskComment, 0, len(local))
+	for _, comment := range local {
+		if !taskTraceTeamIsOutstanding(comment.Comment) {
+			ordinary = append(ordinary, comment)
+			continue
+		}
+		id := taskTraceTeamCommentID(binding.ShareID, nodeID, comment, actor)
+		if marker, ok := taskTraceTeamReadMarker(comment.Comment); ok {
+			id = marker.ID
+		}
+		protected[id] = true
+	}
+	byID, duplicates := taskTraceTeamLocalCommentsByID(binding, nodeID, actor, ordinary)
 	for _, duplicate := range duplicates {
 		if _, err := s.ID(duplicate.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
 			return err
@@ -1838,6 +1889,9 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 	}
 	sort.Slice(remote, func(i, j int) bool { return remote[i].Created.Before(remote[j].Created) })
 	for _, shared := range remote {
+		if protected[shared.ID] || taskTraceTeamIsOutstanding(shared.Body) {
+			continue
+		}
 		if shared.Deleted {
 			if existing := byID[shared.ID]; existing != nil && !existing.Updated.After(shared.Updated) {
 				if _, err := s.ID(existing.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
@@ -2237,6 +2291,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	}
 	mergedBase := taskTraceTeamCopyBase(manifest.Base)
 	conflicts := []TaskTraceTeamConflict{}
+	unresolvedBases := map[string]map[string]string{}
 	for node, taskID := range binding.NodeTasks {
 		if !taskTraceTeamCan(&manifest, node, "", actor, false) {
 			continue
@@ -2262,6 +2317,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		title, description, status := base.Title, base.Description, base.Status
 		fields := []string{"title", "description", "status"}
 		outstandingItems, outstandingOrder := taskTraceTeamOutstandingItems(base.Outstanding)
+		localOutstandingConflicts := map[string]string{}
 		outstandingIDs := map[string]bool{}
 		for id := range outstandingItems {
 			outstandingIDs[id] = true
@@ -2292,6 +2348,14 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			if conflict {
 				if !strings.HasPrefix(field, "outstanding:") || taskTraceTeamCan(&manifest, node, strings.TrimPrefix(field, "outstanding:"), actor, false) {
 					conflicts = append(conflicts, TaskTraceTeamConflict{ID: taskTraceTeamConflictID(binding.ShareID, node, field, options), ShareID: binding.ShareID, NodeID: node, TaskID: taskID, TaskTitle: stored.Title, Field: field, Base: taskTraceTeamBaseValue(base, field), Options: options})
+				}
+				if hasLocalTask && strings.HasPrefix(field, "outstanding:") {
+					id := strings.TrimPrefix(field, "outstanding:")
+					localOutstandingConflicts[id] = taskTraceTeamCanonicalFieldValue(localTask, field, taskTraceTeamFieldValue(localTask, field))
+					if unresolvedBases[node] == nil {
+						unresolvedBases[node] = map[string]string{}
+					}
+					unresolvedBases[node][field] = taskTraceTeamCanonicalFieldValue(localTask, field, taskTraceTeamBaseValue(local.Base[node], field))
 				}
 				continue
 			}
@@ -2330,6 +2394,18 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		// Visibility affects only this member's local list, never the shared
 		// merge baseline. Otherwise a restricted reader deletes others' items.
 		visibleItems, visibleOrder := taskTraceTeamOutstandingItems(canonicalOutstanding)
+		// A conflict is not a deletion. Keep this member's saved version visible
+		// until a choice is made, without publishing it as the shared baseline.
+		for id, value := range localOutstandingConflicts {
+			if value == "" {
+				delete(visibleItems, id)
+			} else {
+				visibleItems[id] = value
+			}
+		}
+		if len(localOutstandingConflicts) > 0 {
+			visibleOrder = outstandingOrder
+		}
 		for id := range visibleItems {
 			if !taskTraceTeamCan(&manifest, node, id, actor, false) {
 				delete(visibleItems, id)
@@ -2378,6 +2454,15 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		mergedBase[node] = merged
 	}
 	binding.Base = taskTraceTeamCopyBase(mergedBase)
+	for node, fields := range unresolvedBases {
+		base := binding.Base[node]
+		for field, value := range fields {
+			// Keep the edit's original baseline as well; otherwise the next poll
+			// would misinterpret it as a new edit and silently settle the conflict.
+			taskTraceTeamSetBaseValue(&base, field, value)
+		}
+		binding.Base[node] = base
+	}
 	if manifestBaseChanged {
 		manifest.Base = taskTraceTeamCopyBase(mergedBase)
 		manifest.Updated = time.Now().UTC()
