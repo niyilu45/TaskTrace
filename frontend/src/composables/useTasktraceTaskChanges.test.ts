@@ -2,10 +2,10 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {effectScope, nextTick, ref} from 'vue'
 import {useTasktraceTaskChanges} from './useTasktraceTaskChanges'
 
-const socket = vi.hoisted(() => ({callback: undefined as undefined | ((message: unknown) => void), unsubscribe: vi.fn()}))
+const socket = vi.hoisted(() => ({callback: undefined as undefined | ((message: unknown) => void), unsubscribe: vi.fn(), authenticated: undefined as undefined | ReturnType<typeof ref<boolean>>}))
 vi.mock('./useWebSocket', async () => {
  const {ref} = await import('vue')
- return {useWebSocket: () => ({authenticated: ref(true), subscribe: (_: string, callback: (message: unknown) => void) => {socket.callback = callback; return socket.unsubscribe}})}
+ return {useWebSocket: () => ({authenticated: socket.authenticated = ref(true), subscribe: (_: string, callback: (message: unknown) => void) => {socket.callback = callback; return socket.unsubscribe}})}
 })
 let scope: ReturnType<typeof effectScope>
 beforeEach(() => {vi.useFakeTimers(); scope = effectScope(); vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)})
@@ -47,4 +47,21 @@ describe('committed task refresh', () => {
   expect(refresh).toHaveBeenCalledTimes(2)
   expect(socket.unsubscribe).toHaveBeenCalled()
  })
+})
+
+
+it('keeps distinct task and relation changes through retries and reconnects', async () => {
+ const refresh = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true)
+ scope.run(() => useTasktraceTaskChanges(refresh, () => true))
+ changed(1); changed(1)
+ socket.callback?.({data: {task_id: 1, project_id: 1, related_task_id: 2}})
+ await vi.advanceTimersByTimeAsync(350)
+ expect(refresh.mock.calls[0][0]).toHaveLength(2)
+ changed(3)
+ await vi.advanceTimersByTimeAsync(3000)
+ expect(refresh.mock.calls[1][0].map((change: {task_id: number}) => change.task_id).sort()).toEqual([1, 1, 3])
+ socket.authenticated!.value = false; await nextTick()
+ socket.authenticated!.value = true; await nextTick()
+ await vi.advanceTimersByTimeAsync(350)
+ expect(refresh).toHaveBeenLastCalledWith(null)
 })

@@ -1,4 +1,4 @@
-import type {InjectionKey} from 'vue'
+import {reactive, ref, type InjectionKey} from 'vue'
 import {taskCommentsList, type TaskComment} from '@/client/generated'
 import {queueProgressRead} from '@/helpers/projectProgress'
 
@@ -13,17 +13,25 @@ export function isProgressReadCancelled(error: unknown) {
 	return error instanceof ProgressReadCancelled
 }
 
-// One reader belongs to one display view. A refresh clears it, so comment edits
-// are re-read even when the task timestamp and comment count did not change.
+// Share reads within a display view. Live updates invalidate only affected tasks;
+// a manual refresh/reconnect clears all histories, including same-count edits.
 export function createProjectProgressHistory() {
 	const reads = new Map<number, Promise<TaskComment[]>>()
-	let generation = 0
+	const generation = ref(0)
+	const revisions = reactive(new Map<number, number>())
+	const revisionFor = (taskId: number) => `${generation.value}:${revisions.get(taskId) || 0}`
+	function invalidate(taskIds: Iterable<number>) {
+		for (const id of new Set(taskIds)) {
+			reads.delete(id)
+			revisions.set(id, (revisions.get(id) || 0) + 1)
+		}
+	}
 	function read(taskId: number): Promise<TaskComment[]> {
 		const existing = reads.get(taskId)
 		if (existing) return existing
-		const version = generation
+		const version = revisionFor(taskId)
 		const ensureCurrent = () => {
-			if (version !== generation) throw new ProgressReadCancelled()
+			if (version !== revisionFor(taskId)) throw new ProgressReadCancelled()
 		}
 		const request = (async () => {
 			const history: TaskComment[] = []
@@ -44,7 +52,7 @@ export function createProjectProgressHistory() {
 		})
 		return request
 	}
-	return {read, clear: () => { generation++; reads.clear() }}
+	return {read, revisionFor, invalidate, clear: () => { generation.value++; revisions.clear(); reads.clear() }}
 }
 
 export const projectProgressHistoryKey: InjectionKey<ReturnType<typeof createProjectProgressHistory>> = Symbol('project-progress-history')

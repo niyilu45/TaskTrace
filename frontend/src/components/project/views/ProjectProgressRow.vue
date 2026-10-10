@@ -233,27 +233,36 @@ const showCompletedOutstanding = ref(false)
 watch(() => props.task.id, () => { showCompletedOutstanding.value = false })
 const loading = ref(false)
 const error = ref('')
+const loaded = ref(false)
 let disposed = false
 let requested = false
+let visible = false
+let stale = true
 let loadVersion = 0
 async function load() {
 	if (disposed) return
 	const version = ++loadVersion
-	loading.value = true; error.value = ''
+	loading.value = !loaded.value; error.value = ''
 	try {
 		const all = props.task.comment_count === 0 ? [] : await progressHistory.read(props.task.id)
-		if (!disposed && version === loadVersion && !equal(history.value, all)) history.value = all
+		if (!disposed && version === loadVersion) {
+			if (!equal(history.value, all)) history.value = all
+			loaded.value = true
+		}
 	} catch (failure) { if (!disposed && version === loadVersion && !isProgressReadCancelled(failure)) error.value = '进展读取失败，请重试。' }
 	finally { if (!disposed && version === loadVersion) loading.value = false }
 }
-watch(() => [props.task.id, props.refreshRevision], () => {
+watch(() => [props.task.id, props.refreshRevision, sharedProgressHistory?.revisionFor(props.task.id)], () => {
 	if (!sharedProgressHistory) progressHistory.clear()
-	if (requested) void load()
+	stale = true
+	if (visible) { stale = false; void load() }
 })
 useIntersectionObserver(element, ([entry]) => {
-	if (!entry?.isIntersecting || requested) return
+	visible = !!entry?.isIntersecting
+	if (!visible || (requested && !stale)) return
 	requested = true
-	if (props.task.comment_count !== 0) void load()
+	stale = false
+	void load()
 }, {rootMargin: '200px'})
 onBeforeUnmount(() => {
 	disposed = true

@@ -553,7 +553,7 @@ watch([search, scope, recentProgressDays, selectedPersonKeys], () => { searchExp
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
 watch([search, scope, recentProgressDays, selectedPersonKeys], () => { page.value = 1 })
 
-async function loadProgressActivity(sourceTasks = tasks.value) {
+async function loadProgressActivity(sourceTasks = tasks.value, changedTaskIds?: ReadonlySet<number>) {
 	if (recentProgressDays.value <= 0) return
 	const version = ++progressActivityRequestId
 	const today = new Date()
@@ -561,6 +561,7 @@ async function loadProgressActivity(sourceTasks = tasks.value) {
 	activityFilterError.value = ''
 	try {
 		const entries = await Promise.all(sourceTasks.map(async task => {
+			if (changedTaskIds && !changedTaskIds.has(task.id) && task.id in latestProgressDates.value) return [task.id, latestProgressDates.value[task.id]] as const
 			if (task.comment_count === 0) return [task.id, ''] as const
 			const history = await progressHistory.read(task.id)
 			if (version !== progressActivityRequestId) return [task.id, ''] as const
@@ -618,11 +619,11 @@ function applyTasks(collected: ProgressTask[]) {
 	})
 	if (next.length !== tasks.value.length || next.some((task, index) => task !== tasks.value[index])) tasks.value = next
 }
-async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null} = {}) {
+async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null, changedTaskIds?: ReadonlySet<number>} = {}) {
 	const viewAnchor = options.preserveView ? options.anchor ?? captureViewAnchor() : null
 	const version = ++requestId
 	const projectId = props.projectId
-	progressHistory.clear()
+	if (!options.changedTaskIds) progressHistory.clear()
 	progressActivityRequestId++
 	progressActivityLoading.value = false
 	loading.value = true; error.value = ''
@@ -633,7 +634,7 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 		latestProgressDates.value = {}
 	}
 	const progressivelyDisplay = tasks.value.length === 0
-	if (isLocalBuild) void teamStore.refresh().catch(() => { /* The task list remains usable while a LAN repository is offline. */ })
+	if (isLocalBuild && !options.changedTaskIds) void teamStore.refresh().catch(() => { /* The task list remains usable while a LAN repository is offline. */ })
 	try {
 		const collected: ProgressTask[] = []
 		for (let next = 1; ; next++) {
@@ -645,10 +646,11 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 			if (next >= (result.data.total_pages || 1) || items.length === 0) break
 		}
 		applyTasks(collected)
-		revision.value++
+		if (options.changedTaskIds) progressHistory.invalidate(options.changedTaskIds)
+		else revision.value++
 		writeProjectProgressCache(projectId, tasks.value)
 		progressActivityRequestId++
-		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value)
+		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value, options.changedTaskIds)
 	} catch { if (version === requestId) error.value = '项目读取失败，请重试。'; return false }
 	finally {
 		if (version === requestId) {
@@ -658,7 +660,7 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 	}
 }
 useTasktraceTaskChanges(
-	() => load({preserveView: true}),
+	changes => load({preserveView: true, changedTaskIds: changes === null ? undefined : new Set(changes.flatMap(change => [change.task_id, change.related_task_id || change.task_id]))}),
 	change => !change.project_id || change.project_id === props.projectId || tasks.value.some(task => task.id === change.task_id || task.id === change.related_task_id),
 	() => loading.value || route.name === 'task.detail',
 )
@@ -680,7 +682,7 @@ watch(() => route.name, async name => {
 		return
 	}
 	modalOpenedHere = false
-	await load({preserveView: true, anchor: savedViewAnchor})
+	await restoreViewAnchor(savedViewAnchor)
 	savedViewAnchor = null
 })
 watch(() => props.projectId, () => {

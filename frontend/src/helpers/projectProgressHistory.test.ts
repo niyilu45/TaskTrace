@@ -66,3 +66,21 @@ describe('display progress history requests', () => {
 	})
 
 })
+
+
+it('invalidates a single task without cancelling unrelated in-flight reads', async () => {
+	let finish!: (result: unknown) => void
+	mocks.list.mockImplementation(({path}: {path: {task: number}}) => path.task === 11
+		? new Promise(resolve => {finish = resolve}) : Promise.resolve({data: {items: [{id: 1}], total_pages: 1}}))
+	const history = createProjectProgressHistory()
+	const untouched = history.read(11)
+	await history.read(12)
+	const revision = history.revisionFor(11)
+	history.invalidate([12, 12])
+	finish({data: {items: [{id: 2}], total_pages: 1}})
+	expect(await untouched).toEqual([{id: 2}])
+	expect(history.revisionFor(11)).toBe(revision)
+	expect(history.read(11)).toBe(untouched)
+	await history.read(12)
+	expect(mocks.list).toHaveBeenCalledTimes(3)
+})

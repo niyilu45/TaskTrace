@@ -3,8 +3,12 @@ import {flushPromises, mount, type VueWrapper} from '@vue/test-utils'
 import ProjectProgressOverview from './ProjectProgressOverview.vue'
 import {clearProjectProgressCache} from '@/helpers/projectProgressCache'
 
-const mocks = vi.hoisted(() => ({list: vi.fn(), comments: vi.fn()}))
+const mocks = vi.hoisted(() => ({list: vi.fn(), comments: vi.fn(), changed: undefined as undefined | ((message: unknown) => void)}))
 vi.mock('@/client/generated', () => ({projectTasksList: mocks.list, taskCommentsList: mocks.comments}))
+vi.mock('@/composables/useWebSocket', async () => {
+	const {ref} = await import('vue')
+	return {useWebSocket: () => ({authenticated: ref(true), subscribe: (_: string, callback: (message: unknown) => void) => {mocks.changed = callback; return () => {}}})}
+})
 vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: false}))
 vi.mock('vue-router', () => ({
 	useRoute: () => ({name: 'project.view', fullPath: '/projects/1/1'}),
@@ -34,7 +38,7 @@ vi.mock('@/components/tasks/partials/ReadonlyRichText.vue', () => ({default: {pr
 vi.mock('@/components/tasks/partials/ProgressBacklinks.vue', () => ({default: {template: '<span />'}}))
 let wrapper: VueWrapper
 beforeEach(() => { clearProjectProgressCache(); localStorage.clear(); vi.clearAllMocks() })
-afterEach(() => wrapper?.unmount())
+afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks() })
 
 describe('display history consumers', () => {
 	it('reads each task once per refresh and updates edited comments without remounting rows', async () => {
@@ -66,5 +70,37 @@ describe('display history consumers', () => {
 		expect(wrapper.text()).not.toContain('Before')
 		expect(mocks.comments).toHaveBeenCalledTimes(4)
 		expect(wrapper.get('[data-task-id="12"]').element).toBe(row)
+	})
+})
+
+
+describe('large project live refresh', () => {
+	it('reads and parses only the changed task while retaining its parent summary', async () => {
+		vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+		const parse = vi.spyOn(DOMParser.prototype, 'parseFromString')
+		const tasks = Array.from({length: 21}, (_, index) => ({id: index + 1, title: `Task ${index + 1}`, comment_count: 11,
+			...(index ? {related_tasks: {parenttask: [{id: 1}]}} : {}),
+		}))
+		mocks.list.mockResolvedValue({data: {items: tasks, total_pages: 1}})
+		let priority = 7
+		mocks.comments.mockImplementation(async ({path}: {path: {task: number}}) => ({data: {items: [
+			{id: 11, comment: `<h3 data-tasktrace-comment-type="outstanding">list</h3><ul><li data-id="i-${path.task}" data-priority="${path.task === 2 ? priority : 7}">Remaining ${path.task}</li></ul>`},
+			...Array.from({length: 10}, (_, index) => ({id: index + 1, comment: `<h3>每日进展 · 2026-10-${String(index + 1).padStart(2, '0')}</h3><p>Progress ${index}</p>`})),
+		], total_pages: 1}}))
+		const started = performance.now()
+		wrapper = mount(ProjectProgressOverview, {props: {projectId: 1}, global: {stubs: {Icon: true, XButton: {template: '<button><slot /></button>'}}}})
+		await flushPromises()
+		console.log('PERF initial', {milliseconds: Math.round(performance.now() - started), requests: mocks.comments.mock.calls.length, parses: parse.mock.calls.length})
+		expect(mocks.comments).toHaveBeenCalledTimes(21)
+		expect(parse.mock.calls.length).toBeLessThan(950)
+		mocks.comments.mockClear(); parse.mockClear()
+		priority = 2
+		mocks.changed?.({data: {task_id: 2, project_id: 1}})
+		await vi.waitFor(() => expect(wrapper.get('[data-task-id="2"] .outstanding-cell').text()).toContain('[P2]'))
+		await flushPromises()
+		console.log('PERF live refresh', {requests: mocks.comments.mock.calls.length, parses: parse.mock.calls.length})
+		expect(wrapper.findAll('.outstanding-source').find(entry => entry.text().includes('Remaining 2'))?.text()).toContain('[P2]')
+		expect(mocks.comments).toHaveBeenCalledTimes(1)
+		parse.mockRestore()
 	})
 })

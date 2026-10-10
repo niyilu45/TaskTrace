@@ -1,6 +1,8 @@
 import {test, expect} from '../../support/fixtures'
 import {ProjectFactory} from '../../factories/project'
 import {TaskFactory} from '../../factories/task'
+import {TaskCommentFactory} from '../../factories/task_comment'
+import {TaskRelationFactory} from '../../factories/task_relation'
 
 test('outstanding composer keeps actions inline and preserves collapsed notes', async ({authenticatedPage: page, currentUser}, testInfo) => {
 	const [project] = await ProjectFactory.create(1, {owner_id: currentUser.id})
@@ -115,4 +117,35 @@ test('saved task fields and daily progress refresh without replacing an unsaved 
 	expect((await apiContext.put(`../v2/tasks/${task.id}/comments/${comment.id}`, {headers, data: {comment: progress('Another saved daily progress')}})).ok()).toBeTruthy()
 	await expect(page.locator('.comment')).toContainText(['Another saved daily progress'])
 	await expect(editor).toContainText('Unsaved daily progress draft')
+})
+
+
+test('display refresh leaves unrelated histories and unopened editors idle', async ({authenticatedPage: page, apiContext, userToken, currentUser}, testInfo) => {
+	const headers = {Authorization: `Bearer ${userToken}`}
+	const [project] = await ProjectFactory.create(1, {owner_id: currentUser.id, title: 'Display performance'})
+	const tasks = await TaskFactory.create(9, {project_id: project.id, created_by_id: currentUser.id, title: (index: number) => `Performance task ${index}`})
+	const parent = tasks[0]
+	const children = tasks.slice(1).map(task => Number(task.id))
+	const content = (index: number, priority = 7) => `<h3 data-tasktrace-comment-type="outstanding">list</h3><ul><li data-id="p-${index}" data-priority="${priority}"><p>Performance item ${index}</p></li></ul>`
+	await TaskRelationFactory.create(16, {task_id: (index: number) => index <= 8 ? parent.id : children[index - 9], other_task_id: (index: number) => index <= 8 ? children[index - 1] : parent.id,
+		relation_kind: (index: number) => index <= 8 ? 'subtask' : 'parenttask', created_by_id: currentUser.id})
+	const comments = await TaskCommentFactory.create(8, {task_id: (index: number) => children[index - 1], comment: (index: number) => content(index - 1), author_id: currentUser.id})
+	const commentIds = comments.map(comment => Number(comment.id))
+	await page.goto(`/projects/${project.id}`)
+	await page.locator('.task-own-progress > summary').click()
+	const summaries = page.locator('.subtask-outstanding .outstanding-source')
+	await expect(summaries).toHaveCount(8)
+	const reads: number[] = []
+	page.on('request', request => {
+		const match = new URL(request.url()).pathname.match(/\/tasks\/(\d+)\/comments$/)
+		if (request.method() === 'GET' && match) reads.push(Number(match[1]))
+	})
+	expect((await apiContext.put(`../v2/tasks/${children[0]}/comments/${commentIds[0]}`, {headers, data: {comment: content(0, 2)}})).ok()).toBeTruthy()
+	await expect(summaries.filter({hasText: 'Performance item 0'})).toContainText('[P2]')
+	expect(reads.filter(id => children.slice(1).includes(id))).toEqual([])
+	expect(reads.filter(id => id === children[0])).toHaveLength(1)
+	await testInfo.attach('live-refresh-requests', {body: JSON.stringify({projectTasks: 9, changedTasks: 1, historyReads: reads}), contentType: 'application/json'})
+	await page.screenshot({path: testInfo.outputPath('display-performance.png'), fullPage: true})
+	await page.locator(`.progress-row[data-task-id="${children[7]}"]`).scrollIntoViewIfNeeded()
+	await expect(page.locator(`.progress-row[data-task-id="${children[7]}"] .outstanding-cell`)).toContainText('Performance item 7')
 })

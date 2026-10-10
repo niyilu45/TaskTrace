@@ -1,4 +1,4 @@
-import {describe, it, expect} from 'vitest'
+import {describe, it, expect, vi} from 'vitest'
 import {finalProgressNotes, parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes, progressBacklinks} from './progressNotes'
 import {serializeProgressReferences, type ProgressReference} from './progressReferences'
 import {serializeTeamCommentMarker} from './tasktraceTeam'
@@ -194,5 +194,36 @@ describe('progress reference isolation', () => {
 		]
 		expect(progressBacklinks(history)[55]).toEqual([{id: 90, date: '2026-09-18', html: '<p>更正内容</p>'}])
 		expect(progressBacklinks(history)[90]).toBeUndefined()
+	})
+})
+
+
+describe('progress parsing reuse', () => {
+	it('parses unchanged records once and invalidates edits and author changes', () => {
+		const note = {id: 42, created: '2026-10-10T08:00:00Z', comment: daily('2026-10-10', 'Before'), author: {username: 'me'}}
+		const parse = vi.spyOn(DOMParser.prototype, 'parseFromString')
+		try {
+			expect(finalProgressNotes([note])[0].progress).toContain('Before')
+			const count = parse.mock.calls.length
+			progressBacklinks([note]); sortProgressNotes([note]); parseProgressNote(note)
+			expect(parse).toHaveBeenCalledTimes(count)
+			note.comment = daily('2026-10-10', 'Edited')
+			expect(parseProgressNote(note).progress).toContain('Edited')
+			note.author.username = 'another'
+			expect(parseProgressNote(note).author).toBe('another')
+			note.id = 43
+			expect(parseProgressNote(note).id).toBe(43)
+			note.comment = '<p>Ordinary comment</p>'
+			note.created = '2026-10-09T08:00:00Z'
+			expect(parseProgressNote(note).date).toBe('2026-10-09')
+		} finally { parse.mockRestore() }
+	})
+	it('does not expose its cached objects to caller mutations', () => {
+		const note = {id: 1, comment: daily('2026-10-10', 'Original')}
+		const parsed = parseProgressNote(note)
+		parsed.progress = 'Changed by caller'
+		parsed.references.push({id: 'caller', commentIds: [1], date: '2026-10-09', taskId: 1, html: 'changed'})
+		expect(parseProgressNote(note).progress).toContain('Original')
+		expect(parseProgressNote(note).references).toEqual([])
 	})
 })

@@ -50,6 +50,7 @@
 <script setup lang="ts">
 import {ref, onBeforeUnmount, inject, watch} from 'vue'
 import equal from 'fast-deep-equal'
+import type {TaskComment} from '@/client/generated'
 import {useIntersectionObserver} from '@vueuse/core'
 import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
 import {type ProgressTask} from '@/helpers/projectProgress'
@@ -65,20 +66,28 @@ const entries = ref<{task: ProgressTask, html: string}[]>([])
 const failed = ref<number[]>([])
 let disposed = false
 let requested = false
+let visible = false
+let stale = true
 let loadVersion = 0
+const summaries = new WeakMap<TaskComment[], string>()
+let loaded = false
 async function load() {
 	if (disposed) return
 	const version = ++loadVersion
-	loading.value = true
+	loading.value = !loaded
 	let cancelled = false
 	const results = await Promise.all(props.tasks.map(async task => {
 		try {
 			const history = task.comment_count === 0 ? [] : await progressHistory.read(task.id)
 			if (disposed || version !== loadVersion) return {task, html: '', failed: false}
-			const html = outstandingHtml(history)
-			const doc = new DOMParser().parseFromString(html, 'text/html')
-			const hasContent = !!doc.body.textContent?.trim() || !!doc.body.querySelector('img')
-			return {task, html: hasContent ? html : '', failed: false}
+			let html = summaries.get(history)
+			if (html === undefined) {
+				html = outstandingHtml(history)
+				const doc = new DOMParser().parseFromString(html, 'text/html')
+				if (!doc.body.textContent?.trim() && !doc.body.querySelector('img')) html = ''
+				summaries.set(history, html)
+			}
+			return {task, html, failed: false}
 		} catch (failure) {
 			if (isProgressReadCancelled(failure)) cancelled = true
 			return {task, html: '', failed: !isProgressReadCancelled(failure)}
@@ -87,17 +96,21 @@ async function load() {
 	if (disposed || version !== loadVersion) return
 	loading.value = false
 	if (cancelled) return
+	loaded = true
 	const next = results.filter(result => !!result.html)
 	if (!equal(entries.value, next)) entries.value = next
 	failed.value = results.filter(result => result.failed).map(result => result.task.id)
 }
-watch(() => [props.tasks.map(task => task.id).join(','), props.refreshRevision], () => {
+watch(() => [props.tasks.map(task => [task.id, task.title, task.done, task.comment_count, sharedProgressHistory?.revisionFor(task.id)]).flat().join('\u0000'), props.refreshRevision], () => {
 	if (!sharedProgressHistory) progressHistory.clear()
-	if (requested) void load()
+	stale = true
+	if (visible) { stale = false; void load() }
 })
 useIntersectionObserver(element, ([entry]) => {
-	if (!entry?.isIntersecting || requested) return
+	visible = !!entry?.isIntersecting
+	if (!visible || (requested && !stale)) return
 	requested = true
+	stale = false
 	void load()
 }, {rootMargin: '200px'})
 onBeforeUnmount(() => {
