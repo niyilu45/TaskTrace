@@ -2408,6 +2408,10 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 				required = resolution.ID
 			}
 			value, options, conflict := taskTraceTeamFindField(snapshots, node, field, taskTraceTeamBaseValue(base, field), required, localTask)
+			if !conflict && value == "" && hasLocalTask {
+				options = taskTraceTeamUnprovenRemovalOptions(observedSnapshots, &manifest, node, field, required, localTask)
+				conflict = len(options) > 0
+			}
 			if conflict {
 				if !strings.HasPrefix(field, "outstanding:") || taskTraceTeamCan(&manifest, node, strings.TrimPrefix(field, "outstanding:"), actor, false) {
 					conflicts = append(conflicts, TaskTraceTeamConflict{ID: taskTraceTeamConflictID(binding.ShareID, node, field, options), ShareID: binding.ShareID, NodeID: node, TaskID: taskID, TaskTitle: stored.Title, Field: field, Base: taskTraceTeamBaseValue(base, field), Options: options})

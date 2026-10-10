@@ -86,6 +86,9 @@ func taskTraceRecordOutstandingActivity(s *xorm.Session, actor *user.User, taskI
 	}
 	write := func(item taskTraceOutstandingItem, action string, local bool) error {
 		attrs := ` data-item-id="` + html.EscapeString(item.id) + `"`
+		if action == "删除" {
+			attrs += ` data-tasktrace-item-action="delete"`
+		}
 		if local {
 			attrs += ` data-tasktrace-local="true"`
 		}
