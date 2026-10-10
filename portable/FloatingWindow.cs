@@ -1170,6 +1170,11 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task TestFlow() {
         try {
+            if(Environment.GetEnvironmentVariable("TASKTRACE_FLOATING_SYNC_TEST")=="1") {
+                await TestAutoRefresh();
+                File.WriteAllText(Path.Combine(data,"floating-test.txt"),"PASS: focused floating synchronization tests");
+                return;
+            }
             if(Environment.GetEnvironmentVariable("TASKTRACE_FLOATING_LAYOUT_TEST")=="1") {
                 TestTaskSurfaceLayout();await TestSimpleOutstandingDetails();
                 File.WriteAllText(Path.Combine(data,"floating-test.txt"),"PASS: focused floating layout tests");

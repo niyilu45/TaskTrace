@@ -293,6 +293,7 @@
 
 <script setup lang="ts">
 import {ref, reactive, computed, nextTick, provide, shallowReactive, watch, onBeforeUnmount} from 'vue'
+import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
@@ -440,7 +441,7 @@ function rememberComments() {
 
 async function refreshDailyProgressHistory() {
 	await nextTick()
-	await dailyProgress.value?.refreshHistory()
+	return await dailyProgress.value?.refreshHistory()
 }
 
 const showDeleteModal = ref(false)
@@ -568,9 +569,13 @@ async function loadComments(taskId: ITask['id'], force = false) {
 		}
 	}
 
-	comments.value = await taskCommentService.getAll({taskId}, {order_by: commentSortOrder.value}, currentPage.value)
+	const before = JSON.stringify(comments.value)
+	const selectedPage = currentPage.value
+	const loaded = await taskCommentService.getAll({taskId}, {order_by: commentSortOrder.value}, selectedPage)
+	if (taskId !== props.taskId || selectedPage !== currentPage.value || before !== JSON.stringify(comments.value)) return false
+	comments.value = loaded
 	rememberComments()
-	await refreshDailyProgressHistory()
+	return await refreshDailyProgressHistory()
 }
 
 async function changePage(page: number) {
@@ -642,6 +647,9 @@ function toggleDelete(commentId: ITaskComment['id']) {
 
 const changeTimeout = ref<ReturnType<typeof setTimeout> | null>(null)
 let disposed = false
+useTasktraceTaskChanges(() => loadComments(props.taskId, true), change => change.task_id === props.taskId,
+	() => creating.value || saving.value !== null || changeTimeout.value !== null || comments.value.some(comment => savedComments.get(comment.id) !== comment.comment))
+
 useTasktraceUndoGuard(() => !isEditorContentEmpty(newCommentText.value) || uploading.value > 0 || creating.value || saving.value !== null || changeTimeout.value !== null || comments.value.some(comment => savedComments.get(comment.id) !== comment.comment), '请先保存或清空评论草稿，再撤销。')
 onBeforeUnmount(() => {
 	if (changeTimeout.value !== null) {

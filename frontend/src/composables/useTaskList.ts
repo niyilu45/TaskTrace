@@ -1,3 +1,5 @@
+import {useTasktraceTaskChanges} from './useTasktraceTaskChanges'
+import {undoBlockReason} from '@/helpers/tasktraceUndo'
 import {projectTasksList} from '@/client/generated'
 import TaskModel from '@/models/task'
 import {useProjectStore} from '@/stores/projects'
@@ -292,6 +294,10 @@ export function useTaskList(
 
 		loadTasks()
 	}, {immediate: true, flush: 'post'})
+
+	useTasktraceTaskChanges(() => loadTasks(false),
+		change => !change.project_id || projectId.value <= 0 || change.project_id === projectId.value || tasks.value.some(task => task.id === change.task_id || task.id === change.related_task_id),
+		() => loading.value || !!undoBlockReason.value)
 
 	return {
 		tasks,

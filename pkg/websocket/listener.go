@@ -118,6 +118,7 @@ func (l *TimeEntryListener) Handle(msg *message.Message) error {
 
 // RegisterListeners registers WebSocket event listeners.
 func RegisterListeners() {
+	registerTaskTraceChangeListeners()
 	events.RegisterListener(
 		(&notifications.NotificationCreatedEvent{}).Name(),
 		&NotificationListener{},

@@ -284,7 +284,7 @@ internal sealed partial class FloatingWindow {
         var originalProject=projects.SelectedItem as Project;
         long originalProjectId=originalProject==null?0:originalProject.Id;
         bool originalSimple=simpleMode,originalBusy=busy,originalVisible=Visible,originalCompleted=showCompleted.Checked;
-        bool originalDetailsTesting=simpleDetailsTesting,originalSort=prioritySort.Checked;
+        bool originalDetailsTesting=simpleDetailsTesting,originalSort=prioritySort.Checked,originalSingleLine=singleLine.Checked;
         string originalSearch=search.Text;int originalPage=page;
         var originalPriorities=visiblePriorities.ToArray();var originalCollapsed=collapsedTasks.ToArray();
         var originalBounds=Bounds;var originalSimpleSize=simpleSize;
@@ -359,12 +359,32 @@ internal sealed partial class FloatingWindow {
             if(AutoRefreshTestTask(parentId)!=parent || AutoRefreshTestTask(childId)!=child || changedLeaf==leaf || tasks.SelectedNode!=changedLeaf || tasks.TopNode!=parent || child.IsExpanded)
                 throw new Exception("Outstanding update recreated task nodes or lost item selection, scroll, or collapsed children");
 
+            foreach(bool flat in new[]{false,true}) {
+                rendering=true;singleLine.Checked=flat;rendering=false;await LoadTasks();
+                foreach(int phase in new[]{0,1,2}) {
+                    var webShared=ReadShared(await ReadHistory(childId));var webItem=webShared.Items[0];
+                    if(phase==0)webItem.Priority=flat?1:2;
+                    if(phase==1)webItem.NoteHtml="<p>Updated note "+flat+"</p>";
+                    if(phase==2){webItem.Done=true;webItem.CompletedAt=DateTimeOffset.UtcNow.ToString("o");webItem.ReminderAt=DateTimeOffset.UtcNow.AddDays(1).ToString("o");}
+                    previousRevision=AutoRefreshRevision;
+                    using(BeginUndoGroup())await WriteShared(childId,webShared);
+                    await WaitForAutoRefreshSignalTest(previousRevision);
+                    await WaitForAutoRefreshTest(delegate {
+                        var found=OutstandingDescendants(tasks.Nodes).Select(node=>node.Tag as OutstandingLeaf).FirstOrDefault(item=>item!=null && item.TaskId==childId && item.Id==webItem.Id);
+                        return found!=null && found.Priority==webItem.Priority && found.NoteHtml==webItem.NoteHtml && found.Done==webItem.Done && found.CompletedAt==webItem.CompletedAt && found.ReminderAt==webItem.ReminderAt;
+                    },"External outstanding priority/note/state edit did not reach "+(flat?"flat":"tree")+" display, phase "+phase);
+                }
+            }
+            rendering=true;singleLine.Checked=false;rendering=false;await LoadTasks();
+            parent=AutoRefreshTestTask(parentId);child=AutoRefreshTestTask(childId);parent.Expand();child.Collapse();
+            changedLeaf=parent.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);tasks.SelectedNode=changedLeaf;tasks.TopNode=parent;
             int modeLoads=taskLoadVersion;long modeReads=AutoRefreshReadCount;
             SetSimpleMode(false);
             if(taskLoadVersion!=modeLoads || AutoRefreshReadCount!=modeReads || AutoRefreshTestTask(parentId)!=parent || changedLeaf.Parent!=parent || tasks.SelectedNode!=changedLeaf || child.IsExpanded)throw new Exception("Full layout switch reloaded data or lost shared tree state");
+            tasks.Update();await Task.Delay(150);await WaitForAutoRefreshTest(delegate{return true;},"Mode layout changes did not settle");
             invalidations=0;enabledChanges=0;tasks.Invalidated+=invalidated;tasks.EnabledChanged+=enabledChanged;
             try {
-                if(!await LoadTasks(true) || invalidations!=0 || enabledChanges!=0 || AutoRefreshTestTask(parentId)!=parent || changedLeaf.Parent!=parent || tasks.SelectedNode!=changedLeaf || child.IsExpanded)throw new Exception("Full mode unchanged refresh changed the shared tree");
+                if(!await LoadTasks(true) || invalidations!=0 || enabledChanges!=0 || AutoRefreshTestTask(parentId)!=parent || changedLeaf.Parent!=parent || tasks.SelectedNode!=changedLeaf || child.IsExpanded)throw new Exception("Full mode unchanged refresh changed the shared tree: invalidations="+invalidations+", enabled="+enabledChanges+", parent="+(AutoRefreshTestTask(parentId)==parent)+", leaf="+(changedLeaf.Parent==parent)+", selected="+(tasks.SelectedNode==changedLeaf)+", childExpanded="+child.IsExpanded);
             }finally{tasks.Invalidated-=invalidated;tasks.EnabledChanged-=enabledChanged;}
             var fullShared=ReadShared(await ReadHistory(childId));fullShared.Items[0].Html="完整悬浮窗更新遗留事项";
             previousRevision=AutoRefreshRevision;
@@ -397,7 +417,7 @@ internal sealed partial class FloatingWindow {
             if(projectId>0)using(BeginUndoGroup())await Api("DELETE","/projects/"+projectId,null);
             rendering=true;
             try {
-                SetSimpleMode(false);search.Text=originalSearch;showCompleted.Checked=originalCompleted;page=originalPage;
+                SetSimpleMode(false);singleLine.Checked=originalSingleLine;search.Text=originalSearch;showCompleted.Checked=originalCompleted;page=originalPage;
                 visiblePriorities.Clear();visiblePriorities.UnionWith(originalPriorities);prioritySort.Checked=originalSort;
                 collapsedTasks.Clear();collapsedTasks.UnionWith(originalCollapsed);simpleCollapsedDuringRead.Clear();
                 projects.SelectedItem=projects.Items.Cast<Project>().FirstOrDefault(item=>item.Id==originalProjectId);

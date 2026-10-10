@@ -90,7 +90,7 @@ internal sealed partial class FloatingWindow {
             var leaf=node.Tag as OutstandingLeaf;
             var task=node as TaskNode;
             return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,task==null?0:task.ReminderCount,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
-                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html,leaf.ReminderAt};
+                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt};
         }).ToArray();
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {

@@ -334,6 +334,7 @@
 <script setup lang="ts">
 import {ref, computed, watch, onBeforeUnmount, nextTick, provide} from 'vue'
 import equal from 'fast-deep-equal'
+import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useRoute, useRouter} from 'vue-router'
 import {projectTasksList} from '@/client/generated'
 import {createProjectProgressHistory, projectProgressHistoryKey} from '@/helpers/projectProgressHistory'
@@ -648,7 +649,7 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 		writeProjectProgressCache(projectId, tasks.value)
 		progressActivityRequestId++
 		if (recentProgressDays.value > 0) await loadProgressActivity(tasks.value)
-	} catch { if (version === requestId) error.value = '项目读取失败，请重试。' }
+	} catch { if (version === requestId) error.value = '项目读取失败，请重试。'; return false }
 	finally {
 		if (version === requestId) {
 			loading.value = false
@@ -656,6 +657,11 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 		}
 	}
 }
+useTasktraceTaskChanges(
+	() => load({preserveView: true}),
+	change => !change.project_id || change.project_id === props.projectId || tasks.value.some(task => task.id === change.task_id || task.id === change.related_task_id),
+	() => loading.value || route.name === 'task.detail',
+)
 let modalOpenedHere = false
 let savedViewAnchor: TasktraceScrollAnchor | null = null
 function openTaskEditor(taskId: number) {

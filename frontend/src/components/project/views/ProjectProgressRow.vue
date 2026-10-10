@@ -78,6 +78,7 @@
 						@keydown.enter.prevent="$emit('edit', task.id)"
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
+						<span>[P{{ entry.item.priority ?? 7 }}]</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
 				</ol>
@@ -110,6 +111,7 @@
 						@keydown.enter.prevent="$emit('edit', task.id)"
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
+						<span>[P{{ entry.item.priority ?? 7 }}]</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
 				</ol>

@@ -684,9 +684,10 @@
 </template>
 
 <script lang="ts" setup>
+import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {isProgressImageAttachment} from '@/helpers/progressEditorImages'
-import {undoAffectedTaskIds} from '@/helpers/tasktraceUndo'
+import {undoAffectedTaskIds, undoBlockReason} from '@/helpers/tasktraceUndo'
 import {ref, reactive, shallowReactive, computed, watch, nextTick, onMounted, useTemplateRef} from 'vue'
 import {useRouter, useRoute, type RouteLocation, onBeforeRouteLeave} from 'vue-router'
 import {useI18n} from 'vue-i18n'
@@ -976,6 +977,18 @@ onMounted(async () => {
 })
 
 const taskService = shallowReactive(new TaskService())
+
+// Keep saved fields current without replacing comments or dirty editors.
+useTasktraceTaskChanges(async () => {
+	const id = props.taskId
+	const loaded = await taskService.get(new TaskModel({id}), {expand: ['reactions', 'buckets']})
+	if (id !== props.taskId) return
+	if (undoBlockReason.value) return false
+	Object.assign(task.value, loaded, {comments: task.value.comments})
+	taskColor.value = task.value.hexColor
+	setActiveFields()
+}, change => change.task_id === props.taskId || change.related_task_id === props.taskId,
+() => taskService.loading || !!undoBlockReason.value)
 
 // load task
 watch(

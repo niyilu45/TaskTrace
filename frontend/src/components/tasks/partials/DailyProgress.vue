@@ -418,12 +418,25 @@ async function memberSaved() {
 }
 
 async function refreshHistory() {
+	const before = snapshot()
+	const day = date.value
+	const pristine = !restoring.value && !saving.value && before === lastSaved.value
 	const request = ++historyRefreshVersion
 	const taskId = props.taskId
 	try {
 		const history = await readTaskHistory(taskId)
 		if (request !== historyRefreshVersion || taskId !== props.taskId) return false
 		referenceHistory.value = history
+		if (pristine && day === date.value && !restoring.value && !saving.value && snapshot() === before && before === lastSaved.value) {
+			const selected = mergedDay(history, day, currentUsername.value)
+			autoCommentId.value = selected.id
+			autoTeamId.value = selected.teamId
+			mergedIds.value = selected.mergedIds
+			mergedTeamIds.value = selected.mergedTeamIds
+			progress.value = selected.html
+			references.value = normalizeProgressReferences(selected.references)
+			lastSaved.value = snapshot()
+		}
 		return true
 	} catch {
 		return false

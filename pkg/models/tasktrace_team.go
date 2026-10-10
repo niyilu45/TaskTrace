@@ -713,9 +713,51 @@ func taskTraceTeamOutstandingItems(body string) (map[string]string, []string) {
 		if _, exists := items[id]; !exists {
 			order = append(order, id)
 		}
-		items[id] = taskTraceInnerHTML(node)
+		content, legacyState := taskTraceTeamOutstandingState(taskTraceInnerHTML(node))
+		state := taskTraceTeamOutstandingStateAttributes(node)
+		if state == "" && taskTraceAttribute(node, "data-done") == "" {
+			state = legacyState
+		}
+		if state != "" {
+			content = `<span data-tasktrace-outstanding-state="true" hidden` + state + `></span>` + content
+		}
+		items[id] = content
 	}
 	return items, order
+}
+
+// Keep shared item state in the merged value. A hidden span also survives older
+// peers that copied only inner HTML; the normal list always uses LI attributes.
+func taskTraceTeamOutstandingStateAttributes(node *html.Node) string {
+	var state strings.Builder
+	for _, key := range []string{"data-done", "data-completed-at", "data-reminder"} {
+		value := taskTraceAttribute(node, key)
+		if value == "" || (key == "data-done" && value != "true") {
+			continue
+		}
+		state.WriteString(` ` + key + `="` + html.EscapeString(value) + `"`)
+	}
+	return state.String()
+}
+func taskTraceTeamOutstandingState(content string) (string, string) {
+	if !strings.Contains(content, "data-tasktrace-outstanding-state") {
+		return content, ""
+	}
+	doc, nodes := taskTraceTeamOutstandingNodes(`<ul><li data-id="state">` + content + `</li></ul>`)
+	if doc == nil || len(nodes) == 0 {
+		return content, ""
+	}
+	root := nodes[0]
+	state := ""
+	for child := root.FirstChild; child != nil; {
+		next := child.NextSibling
+		if child.Type == html.ElementNode && child.Data == "span" && taskTraceAttribute(child, "data-tasktrace-outstanding-state") == "true" {
+			state = taskTraceTeamOutstandingStateAttributes(child)
+			root.RemoveChild(child)
+		}
+		child = next
+	}
+	return taskTraceInnerHTML(root), state
 }
 
 func taskTraceTeamOutstandingHTML(items map[string]string, order []string) string {
@@ -742,9 +784,10 @@ func taskTraceTeamOutstandingHTML(items map[string]string, order []string) strin
 	body.WriteString(`<h3 ` + taskTraceOutstandingTypeAttribute + `="` + taskTraceOutstandingType + `">TaskTrace 遗留事项清单</h3><ul>`)
 	for _, id := range ids {
 		body.WriteString(`<li data-id="`)
-		body.WriteString(id)
-		body.WriteString(`">`)
-		body.WriteString(items[id])
+		body.WriteString(html.EscapeString(id))
+		content, state := taskTraceTeamOutstandingState(items[id])
+		body.WriteString(`"` + state + `>`)
+		body.WriteString(content)
 		body.WriteString("</li>")
 	}
 	body.WriteString("</ul>")
@@ -1790,6 +1833,20 @@ func taskTraceTeamApplyTaskFields(s *xorm.Session, a web.Auth, taskID int64, tit
 	return stored.updateSingleTask(s, a, []string{"title", "description", "done", "status"})
 }
 
+func taskTraceTeamDeleteSyncedComment(s *xorm.Session, a web.Auth, comment *TaskComment) error {
+	affected, err := s.ID(comment.ID).NoAutoCondition().Delete(&TaskComment{})
+	if err != nil {
+		return err
+	}
+	if affected > 0 {
+		events.DispatchOnCommit(s, &TaskTraceTaskChangedEvent{
+			Task: &Task{ID: comment.TaskID},
+			Doer: doerFromAuth(s, a),
+		})
+	}
+	return nil
+}
+
 func taskTraceTeamUpsertOutstanding(s *xorm.Session, a web.Auth, taskID int64, body string) error {
 	var comments []*TaskComment
 	if err := s.Where("task_id = ?", taskID).OrderBy("id desc").Find(&comments); err != nil {
@@ -1806,14 +1863,13 @@ func taskTraceTeamUpsertOutstanding(s *xorm.Session, a web.Auth, taskID int64, b
 		}
 		// Only one canonical list belongs to a task. Old releases and concurrent
 		// syncs could leave additional empty or stale list comments behind.
-		if _, err := s.ID(comment.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+		if err := taskTraceTeamDeleteSyncedComment(s, a, comment); err != nil {
 			return err
 		}
 	}
 	if strings.TrimSpace(body) == "" {
 		if current != nil {
-			_, err := s.ID(current.ID).NoAutoCondition().Delete(&TaskComment{})
-			return err
+			return taskTraceTeamDeleteSyncedComment(s, a, current)
 		}
 		return nil
 	}
@@ -1883,7 +1939,7 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 	}
 	byID, duplicates := taskTraceTeamLocalCommentsByID(binding, nodeID, actor, ordinary)
 	for _, duplicate := range duplicates {
-		if _, err := s.ID(duplicate.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+		if err := taskTraceTeamDeleteSyncedComment(s, a, duplicate); err != nil {
 			return err
 		}
 	}
@@ -1894,7 +1950,7 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 		}
 		if shared.Deleted {
 			if existing := byID[shared.ID]; existing != nil && !existing.Updated.After(shared.Updated) {
-				if _, err := s.ID(existing.ID).NoAutoCondition().Delete(&TaskComment{}); err != nil {
+				if err := taskTraceTeamDeleteSyncedComment(s, a, existing); err != nil {
 					return err
 				}
 				delete(byID, shared.ID)

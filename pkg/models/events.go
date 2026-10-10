@@ -588,3 +588,12 @@ type AdminInviteLinkDeletedEvent struct {
 }
 
 func (e *AdminInviteLinkDeletedEvent) Name() string { return "admin.invite_link.deleted" }
+
+// TaskTraceTaskChangedEvent invalidates local views after a sync-only mutation.
+// It must not produce another collaboration notification or edit record.
+type TaskTraceTaskChangedEvent struct {
+	Task *Task      `json:"task"`
+	Doer *user.User `json:"doer"`
+}
+
+func (*TaskTraceTaskChangedEvent) Name() string { return "tasktrace.task.changed" }

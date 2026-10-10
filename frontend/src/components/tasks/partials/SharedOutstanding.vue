@@ -280,6 +280,7 @@
 
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
+import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, type OutstandingItem} from '@/helpers/sharedOutstanding'
@@ -364,15 +365,31 @@ async function load() {
 	try {
 		const history = await readTaskHistory(taskId)
 		if (version === loadVersion && mounted) {
-			items.value = sharedOutstanding(history).items
+			const latestItems = sharedOutstanding(history).items
+			for (const [key, value] of drafts) {
+				if (!key.startsWith(`${taskId}:`) || draftChanged(key, value)) continue
+				const item = latestItems.find(item => key === `${taskId}:${item.id}`)
+				if (item) {
+					const updated = await draftFromItem(item)
+					if (version !== loadVersion || !mounted) return
+					if (drafts.get(key) === value && !draftChanged(key, value)) drafts.set(key, updated)
+				} else if (key !== `${taskId}:`) {
+					drafts.delete(key)
+					if (key === `${taskId}:${activeId.value}`) showComposer.value = false
+				}
+			}
+			items.value = latestItems
 			if (showComposer.value && !drafts.has(`${taskId}:${activeId.value}`)) await restoreDraft(activeId.value)
 		}
 	} catch {
 		if (version === loadVersion && mounted) error.value = '读取失败，请重试。输入和待保存图片已保留。'
+		return false
 	} finally {
 		if (version === loadVersion && mounted) loading.value = false
 	}
 }
+
+useTasktraceTaskChanges(load, change => change.task_id === props.taskId, () => busy.value || loading.value || noteUploading.value)
 
 async function selectItem(id: string) {
 	error.value = ''

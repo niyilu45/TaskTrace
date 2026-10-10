@@ -178,7 +178,7 @@ internal sealed partial class FloatingWindow {
         if(leaves.Count!=shared.Items.Count)return false;
         for(int index=0;index<leaves.Count;index++) {
             var leaf=leaves[index];var item=shared.Items[index];
-            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.Done!=item.Done || leaf.CompletedAt!=item.CompletedAt || leaf.Priority!=item.Priority || leaf.ReminderAt!=item.ReminderAt)return false;
+            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.NoteHtml!=item.NoteHtml || leaf.Done!=item.Done || leaf.CompletedAt!=item.CompletedAt || leaf.Priority!=item.Priority || leaf.ReminderAt!=item.ReminderAt)return false;
         }
         return true;
     }

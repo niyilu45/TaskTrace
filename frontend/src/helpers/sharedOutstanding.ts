@@ -83,7 +83,7 @@ export function sharedOutstanding(history: TaskComment[]) {
 
 export function outstandingHtml(history: TaskComment[]) {
 	const items = sharedOutstanding(history).items.filter(item => !item.done)
-	return items.length ? `<ol>${items.map(item => `<li>${item.html}</li>`).join('')}</ol>` : ''
+	return items.length ? `<ol>${items.map(item => `<li><span>[P${item.priority ?? TASKTRACE_DEFAULT_PRIORITY}]</span> ${item.html}</li>`).join('')}</ol>` : ''
 }
 
 export async function readTaskHistory(taskId: number) {

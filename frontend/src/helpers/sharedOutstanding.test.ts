@@ -41,7 +41,7 @@ describe('shared outstanding', () => {
 			{id: 'a', html: 'one', done: false, priority: 4, completedAt: undefined, reminderAt: undefined},
 			{id: 'b', html: 'two', done: true, priority: 2, completedAt: '2026-09-18T08:00:00.000Z', reminderAt: undefined},
 		])
-		expect(outstandingHtml([shared])).toBe('<ol><li>one</li></ol>')
+		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P4]</span> one</li></ol>')
 	})
 
 	it('imports the latest legacy list as individual unfinished items', () => {
@@ -56,7 +56,7 @@ describe('shared outstanding', () => {
 		expect(item.html).toBe('<p>事项正文</p>')
 		expect(item.note).toContain('内部备注')
 		expect(item.note).toContain('attachments/8')
-		expect(outstandingHtml([shared])).toBe('<ol><li><p>事项正文</p></li></ol>')
+		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P7]</span> <p>事项正文</p></li></ol>')
 	})
 
 	it('uses the configured product default when older collaborative markup has no priority', () => {
