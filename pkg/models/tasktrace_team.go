@@ -1008,7 +1008,10 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		}
 		node := taskTraceTeamNodeForTask(binding, taskID)
 		parentNode := taskTraceTeamNodeForTask(binding, parents[taskID])
-		comments, _, _, err := getAllCommentsForTasksWithoutPermissionCheck(s, []int64{taskID}, "", 1, -1, "asc")
+		// Synchronization needs the complete state, not a UI page. A negative
+		// perPage still uses the default limit; page zero disables pagination.
+		// Omitting the canonical list here would publish a false deletion.
+		comments, _, _, err := getAllCommentsForTasksWithoutPermissionCheck(s, []int64{taskID}, "", 0, 0, "asc")
 		if err != nil {
 			return snapshot, err
 		}
