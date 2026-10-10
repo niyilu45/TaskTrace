@@ -149,13 +149,14 @@
 							</span>
 						</CustomTransition>
 					</div>
-					<template v-if="progressDatesByComment[c.id]">
+					<template v-if="isOutstandingActivity(c.comment) || progressDatesByComment[c.id]">
 						<ReadonlyRichText :html="c.comment" />
 						<div
 							v-if="commentCanEdit(c)"
 							class="reference-comment-actions d-print-none"
 						>
 							<button
+								v-if="progressDatesByComment[c.id]"
 								type="button"
 								class="button is-small"
 								@click="editDailyProgress(progressDatesByComment[c.id], commentProgressAuthor(c))"
@@ -330,7 +331,7 @@ import {useCopyToClipboard} from '@/composables/useCopyToClipboard'
 import {commentReplyContextKey, scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import {readTeamCommentMarker, teamCommentActor} from '@/helpers/tasktraceTeam'
 import {teamMemberKey} from '@/helpers/tasktraceTeamMembers'
-import {isOutstandingComment} from '@/helpers/tasktraceCommentTypes'
+import {isOutstandingComment, isOutstandingActivity} from '@/helpers/tasktraceCommentTypes'
 
 const props = withDefaults(defineProps<{
 	taskId: number,

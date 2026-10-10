@@ -2,6 +2,11 @@ export const outstandingHeading = 'TaskTrace 遗留事项清单'
 export const outstandingTypeAttribute = 'data-tasktrace-comment-type'
 export const outstandingType = 'outstanding'
 
+export function isOutstandingActivity(comment: string, parsed?: Document) {
+	const doc = parsed || new DOMParser().parseFromString(comment || '', 'text/html')
+	return !!doc.querySelector('[data-tasktrace-comment-type="item-activity"]')
+}
+
 export function isOutstandingComment(comment: string, parsed?: Document) {
 	const doc = parsed || new DOMParser().parseFromString(comment || '', 'text/html')
 	if (doc.querySelector(`[${outstandingTypeAttribute}="${outstandingType}"]`)) return true

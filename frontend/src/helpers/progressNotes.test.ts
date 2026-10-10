@@ -1,6 +1,7 @@
 import {describe, it, expect, vi} from 'vitest'
 import {finalProgressNotes, parseProgressNote, sortProgressNotes, mergedDay, limitProgressNotes, progressBacklinks} from './progressNotes'
 import {serializeProgressReferences, type ProgressReference} from './progressReferences'
+import {isOutstandingActivity, isOutstandingComment} from './tasktraceCommentTypes'
 import {serializeTeamCommentMarker} from './tasktraceTeam'
 const daily = (date: string, progress: string, outstanding = '') => `<h3>每日进展 · ${date}</h3><p>${progress}</p>${outstanding ? `<p><strong>遗留问题 / 下一步</strong></p><p>${outstanding}</p>` : ''}`
 describe('daily progress display', () => {
@@ -226,4 +227,14 @@ describe('progress parsing reuse', () => {
 		expect(parseProgressNote(note).progress).toContain('Original')
 		expect(parseProgressNote(note).references).toEqual([])
 	})
+})
+
+it('keeps outstanding operation records out of daily progress and the canonical list', () => {
+	const activity = {id: 9, comment: '<p data-tasktrace-comment-type="item-activity" data-item-id="one"><strong>新增遗留事项</strong>：等待确认</p>'}
+	expect(isOutstandingActivity(activity.comment)).toBe(true)
+	expect(isOutstandingComment(activity.comment)).toBe(false)
+	expect(sortProgressNotes([activity])).toEqual([])
+	expect(finalProgressNotes([activity])).toEqual([])
+	expect(mergedDay([activity], '2026-10-10').text).toBe('')
+	expect(progressBacklinks([activity])).toEqual({})
 })

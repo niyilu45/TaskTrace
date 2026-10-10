@@ -3,7 +3,7 @@ import {splitProgressReferences, normalizeProgressReferences} from './progressRe
 import {readTeamCommentMarker} from './tasktraceTeam'
 import {teamMemberKey} from './tasktraceTeamMembers'
 import {deduplicateHtmlImages} from './tasktraceImages'
-import {isOutstandingComment} from './tasktraceCommentTypes'
+import {isOutstandingComment, isOutstandingActivity} from './tasktraceCommentTypes'
 
 // A history is consumed by progress, backlinks, filters and summaries. Reuse
 // parsing while the exact record fields are unchanged; WeakMap entries disappear
@@ -26,7 +26,7 @@ export function parseProgressNote(note: TaskComment) {
 function parseRecord(note: TaskComment) {
 	// Parse in an inert document; all returned HTML is sanitized by ReadonlyRichText before rendering.
 	const doc = new DOMParser().parseFromString(note.comment || '', 'text/html')
-	const outstandingRecord = isOutstandingComment(note.comment || '', doc)
+	const outstandingRecord = isOutstandingComment(note.comment || '', doc) || isOutstandingActivity(note.comment || '', doc)
 	const heading = doc.body.querySelector('h3')
 	const merged = (name: string) => (heading?.getAttribute(name) || '').split(',').map(value => value.trim()).filter(Boolean)
 	const mergedIds = merged('data-tasktrace-merged')

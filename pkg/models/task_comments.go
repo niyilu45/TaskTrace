@@ -41,6 +41,9 @@ type TaskComment struct {
 
 	OrderBy string `xorm:"-" json:"-" query:"order_by"`
 
+	// Set only by the request permission check, never by collaboration replay.
+	recordOutstandingActivity bool
+
 	Created time.Time `xorm:"created" json:"created" readOnly:"true" doc:"A timestamp when this comment was created. You cannot change this value."`
 	Updated time.Time `xorm:"updated" json:"updated" readOnly:"true" doc:"A timestamp when this comment was last updated. You cannot change this value."`
 
@@ -112,6 +115,15 @@ func (tc *TaskComment) CreateWithTimestamps(s *xorm.Session, a web.Auth) (err er
 		}
 	}
 
+	var outstandingBefore []taskTraceOutstandingItem
+	if tc.recordOutstandingActivity && outstanding {
+		list, readErr := taskTraceReadOutstanding(s, tc.TaskID)
+		if readErr != nil {
+			return readErr
+		}
+		outstandingBefore = list.items
+	}
+
 	if !tc.Created.IsZero() && !tc.Updated.IsZero() {
 		_, err = s.NoAutoTime().Insert(tc)
 		if err != nil {
@@ -124,6 +136,11 @@ func (tc *TaskComment) CreateWithTimestamps(s *xorm.Session, a web.Auth) (err er
 		}
 	}
 
+	if tc.recordOutstandingActivity && outstanding {
+		if err := taskTraceRecordOutstandingActivity(s, tc.Author, tc.TaskID, outstandingBefore, tc.Comment); err != nil {
+			return err
+		}
+	}
 	events.DispatchOnCommit(s, &TaskCommentCreatedEvent{
 		Task:    &task,
 		Comment: tc,
@@ -164,12 +181,20 @@ func (tc *TaskComment) Delete(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 
-	doer, _ := user.GetFromAuth(a)
+	doer, err := GetUserOrLinkShareUser(s, a)
+	if err != nil {
+		return err
+	}
 	task, err := GetTaskByIDSimple(s, tc.TaskID)
 	if err != nil {
 		return err
 	}
 
+	if tc.recordOutstandingActivity {
+		if err := taskTraceRecordOutstandingActivity(s, doer, tc.TaskID, taskTraceOutstandingActivityItems(tc.Comment), ""); err != nil {
+			return err
+		}
+	}
 	events.DispatchOnCommit(s, &TaskCommentDeletedEvent{
 		Task:    &task,
 		Comment: tc,
@@ -247,6 +272,11 @@ func (tc *TaskComment) Update(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 
+	if tc.recordOutstandingActivity {
+		if err := taskTraceRecordOutstandingActivity(s, doer, tc.TaskID, taskTraceOutstandingActivityItems(saved.Comment), tc.Comment); err != nil {
+			return err
+		}
+	}
 	events.DispatchOnCommit(s, &TaskCommentUpdatedEvent{
 		Task:    &task,
 		Comment: tc,
@@ -417,7 +447,7 @@ func getAllCommentsForTasksWithoutPermissionCheck(s *xorm.Session, taskIDs []int
 	query := s.
 		Where(builder.And(where...)).
 		Join("LEFT", "users", "users.id = task_comments.author_id").
-		OrderBy("task_comments.created " + order)
+		OrderBy("task_comments.created " + order + ", task_comments.id " + order)
 	if limit > 0 {
 		query = query.Limit(limit, start)
 	}

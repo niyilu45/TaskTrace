@@ -57,16 +57,22 @@ func (tc *TaskComment) canUserModifyTaskComment(s *xorm.Session, a web.Auth, all
 
 // CanDelete checks if a user can delete a comment
 func (tc *TaskComment) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
-	return tc.canUserModifyTaskComment(s, a, true)
+	can, err := tc.canUserModifyTaskComment(s, a, true)
+	tc.recordOutstandingActivity = can && err == nil
+	return can, err
 }
 
 // CanUpdate checks if a user can update a comment
 func (tc *TaskComment) CanUpdate(s *xorm.Session, a web.Auth) (bool, error) {
-	return tc.canUserModifyTaskComment(s, a, true)
+	can, err := tc.canUserModifyTaskComment(s, a, true)
+	tc.recordOutstandingActivity = can && err == nil
+	return can, err
 }
 
 // CanCreate checks if a user can create a new comment
 func (tc *TaskComment) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	t := Task{ID: tc.TaskID}
-	return t.CanWrite(s, a)
+	can, err := t.CanWrite(s, a)
+	tc.recordOutstandingActivity = can && err == nil
+	return can, err
 }
