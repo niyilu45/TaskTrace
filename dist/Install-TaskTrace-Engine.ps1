@@ -188,20 +188,28 @@ function Get-InstallProcessImagePath([Diagnostics.Process]$Process) {
 function Get-RunningInstallationProcesses([string]$Directory) {
     Initialize-InstallProcessInspection
     $targetDirectory = [TaskTraceInstallNative]::DirectoryPath($Directory)
-    $found = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($name in @('TaskTrace', 'TaskTrace-server', 'TaskTrace-floating', 'TaskTrace-updater')) {
+    $found = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($name in @('TaskTrace', 'TaskTrace-floating', 'TaskTrace-server', 'TaskTrace-updater')) {
         foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
             try {
                 $runningPath = Get-InstallProcessImagePath $running
                 if (!$runningPath) {
                     $running.Refresh()
                     try { if ($running.HasExited) { continue } } catch { }
-                    $found.Add($name + '（PID ' + $running.Id + '，无法确认运行路径，请先退出该程序）')
+                    $found.Add([pscustomobject]@{
+                        ProcessId = $running.Id
+                        ImagePath = $null
+                        DisplayName = $name + '（PID ' + $running.Id + '，无法确认运行路径，请先退出该程序）'
+                    })
                     continue
                 }
                 $runningDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($runningPath))
                 if ([string]::Equals($runningDirectory, $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) {
-                    $found.Add($name + '（PID ' + $running.Id + '）')
+                    $found.Add([pscustomobject]@{
+                        ProcessId = $running.Id
+                        ImagePath = $runningPath
+                        DisplayName = $name + '（PID ' + $running.Id + '）'
+                    })
                 }
             } finally { $running.Dispose() }
         }
@@ -209,10 +217,63 @@ function Get-RunningInstallationProcesses([string]$Directory) {
     return $found.ToArray()
 }
 
-function Assert-InstallationAvailable([string]$Directory) {
-    $runningNames = @(Get-RunningInstallationProcesses $Directory)
-    if ($runningNames.Count -gt 0) {
-        throw ('检测到 TaskTrace 正在运行或无法确认运行路径：' + ($runningNames -join '、') + '。请从系统托盘退出后重新安装；尚未覆盖程序文件。')
+function Confirm-StopRunningInstallation([string]$Directory, [object[]]$Processes) {
+    Add-Type -AssemblyName System.Windows.Forms
+    $names = ($Processes | ForEach-Object { $_.DisplayName }) -join "`r`n"
+    $message = "检测到安装目录中的 TaskTrace 正在运行。`r`n`r`n目录：$Directory`r`n$names`r`n`r`n是否强制关闭后继续安装？`r`n`r`n选择「是」：强制关闭该目录中的程序，确认退出后继续安装。尚未保存的编辑内容可能丢失；安装只替换程序文件，保留配置和数据。`r`n选择「否」：取消本次安装，并关闭安装命令窗口。"
+    $result = [System.Windows.Forms.MessageBox]::Show($message, 'TaskTrace：是否强制关闭正在运行的程序', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    return $result -eq [System.Windows.Forms.DialogResult]::Yes
+}
+
+function Stop-RunningInstallationProcesses([string]$Directory) {
+    # Reinspect after confirmation: the user may have closed or restarted a copy
+    # while the dialog was open. Never kill a process identified only by its name.
+    $targetDirectory = [TaskTraceInstallNative]::DirectoryPath($Directory)
+    $running = @(Get-RunningInstallationProcesses $Directory)
+    if (@($running | Where-Object { !$_.ImagePath }).Count -gt 0) {
+        throw '无法确认部分 TaskTrace 进程的运行路径，未强制关闭程序。请手动退出后重新安装。'
+    }
+    foreach ($entry in $running) {
+        $process = $null
+        try {
+            try { $process = [Diagnostics.Process]::GetProcessById($entry.ProcessId) }
+            catch [ArgumentException] { continue } # Already exited.
+            if ($process.HasExited) { continue }
+            # Pin this process before checking its image, so a recycled PID cannot
+            # redirect Kill() to an unrelated process between inspection and exit.
+            $null = $process.Handle
+            $imagePath = Get-InstallProcessImagePath $process
+            if (!$imagePath) { throw '无法再次确认运行路径。' }
+            $processDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($imagePath))
+            if (![string]::Equals($targetDirectory, $processDirectory, [StringComparison]::OrdinalIgnoreCase) -or
+                ![string]::Equals([IO.Path]::GetFileName($entry.ImagePath), [IO.Path]::GetFileName($imagePath), [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $process.Kill()
+            if (!$process.WaitForExit(5000)) { throw '等待程序退出超时。' }
+            Write-InstallLine ('已强制关闭：' + $entry.DisplayName) Yellow
+        } catch {
+            $failure = $_.Exception.Message
+            $exited = $false
+            if ($null -ne $process) { try { $exited = $process.HasExited } catch { } }
+            if ($exited) { continue }
+            throw ('无法强制关闭 ' + $entry.DisplayName + '：' + $failure + ' 请手动退出后重试；若程序以管理员身份运行，请使用相同权限启动安装器。尚未覆盖程序文件。')
+        } finally { if ($null -ne $process) { $process.Dispose() } }
+    }
+}
+
+function Assert-InstallationAvailable([string]$Directory, [switch]$PromptToStop) {
+    $running = @(Get-RunningInstallationProcesses $Directory)
+    if ($running.Count -gt 0) {
+        $names = ($running | ForEach-Object { $_.DisplayName }) -join '、'
+        if (!$PromptToStop -or !$Interactive -or @($running | Where-Object { !$_.ImagePath }).Count -gt 0) {
+            throw ('检测到 TaskTrace 正在运行或无法确认运行路径：' + $names + '。请从系统托盘退出后重新安装，或通过 Install-TaskTrace.cmd 确认强制关闭；尚未覆盖程序文件。')
+        }
+        if (!(Confirm-StopRunningInstallation $Directory $running)) {
+            throw [OperationCanceledException]::new('用户未同意强制关闭 TaskTrace，已取消安装。')
+        }
+        Stop-RunningInstallationProcesses $Directory
+        if (@(Get-RunningInstallationProcesses $Directory).Count -gt 0) {
+            throw 'TaskTrace 尚未完全退出或又被启动，请退出后重新安装。尚未覆盖程序文件。'
+        }
     }
     # Also catch a renamed launcher, updater or another tool holding a target
     # file. Opening existing program files here never changes their contents.
@@ -229,7 +290,7 @@ function Assert-InstallationAvailable([string]$Directory) {
 
 function Install-ProgramFiles([string]$SourceDirectory, [string]$DestinationDirectory, [string[]]$Names) {
     # Recheck after the build in case the user started this copy in the meantime.
-    Assert-InstallationAvailable $DestinationDirectory
+    Assert-InstallationAvailable $DestinationDirectory -PromptToStop
     New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
     $transactionRoot = Join-Path $env:TEMP ('TaskTrace-install-' + [Guid]::NewGuid().ToString('N'))
     $backupRoot = Join-Path $transactionRoot 'previous-program'
@@ -422,14 +483,15 @@ try {
         $selectedDirectory = Select-InstallDirectory $InstallDirectory
         if ([string]::IsNullOrWhiteSpace($selectedDirectory)) {
             Write-InstallLine '用户已取消安装。' Yellow
-            exit 0
+            exit 1223
         }
         $outputDirectory = $selectedDirectory
         Write-InstallLine ('安装目录：' + $outputDirectory) Cyan
         $stage = '检查程序运行状态及文件占用'
         Write-InstallLine '首先检查程序运行状态及安装目录文件占用...'
-        try { Assert-InstallationAvailable $outputDirectory }
+        try { Assert-InstallationAvailable $outputDirectory -PromptToStop }
         catch {
+            if ($_.Exception -is [OperationCanceledException]) { throw }
             Write-InstallLine $_.Exception.Message Red
             Write-InstallLine '安装尚未开始，没有下载依赖、编译或覆盖任何程序和数据。' Yellow
             Show-InstallResult 'TaskTrace：请先解除程序占用' ($_.Exception.Message + "`r`n`r`n安装尚未开始，没有下载依赖、编译或覆盖任何程序和数据。") $true
@@ -437,7 +499,7 @@ try {
         }
         if (!(Confirm-ExistingInstallation $outputDirectory)) {
             Write-InstallLine '用户已取消覆盖安装。' Yellow
-            exit 0
+            exit 1223
         }
     }
     $stage = '检查构建环境'
@@ -660,6 +722,12 @@ try {
     Show-InstallResult 'TaskTrace：安装成功' ("TaskTrace 已安装到：`r`n" + $outputDirectory + "`r`n`r`n只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。`r`n`r`n同时生成安全复制包：`r`n" + $copyArchive + "`r`n`r`n详细记录：" + $logFile)
     exit 0
 } catch {
+    if ($_.Exception -is [OperationCanceledException]) {
+        Write-InstallLine $_.Exception.Message Yellow
+        # ERROR_CANCELLED: the command wrapper must exit without a result popup
+        # or its normal success/failure pause. The finally block still cleans up.
+        exit 1223
+    }
     Write-InstallLine ''
     Write-InstallLine ('生成失败，阶段：' + $stage) Red
     Write-InstallLine ('错误：' + $_.Exception.Message) Red

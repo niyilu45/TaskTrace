@@ -4,6 +4,7 @@ chcp 65001 >nul
 title TaskTrace Portable Builder
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Install-TaskTrace-Engine.ps1" -Interactive %*
 set "TASKTRACE_INSTALL_EXIT=%ERRORLEVEL%"
+if "%TASKTRACE_INSTALL_EXIT%"=="1223" exit /b %TASKTRACE_INSTALL_EXIT%
 echo.
 if not "%TASKTRACE_INSTALL_EXIT%"=="0" goto install_failed
 echo Installation completed. Review the result dialog before closing this window.
