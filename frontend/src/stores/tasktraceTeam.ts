@@ -11,6 +11,7 @@ import {
 	tasktraceTeamMembersImport,
 	tasktraceTeamMembersSearch,
 	tasktraceTeamNotificationsRead,
+	tasktraceTeamNotificationsDelete,
 	tasktraceTeamPermissionsConfigure,
 	tasktraceTeamResolve,
 	tasktraceTeamStatus,
@@ -156,6 +157,10 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function dismissNotifications(ids: string[] = []) {
+		return run(signal => tasktraceTeamNotificationsDelete({body: {ids}, signal}))
+	}
+
+	async function markNotificationsRead(ids: string[] = []) {
 		return run(signal => tasktraceTeamNotificationsRead({body: {ids}, signal}))
 	}
 
@@ -352,7 +357,8 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)
 	const notificationCount = computed(() => status.value.notifications?.length ?? 0)
-	const activityCount = computed(() => conflictCount.value + notificationCount.value)
+	const unreadNotificationCount = computed(() => status.value.notifications?.filter(notice => !notice.read).length ?? 0)
+	const activityCount = computed(() => conflictCount.value + unreadNotificationCount.value)
 	const memberRoster = computed(() => {
 		const members = new Map<string, string>()
 		const add = (value?: string | null) => {
@@ -375,5 +381,5 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
 	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, searchMembers, grantMember, setMemberAccess, maximumAccessFor, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
+	return {status, loading, loaded, conflictCount, notificationCount, unreadNotificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, markNotificationsRead, searchMembers, grantMember, setMemberAccess, maximumAccessFor, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
 })

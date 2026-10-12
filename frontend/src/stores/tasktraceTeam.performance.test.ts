@@ -1,12 +1,12 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 import {watch} from 'vue'
-import {tasktraceTeamStatus, tasktraceTeamSync, tasktraceTeamMembersSearch, tasksTeamShare} from '@/client/generated'
+import {tasktraceTeamStatus, tasktraceTeamSync, tasktraceTeamMembersSearch, tasksTeamShare, tasktraceTeamNotificationsRead, tasktraceTeamNotificationsDelete} from '@/client/generated'
 import {useTasktraceTeamStore} from './tasktraceTeam'
 
 vi.mock('@/client/generated', async (original) => ({
 	...(await original<typeof import('@/client/generated')>()),
-	tasktraceTeamStatus: vi.fn(), tasktraceTeamSync: vi.fn(), tasktraceTeamMembersSearch: vi.fn(), tasksTeamShare: vi.fn(),
+	tasktraceTeamNotificationsRead: vi.fn(), tasktraceTeamNotificationsDelete: vi.fn(), tasktraceTeamStatus: vi.fn(), tasktraceTeamSync: vi.fn(), tasktraceTeamMembersSearch: vi.fn(), tasksTeamShare: vi.fn(),
 }))
 const snapshot = () => ({enabled: true, username: 'me', bindings: [], notifications: [], conflicts: [], profiles: [{username: 'me', display_name: '本人'}]})
 beforeEach(() => {
@@ -105,5 +105,29 @@ describe('collaboration refresh work', () => {
 		} finally {
 			vi.useRealTimers()
 		}
+	})
+})
+
+
+describe('team notification read counts', () => {
+	it('keeps read history out of the unread count and uses a separate delete action', async () => {
+		const store = useTasktraceTeamStore()
+		const history = {...snapshot(), notifications: [{id: 'one', read: false}, {id: 'two', read: false}]}
+		vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: history} as never)
+		await store.refresh()
+		expect(store.notificationCount).toBe(2); expect(store.activityCount).toBe(2)
+		const read = {...history, notifications: [{id: 'one', read: true}, {id: 'two', read: false}]}
+		vi.mocked(tasktraceTeamNotificationsRead).mockResolvedValue({data: read} as never)
+		await store.markNotificationsRead(['one'])
+		expect(tasktraceTeamNotificationsRead).toHaveBeenCalledWith(expect.objectContaining({body: {ids: ['one']}}))
+		expect(tasktraceTeamNotificationsDelete).not.toHaveBeenCalled()
+		expect(store.notificationCount).toBe(2); expect(store.unreadNotificationCount).toBe(1); expect(store.activityCount).toBe(1)
+		vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: read} as never)
+		await store.refresh(true)
+		expect(store.unreadNotificationCount).toBe(1)
+		vi.mocked(tasktraceTeamNotificationsDelete).mockResolvedValue({data: {...read, notifications: [read.notifications[1]]}} as never)
+		await store.dismissNotifications(['one'])
+		expect(tasktraceTeamNotificationsDelete).toHaveBeenCalledWith(expect.objectContaining({body: {ids: ['one']}}))
+		expect(store.notificationCount).toBe(1)
 	})
 })

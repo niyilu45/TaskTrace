@@ -63,10 +63,16 @@ func RegisterTaskTraceTeamRoutes(api huma.API) {
 		Method:      http.MethodPost, Path: "/tasktrace/team/conflicts/resolve", Tags: tags,
 	}, taskTraceTeamResolve)
 	Register(api, huma.Operation{
-		OperationID: "tasktrace-team-notifications-read", Summary: "Dismiss team collaboration notifications",
-		Description: "Removes selected notification files for the current Windows username. An empty list dismisses all visible team notifications.",
+		OperationID: "tasktrace-team-notifications-read", Summary: "Mark team collaboration notifications as read",
+		Description: "Records personal read receipts without removing shared notifications. An empty list marks all existing notifications read; future notifications remain unread.",
 		Method:      http.MethodPost, Path: "/tasktrace/team/notifications/read", Tags: tags,
 	}, taskTraceTeamNotificationsRead)
+	Register(api, huma.Operation{
+		OperationID: "tasktrace-team-notifications-delete", Summary: "Delete team collaboration notifications",
+		Description: "Explicitly deletes selected notifications for the current user. An empty list deletes all existing notifications; other members are unaffected.",
+		Method:      http.MethodPost, Path: "/tasktrace/team/notifications/delete", Tags: tags,
+		DefaultStatus: http.StatusOK,
+	}, taskTraceTeamNotificationsDelete)
 	Register(api, huma.Operation{
 		OperationID: "tasktrace-team-members-search", Summary: "Search Windows collaboration accounts",
 		Description: "Returns matching local or domain Windows accounts while the user types a team member name.",
@@ -236,7 +242,26 @@ func taskTraceTeamNotificationsRead(ctx context.Context, in *struct {
 	defer s.Close()
 	status, err := models.TaskTraceTeamNotificationsRead(s, a, in.Body)
 	if err != nil {
-		return nil, huma.Error500InternalServerError("dismiss team notifications", err)
+		return nil, taskTraceTeamMutationError("mark team notifications as read", err)
+	}
+	if err := s.Commit(); err != nil {
+		return nil, huma.Error500InternalServerError("save notification state", err)
+	}
+	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
+}
+
+func taskTraceTeamNotificationsDelete(ctx context.Context, in *struct {
+	Body models.TaskTraceTeamNotificationsDeleteRequest
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
+	s, a, err := taskTraceTeamWriteSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	//nolint:contextcheck // The fast status path uses cached Windows access; it never launches PowerShell.
+	status, err := models.TaskTraceTeamNotificationsDelete(s, a, in.Body)
+	if err != nil {
+		return nil, taskTraceTeamMutationError("delete team notifications", err)
 	}
 	if err := s.Commit(); err != nil {
 		return nil, huma.Error500InternalServerError("save notification state", err)

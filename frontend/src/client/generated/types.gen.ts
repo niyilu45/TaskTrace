@@ -3181,10 +3181,25 @@ export type TaskTraceTeamNotification = {
     created?: string;
     id?: string;
     node_id?: string;
+    /**
+     * Whether the current user has read this notification on this installation. Reading keeps the notification in the list.
+     */
+    readonly read?: boolean;
     share_id?: string;
     shared_comment_id?: string;
     task_id?: number;
     task_title?: string;
+};
+
+export type TaskTraceTeamNotificationsDeleteRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Notification IDs to delete. An empty list deletes all existing notifications for the current user.
+     */
+    ids?: Array<string> | null;
 };
 
 export type TaskTraceTeamNotificationsReadRequest = {
@@ -3192,6 +3207,9 @@ export type TaskTraceTeamNotificationsReadRequest = {
      * A URL to the JSON Schema for this object.
      */
     readonly $schema?: string;
+    /**
+     * Notification IDs to mark as read. An empty list marks all existing notifications read without deleting them.
+     */
     ids?: Array<string> | null;
 };
 
@@ -5617,7 +5635,30 @@ export type TaskTraceTeamMemberPermissionWritable = {
     write?: boolean;
 };
 
+export type TaskTraceTeamNotificationWritable = {
+    actor?: string;
+    avatar?: string;
+    comment_id?: number;
+    created?: string;
+    id?: string;
+    node_id?: string;
+    share_id?: string;
+    shared_comment_id?: string;
+    task_id?: number;
+    task_title?: string;
+};
+
+export type TaskTraceTeamNotificationsDeleteRequestWritable = {
+    /**
+     * Notification IDs to delete. An empty list deletes all existing notifications for the current user.
+     */
+    ids?: Array<string> | null;
+};
+
 export type TaskTraceTeamNotificationsReadRequestWritable = {
+    /**
+     * Notification IDs to mark as read. An empty list marks all existing notifications read without deleting them.
+     */
     ids?: Array<string> | null;
 };
 
@@ -5664,7 +5705,7 @@ export type TaskTraceTeamStatusWritable = {
     bindings?: Array<TaskTraceTeamBindingStatusWritable> | null;
     conflicts?: Array<TaskTraceTeamConflictWritable> | null;
     enabled?: boolean;
-    notifications?: Array<TaskTraceTeamNotification> | null;
+    notifications?: Array<TaskTraceTeamNotificationWritable> | null;
     profiles?: Array<TaskTraceTeamMemberProfile> | null;
     repository?: TaskTraceTeamRepositoryInfoWritable;
     username?: string;
@@ -11689,6 +11730,31 @@ export type TasktraceTeamMembersSearchResponses = {
 };
 
 export type TasktraceTeamMembersSearchResponse = TasktraceTeamMembersSearchResponses[keyof TasktraceTeamMembersSearchResponses];
+
+export type TasktraceTeamNotificationsDeleteData = {
+    body: TaskTraceTeamNotificationsDeleteRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/team/notifications/delete';
+};
+
+export type TasktraceTeamNotificationsDeleteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceTeamNotificationsDeleteError = TasktraceTeamNotificationsDeleteErrors[keyof TasktraceTeamNotificationsDeleteErrors];
+
+export type TasktraceTeamNotificationsDeleteResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceTeamStatus;
+};
+
+export type TasktraceTeamNotificationsDeleteResponse = TasktraceTeamNotificationsDeleteResponses[keyof TasktraceTeamNotificationsDeleteResponses];
 
 export type TasktraceTeamNotificationsReadData = {
     body: TaskTraceTeamNotificationsReadRequestWritable;

@@ -7,7 +7,7 @@ import UserModel from '@/models/user'
 import TaskModel from '@/models/task'
 
 const mocks = vi.hoisted(() => ({
-	read: vi.fn(), totalPages: 1, deleteOne: vi.fn(), team: undefined as any, markAllRead: vi.fn(), remove: vi.fn(), update: vi.fn(),
+	read: vi.fn(), totalPages: 1, deleteOne: vi.fn(), team: undefined as any, markAllRead: vi.fn(), remove: vi.fn(), update: vi.fn(), routerPush: vi.fn(),
 	connected: undefined as unknown as Ref<boolean>,
 	subscriber: undefined as unknown as (message: {event: string, data: unknown}) => void,
 }))
@@ -29,11 +29,17 @@ vi.mock('@/client/generated', () => ({notificationsDelete: mocks.deleteOne}))
 vi.mock('@/stores/tasktraceUpdate', () => ({useTasktraceUpdateStore: () => ({state: {}, supported: false, shouldNotify: false})}))
 vi.mock('@/stores/tasktraceTeam', async () => {
 	const {reactive} = await import('vue')
-	mocks.team = reactive({activityCount: 0, notificationCount: 0, conflictCount: 0, status: {notifications: []}, avatarFor: () => '', dismissNotifications: vi.fn()})
+	mocks.team = reactive({
+		conflictCount: 0, status: {notifications: [] as {id: string, read?: boolean}[]}, avatarFor: () => '', dismissNotifications: vi.fn(), markNotificationsRead: vi.fn(),
+		get notificationCount() { return this.status.notifications.length },
+		get unreadNotificationCount() { return this.status.notifications.filter(notice => !notice.read).length },
+		get activityCount() { return this.unreadNotificationCount },
+	})
 	return {useTasktraceTeamStore: () => mocks.team}
 })
-vi.mock('vue-router', () => ({useRouter: () => ({push: vi.fn()}), isNavigationFailure: () => false, NavigationFailureType: {duplicated: 16}}))
+vi.mock('vue-router', () => ({useRouter: () => ({push: mocks.routerPush}), isNavigationFailure: (failure: {type?: number}, type: number) => failure?.type === type, NavigationFailureType: {duplicated: 16}}))
 vi.mock('vue-i18n', async original => ({...(await original<typeof import('vue-i18n')>()), useI18n: () => ({t: (key: string) => key})}))
+vi.mock('@/components/tasks/partials/commentReplyContext', () => ({scrollAndHighlightComment: vi.fn()}))
 vi.mock('@/message', () => ({success: vi.fn(), error: vi.fn()}))
 vi.mock('@/helpers/time/formatDate', async original => ({...(await original<typeof import('@/helpers/time/formatDate')>()), formatDateLong: () => 'Date', formatDisplayDate: () => 'Date'}))
 
@@ -49,7 +55,7 @@ function start() {
 }
 async function show() {await wrapper!.get('.trigger-button').trigger('click'); await flushPromises()}
 beforeEach(() => {
-	vi.clearAllMocks(); mocks.totalPages = 1; mocks.team.status.notifications = []; visible = true; mocks.connected.value = true
+	vi.clearAllMocks(); mocks.routerPush.mockReset().mockResolvedValue(undefined); mocks.team.markNotificationsRead.mockReset(); mocks.totalPages = 1; mocks.team.status.notifications = []; visible = true; mocks.connected.value = true
 	vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible ? 'visible' : 'hidden')
 	vi.spyOn(document, 'hidden', 'get').mockImplementation(() => !visible)
 })
@@ -152,5 +158,62 @@ describe('reading and deleting notifications', () => {
 		expect(wrapper!.findAll('.team-notification-row')).toHaveLength(0)
 		await wrapper!.get('.reading-status button').trigger('click'); await nextTick()
 		expect(wrapper!.text()).toContain('新事项')
+	})
+})
+
+
+describe('team notification read receipts', () => {
+	function prepare() {
+		mocks.read.mockResolvedValue([])
+		mocks.team.status.notifications = [{id: 'first', actor: 'Alice', task_title: 'Keep history', task_id: 12, comment_id: 34}, {id: 'second', actor: 'Bob', task_title: 'Other update', task_id: 13}]
+		mocks.team.markNotificationsRead.mockImplementation(async (ids: string[] = []) => {
+			mocks.team.status.notifications = mocks.team.status.notifications.map((n: {id: string}) => ids.length === 0 || ids.includes(n.id) ? {...n, read: true} : n)
+		})
+		vi.spyOn(document, 'getElementById').mockReturnValue(document.createElement('div'))
+	}
+	it('opens the comment and removes only its unread dot while retaining history', async () => {
+		prepare(); start(); await flushPromises(); await show()
+		expect(wrapper!.findAll('.team-notification-row .read-indicator:not(.read)')).toHaveLength(2)
+		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises()
+		expect(mocks.routerPush).toHaveBeenCalledWith({name: 'task.detail', params: {id: 12}, hash: '#comment-34'})
+		expect(mocks.team.markNotificationsRead).toHaveBeenCalledWith(['first'])
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+		await show()
+		expect(wrapper!.findAll('.team-notification-row')).toHaveLength(2)
+		expect(wrapper!.findAll('.team-notification-row .read-indicator.read')).toHaveLength(1)
+		expect(wrapper!.findAll('.team-notification-row .read-indicator:not(.read)')).toHaveLength(1)
+		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises()
+		expect(mocks.team.markNotificationsRead).toHaveBeenCalledTimes(1)
+	})
+	it('does not mark as read when navigation is cancelled', async () => {
+		prepare(); mocks.routerPush.mockResolvedValue({type: 4})
+		start(); await flushPromises(); await show()
+		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises()
+		expect(mocks.team.markNotificationsRead).not.toHaveBeenCalled()
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+	})
+	it('marks an already open comment as read without deleting it', async () => {
+		prepare(); mocks.routerPush.mockResolvedValue({type: 16})
+		start(); await flushPromises(); await show()
+		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises()
+		expect(mocks.team.markNotificationsRead).toHaveBeenCalledWith(['first'])
+		expect(mocks.team.status.notifications).toHaveLength(2)
+	})
+	it('mark all read preserves rows and clears the unread badge', async () => {
+		prepare(); start(); await flushPromises(); await show()
+		const button = wrapper!.findAllComponents({name: 'XButton'}).find(item => item.attributes('class')?.includes('mbs-2'))
+		expect(button).toBeDefined(); button!.vm.$emit('click'); await flushPromises()
+		expect(mocks.team.markNotificationsRead).toHaveBeenCalledWith()
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+		expect(wrapper!.findAll('.team-notification-row')).toHaveLength(2)
+		expect(wrapper!.findAll('.team-notification-row .read-indicator.read')).toHaveLength(2)
+		expect(wrapper!.find('.unread-indicator').exists()).toBe(false)
+	})
+	it('does not hide the unread dot or delete history if persisting read state fails', async () => {
+		prepare(); mocks.team.markNotificationsRead.mockRejectedValueOnce(new Error('disk unavailable'))
+		start(); await flushPromises(); await show()
+		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises(); await show()
+		expect(wrapper!.findAll('.team-notification-row .read-indicator:not(.read)')).toHaveLength(2)
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
 	})
 })

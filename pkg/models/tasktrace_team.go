@@ -195,7 +195,11 @@ type TaskTraceTeamConfigureRequest struct {
 }
 
 type TaskTraceTeamNotificationsReadRequest struct {
-	IDs []string `json:"ids"`
+	IDs []string `json:"ids" doc:"Notification IDs to mark as read. An empty list marks all existing notifications read without deleting them."`
+}
+
+type TaskTraceTeamNotificationsDeleteRequest struct {
+	IDs []string `json:"ids" doc:"Notification IDs to delete. An empty list deletes all existing notifications for the current user."`
 }
 
 type TaskTraceTeamResolution struct {
@@ -226,6 +230,7 @@ type TaskTraceTeamBindingStatus struct {
 }
 
 type TaskTraceTeamNotification struct {
+	Read            bool      `json:"read" readOnly:"true" doc:"Whether the current user has read this notification on this installation. Reading keeps the notification in the list."`
 	ID              string    `json:"id"`
 	ShareID         string    `json:"share_id"`
 	Actor           string    `json:"actor"`
@@ -2977,7 +2982,7 @@ func TaskTraceTeamResolve(s *xorm.Session, a web.Auth, request TaskTraceTeamReso
 	return &status, err
 }
 
-func TaskTraceTeamNotificationsRead(s *xorm.Session, a web.Auth, request TaskTraceTeamNotificationsReadRequest) (*TaskTraceTeamStatus, error) {
+func TaskTraceTeamNotificationsDelete(s *xorm.Session, a web.Auth, request TaskTraceTeamNotificationsDeleteRequest) (*TaskTraceTeamStatus, error) {
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)
@@ -3008,7 +3013,7 @@ func TaskTraceTeamNotificationsRead(s *xorm.Session, a web.Auth, request TaskTra
 		}
 		for _, entry := range entries {
 			id := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-			if entry.IsDir() || (!deleteAll && !selected[id]) {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") || (!deleteAll && !selected[id]) {
 				continue
 			}
 			if removeErr := os.Remove(filepath.Join(dir, entry.Name())); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -3046,6 +3051,7 @@ func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, 
 	if err != nil {
 		return nil
 	}
+	read, _ := taskTraceTeamLoadNotificationReads(binding, username)
 	result := []TaskTraceTeamNotification{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
@@ -3053,6 +3059,7 @@ func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		}
 		var notice TaskTraceTeamNotification
 		if taskTraceTeamReadJSON(filepath.Join(dir, entry.Name()), &notice) == nil {
+			notice.Read = read[notice.ID]
 			notice.Avatar = taskTraceTeamSafeAvatar(notice.Avatar)
 			taskTraceTeamResolveNotificationTarget(s, binding, &notice)
 			result = append(result, notice)

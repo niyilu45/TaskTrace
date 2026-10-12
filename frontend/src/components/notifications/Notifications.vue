@@ -92,7 +92,11 @@
 						:key="notice.id"
 						class="single-notification team-notification-row"
 					>
-						<span class="read-indicator" />
+						<span
+							class="read-indicator"
+							:class="{read: notice.read}"
+							:aria-label="notice.read ? '已读' : '未读'"
+						/>
 						<img
 							v-if="teamAvatar(notice.actor || '', notice.avatar)"
 							:src="teamAvatar(notice.actor || '', notice.avatar)"
@@ -340,7 +344,7 @@ async function loadMoreNotifications() {
 const unreadNotifications = computed(() => {
 	return allNotifications.value.filter(n => n.name !== '' && n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0) + (isLocalBuild ? teamStore.activityCount : 0)
 })
-const markableUnread = computed(() => notifications.value.filter(n => n.readAt === null).length + (isLocalBuild ? teamStore.notificationCount : 0))
+const markableUnread = computed(() => notifications.value.filter(n => n.readAt === null).length + (isLocalBuild ? teamStore.unreadNotificationCount : 0))
 const notifications = computed(() => {
 	return (showNotifications.value ? readingNotifications.value : allNotifications.value).filter(n => n.name !== '')
 })
@@ -436,17 +440,19 @@ async function openTeamNotification(notice: TaskTraceTeamNotification) {
 		...(commentId ? {hash: `#comment-${commentId}`} : {}),
 	}
 	const failure = await router.push(route)
+	if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
 	if (commentId) {
 		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
 			scrollAndHighlightComment(commentId)
 		}
 		await waitForTeamComment(commentId)
 	}
-	if (notice.id) {
+	if (notice.id && !target.read) {
 		try {
-			await teamStore.dismissNotifications([notice.id])
+			await teamStore.markNotificationsRead([notice.id])
+			readingTeamNotifications.value = readingTeamNotifications.value.map(item => item.id === notice.id ? {...item, read: true} : item)
 		} catch (cause) {
-			console.warn('Failed to mark team notification as read:', cause)
+			showError(cause)
 		}
 	}
 }
@@ -562,14 +568,14 @@ async function markAllRead() {
 	const notificationService = new NotificationService()
 	await Promise.all([
 		notifications.value.some(n => n.readAt === null) ? notificationService.markAllRead() : Promise.resolve(),
-		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
+		isLocalBuild && teamStore.unreadNotificationCount ? teamStore.markNotificationsRead() : Promise.resolve(),
 	])
 	notificationsRevision++
 	success({message: t('notification.markAllReadSuccess')})
 
 	allNotifications.value.forEach(n => n.readAt = new Date())
 	readingNotifications.value.forEach(n => n.readAt = new Date())
-	readingTeamNotifications.value = []
+	readingTeamNotifications.value = readingTeamNotifications.value.map(notice => ({...notice, read: true}))
 }
 
 async function clearAll() {
