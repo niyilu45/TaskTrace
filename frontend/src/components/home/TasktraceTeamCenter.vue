@@ -248,8 +248,8 @@
 		</Modal>
 
 		<TeamConflictResolver
-			v-if="activityHost && showActivity"
-			@close="showActivity = false"
+			v-if="activityHost && showConflicts"
+			@close="showConflicts = false"
 		/>
 	</div>
 </template>
@@ -280,7 +280,7 @@ const activityHost = computed(() => props.activityHost)
 
 const teamStore = useTasktraceTeamStore()
 const showImport = ref(false)
-const showActivity = ref(false)
+const showConflicts = ref(false)
 const link = ref('')
 const repositoryOverride = ref('')
 const targetProject = ref<IProject | null>(null)
@@ -317,16 +317,16 @@ async function poll() {
 onMounted(() => {
 	if (!activityHost.value) void teamStore.refresh().catch(() => undefined)
 	if (activityHost.value) {
-		window.addEventListener('tasktrace-team-activity-open', openActivity)
+		window.addEventListener('tasktrace-team-conflicts-open', openConflicts)
 	}
 })
 
 onBeforeUnmount(() => {
-	window.removeEventListener('tasktrace-team-activity-open', openActivity)
+	window.removeEventListener('tasktrace-team-conflicts-open', openConflicts)
 })
 
-function openActivity() {
-	showActivity.value = true
+function openConflicts() {
+	showConflicts.value = true
 }
 
 function needsAdministratorAuthorization(cause: unknown) {

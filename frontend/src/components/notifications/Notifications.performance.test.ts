@@ -5,6 +5,7 @@ import Notifications from './Notifications.vue'
 import NotificationModel from '@/models/notification'
 import UserModel from '@/models/user'
 import TaskModel from '@/models/task'
+import {error as showError} from '@/message'
 
 const mocks = vi.hoisted(() => ({
 	read: vi.fn(), totalPages: 1, deleteOne: vi.fn(), team: undefined as any, markAllRead: vi.fn(), remove: vi.fn(), update: vi.fn(), routerPush: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock('@/stores/tasktraceUpdate', () => ({useTasktraceUpdateStore: () => ({sta
 vi.mock('@/stores/tasktraceTeam', async () => {
 	const {reactive} = await import('vue')
 	mocks.team = reactive({
-		conflictCount: 0, status: {notifications: [] as {id: string, read?: boolean}[]}, avatarFor: () => '', dismissNotifications: vi.fn(), markNotificationsRead: vi.fn(),
+		conflictCount: 0, status: {notifications: [] as {id: string, read?: boolean}[]}, avatarFor: () => '', dismissNotifications: vi.fn(), markNotificationsRead: vi.fn(), refresh: vi.fn(), sync: vi.fn(),
 		get notificationCount() { return this.status.notifications.length },
 		get unreadNotificationCount() { return this.status.notifications.filter(notice => !notice.read).length },
 		get activityCount() { return this.unreadNotificationCount },
@@ -55,7 +56,7 @@ function start() {
 }
 async function show() {await wrapper!.get('.trigger-button').trigger('click'); await flushPromises()}
 beforeEach(() => {
-	vi.clearAllMocks(); mocks.routerPush.mockReset().mockResolvedValue(undefined); mocks.team.markNotificationsRead.mockReset(); mocks.totalPages = 1; mocks.team.status.notifications = []; visible = true; mocks.connected.value = true
+	vi.clearAllMocks(); mocks.routerPush.mockReset().mockResolvedValue(undefined); mocks.team.markNotificationsRead.mockReset(); mocks.team.refresh.mockReset(); mocks.team.sync.mockReset(); mocks.team.conflictCount = 0; mocks.totalPages = 1; mocks.team.status.notifications = []; visible = true; mocks.connected.value = true
 	vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible ? 'visible' : 'hidden')
 	vi.spyOn(document, 'hidden', 'get').mockImplementation(() => !visible)
 })
@@ -215,5 +216,77 @@ describe('team notification read receipts', () => {
 		await wrapper!.findAll('.team-task-link')[0].trigger('click'); await flushPromises(); await show()
 		expect(wrapper!.findAll('.team-notification-row .read-indicator:not(.read)')).toHaveLength(2)
 		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+	})
+})
+
+// Target metadata can arrive after a notification, or remain unavailable when a
+// LAN peer is offline. These states are independent of collaboration conflicts.
+describe('member update navigation', () => {
+	function prepare() {
+		mocks.read.mockResolvedValue([])
+		mocks.team.conflictCount = 1
+		mocks.team.status.notifications = [{id: 'unresolved', actor: 'Alice', task_title: '待同步的更新', node_id: 'shared-node', shared_comment_id: 'shared-comment'}]
+		vi.spyOn(document, 'getElementById').mockReturnValue(document.createElement('div'))
+		return vi.spyOn(window, 'dispatchEvent')
+	}
+	const resolvesTarget = () => {
+		mocks.team.status.notifications = [{...mocks.team.status.notifications[0], task_id: 12, comment_id: 34}]
+	}
+	it('keeps an unresolved update unread and never opens conflict handling', async () => {
+		const dispatch = prepare()
+		start(); await flushPromises(); await show()
+		await wrapper!.get('.team-task-link').trigger('click'); await flushPromises()
+		expect(mocks.team.refresh).toHaveBeenCalledWith(true)
+		expect(mocks.team.sync).toHaveBeenCalledTimes(1)
+		expect(mocks.routerPush).not.toHaveBeenCalled()
+		expect(dispatch).not.toHaveBeenCalled()
+		expect(showError).toHaveBeenCalledWith(expect.objectContaining({message: expect.stringContaining('暂时无法定位')}))
+		expect(wrapper!.find('.notifications-list').exists()).toBe(true)
+		expect(wrapper!.find('.team-task-link:disabled').exists()).toBe(false)
+		expect(mocks.team.markNotificationsRead).not.toHaveBeenCalled()
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+	})
+	it.each(['current status', 'refresh', 'sync'])('opens the resolved comment from %s despite a frozen reading list and existing conflicts', async source => {
+		const dispatch = prepare()
+		start(); await flushPromises(); await show()
+		if (source === 'current status') resolvesTarget()
+		if (source === 'refresh') mocks.team.refresh.mockImplementationOnce(resolvesTarget)
+		if (source === 'sync') mocks.team.sync.mockImplementationOnce(resolvesTarget)
+		await wrapper!.get('.team-task-link').trigger('click'); await flushPromises()
+		expect(mocks.routerPush).toHaveBeenCalledExactlyOnceWith({name: 'task.detail', params: {id: 12}, hash: '#comment-34'})
+		expect(mocks.team.markNotificationsRead).toHaveBeenCalledWith(['unresolved'])
+		expect(mocks.team.sync).toHaveBeenCalledTimes(source === 'sync' ? 1 : 0)
+		expect(mocks.team.refresh).toHaveBeenCalledTimes(source === 'current status' ? 0 : 1)
+		expect(dispatch).not.toHaveBeenCalled()
+		expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+	})
+	it('reports a synchronization failure without navigation or marking read', async () => {
+		const dispatch = prepare()
+		mocks.team.sync.mockRejectedValueOnce(new Error('Share is offline'))
+		start(); await flushPromises(); await show()
+		await wrapper!.get('.team-task-link').trigger('click'); await flushPromises()
+		expect(dispatch).not.toHaveBeenCalled()
+		expect(mocks.routerPush).not.toHaveBeenCalled()
+		expect(showError).toHaveBeenCalledWith(expect.objectContaining({message: expect.stringContaining('网络连接')}))
+		expect(mocks.team.markNotificationsRead).not.toHaveBeenCalled()
+		expect(wrapper!.find('.notifications-list').exists()).toBe(true)
+	})
+	it('does not mark an update read when its comment is still missing', async () => {
+		const dispatch = prepare()
+		mocks.team.status.notifications[0].task_id = 12
+		start(); await flushPromises(); await show()
+		await wrapper!.get('.team-task-link').trigger('click'); await flushPromises()
+		expect(mocks.routerPush).not.toHaveBeenCalled()
+		expect(dispatch).not.toHaveBeenCalled()
+		expect(mocks.team.markNotificationsRead).not.toHaveBeenCalled()
+	})
+	it('opens conflict handling only from the explicit conflict entry', async () => {
+		const dispatch = prepare()
+		start(); await flushPromises(); await show()
+		await wrapper!.get('button.team-notification-row').trigger('click'); await flushPromises()
+		expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({type: 'tasktrace-team-conflicts-open'}))
+		expect(mocks.routerPush).not.toHaveBeenCalled()
+		expect(mocks.team.refresh).not.toHaveBeenCalled()
+		expect(mocks.team.sync).not.toHaveBeenCalled()
 	})
 })

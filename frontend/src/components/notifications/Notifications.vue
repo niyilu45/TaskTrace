@@ -77,7 +77,7 @@
 					v-if="isLocalBuild && readingConflictCount"
 					type="button"
 					class="single-notification team-notification-row"
-					@click="openTeamActivity"
+					@click="openTeamConflicts"
 				>
 					<span class="read-indicator" />
 					<Icon icon="exclamation-circle" />
@@ -114,6 +114,8 @@
 									type="button"
 									class="team-task-link"
 									:title="`打开“${notice.task_title || '团队任务'}”的对应评论`"
+									:disabled="openingTeamNotification"
+									:aria-busy="openingTeamNotification"
 									@click.stop="openTeamNotification(notice)"
 								>
 									“{{ notice.task_title || '团队任务' }}”
@@ -279,6 +281,7 @@ const loadedPages = ref(1)
 const totalPages = ref(1)
 const loadingMore = ref(false)
 const deleting = ref(new Set<string>())
+const openingTeamNotification = ref(false)
 const deletedNotificationIds = new Set<number>()
 let initialReadFinished = false
 
@@ -400,9 +403,9 @@ function openUpdateDetails() {
 	showUpdateDetails.value = true
 }
 
-function openTeamActivity() {
+function openTeamConflicts() {
 	showNotifications.value = false
-	window.dispatchEvent(new CustomEvent('tasktrace-team-activity-open'))
+	window.dispatchEvent(new CustomEvent('tasktrace-team-conflicts-open'))
 }
 
 async function waitForTeamComment(commentId: number) {
@@ -417,43 +420,57 @@ async function waitForTeamComment(commentId: number) {
 	return false
 }
 
+function hasTeamNotificationTarget(notice: TaskTraceTeamNotification) {
+	return Number.isSafeInteger(notice.task_id) && Number(notice.task_id) > 0
+		&& (!notice.shared_comment_id || (Number.isSafeInteger(notice.comment_id) && Number(notice.comment_id) > 0))
+}
+
 async function openTeamNotification(notice: TaskTraceTeamNotification) {
-	let target = notice
-	if ((!target.task_id || (!target.comment_id && target.shared_comment_id)) && target.id) {
-		try {
-			await teamStore.sync()
-			target = teamStore.status.notifications?.find(candidate => candidate.id === target.id) || target
-		} catch (cause) {
-			console.warn('Failed to synchronize the team notification target:', cause)
+	if (openingTeamNotification.value) return
+	openingTeamNotification.value = true
+	const currentNotice = () => (notice.id && teamStore.status.notifications?.find(candidate => candidate.id === notice.id)) || notice
+	try {
+		// The reading list is a stable snapshot. Prefer an already resolved local
+		// target, then refresh status before requesting any LAN synchronization.
+		let target = currentNotice()
+		if (!hasTeamNotificationTarget(target) && notice.id) {
+			try {
+				await teamStore.refresh(true)
+				target = currentNotice()
+				if (!hasTeamNotificationTarget(target)) {
+					await teamStore.sync()
+					target = currentNotice()
+				}
+			} catch (cause) {
+				showError(new Error('暂时无法读取这条成员更新，请检查团队共享目录或网络连接后重试。', {cause}))
+				return
+			}
 		}
-	}
-	const taskId = Number(target.task_id || 0)
-	if (!taskId) {
-		openTeamActivity()
-		return
-	}
-	showNotifications.value = false
-	const commentId = Number(target.comment_id || 0)
-	const route: RouteLocationRaw = {
-		name: 'task.detail',
-		params: {id: taskId},
-		...(commentId ? {hash: `#comment-${commentId}`} : {}),
-	}
-	const failure = await router.push(route)
-	if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-	if (commentId) {
-		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
-			scrollAndHighlightComment(commentId)
+		if (!hasTeamNotificationTarget(target)) {
+			showError({message: '暂时无法定位这条成员更新对应的事项或评论，可能尚未同步、已删除或无访问权限。请稍后重试；通知仍保留在列表中。'})
+			return
 		}
-		await waitForTeamComment(commentId)
-	}
-	if (notice.id && !target.read) {
-		try {
+		const commentId = Number(target.comment_id || 0)
+		const route: RouteLocationRaw = {
+			name: 'task.detail',
+			params: {id: target.task_id},
+			...(commentId ? {hash: `#comment-${commentId}`} : {}),
+		}
+		const failure = await router.push(route)
+		if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
+		showNotifications.value = false
+		if (commentId && !await waitForTeamComment(commentId)) {
+			showError({message: '已打开事项，但暂时无法显示这条更新的评论。请稍后重试；通知尚未标记为已读。'})
+			return
+		}
+		if (notice.id && !target.read) {
 			await teamStore.markNotificationsRead([notice.id])
 			readingTeamNotifications.value = readingTeamNotifications.value.map(item => item.id === notice.id ? {...item, read: true} : item)
-		} catch (cause) {
-			showError(cause)
 		}
+	} catch (cause) {
+		showError(cause)
+	} finally {
+		openingTeamNotification.value = false
 	}
 }
 
