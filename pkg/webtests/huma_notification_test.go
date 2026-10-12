@@ -156,6 +156,10 @@ func TestHumaNotification_LinkShareForbidden(t *testing.T) {
 		rec := humaRequest(t, e, http.MethodPost, "/api/v2/notifications", "", token, "")
 		assert.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
 	})
+	t.Run("delete one", func(t *testing.T) {
+		rec := humaRequest(t, e, http.MethodDelete, "/api/v2/notifications/1", "", token, "")
+		assert.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
+	})
 	t.Run("delete all", func(t *testing.T) {
 		rec := humaRequest(t, e, http.MethodDelete, "/api/v2/notifications", "", token, "")
 		assert.Equal(t, http.StatusForbidden, rec.Code, "body: %s", rec.Body.String())
@@ -175,4 +179,24 @@ func notificationIDsFromReadAll(t *testing.T, body []byte) []int64 {
 		ids = append(ids, it.ID)
 	}
 	return ids
+}
+
+func TestHumaNotification_DeleteOne(t *testing.T) {
+	e, err := setupTestEnv()
+	require.NoError(t, err)
+	token := humaTokenFor(t, &testuser1)
+	for _, id := range []string{"3", "9999"} {
+		rec := humaRequest(t, e, http.MethodDelete, "/api/v2/notifications/"+id, "", token, "")
+		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	}
+	for _, id := range []string{"0", "-1"} {
+		rec := humaRequest(t, e, http.MethodDelete, "/api/v2/notifications/"+id, "", token, "")
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	}
+	rec := humaRequest(t, e, http.MethodDelete, "/api/v2/notifications/1", "", token, "")
+	require.Equal(t, http.StatusNoContent, rec.Code, rec.Body.String())
+	list := humaRequest(t, e, http.MethodGet, "/api/v2/notifications", "", token, "")
+	require.ElementsMatch(t, []int64{2}, notificationIDsFromReadAll(t, list.Body.Bytes()))
+	other := humaRequest(t, e, http.MethodGet, "/api/v2/notifications", "", humaTokenFor(t, &testuser2), "")
+	require.ElementsMatch(t, []int64{3}, notificationIDsFromReadAll(t, other.Body.Bytes()))
 }

@@ -179,7 +179,7 @@
 					v-if="binding.conflicts?.length"
 					class="notification is-danger is-light"
 				>
-					检测到 {{ binding.conflicts.length }} 项冲突，请从顶部的团队通知入口一次性处理。
+					检测到 {{ binding.conflicts.length }} 项冲突，请从顶部通知铃铛打开差异对比，逐项处理。
 				</p>
 			</template>
 

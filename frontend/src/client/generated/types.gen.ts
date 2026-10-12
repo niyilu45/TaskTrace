@@ -3010,6 +3010,10 @@ export type TaskTraceTeamConfigureRequest = {
 
 export type TaskTraceTeamConflict = {
     base?: string;
+    /**
+     * Display-only base HTML with local attachment URLs.
+     */
+    readonly base_preview?: string;
     field?: string;
     id?: string;
     node_id?: string;
@@ -3021,6 +3025,10 @@ export type TaskTraceTeamConflict = {
 
 export type TaskTraceTeamConflictOption = {
     author?: string;
+    /**
+     * Display-only HTML with available local attachment URLs. Submit value when resolving.
+     */
+    readonly preview?: string;
     value?: string;
 };
 
@@ -5522,7 +5530,7 @@ export type TaskTraceRecoverableBackupWritable = {
 };
 
 export type TaskTraceTeamBindingStatusWritable = {
-    conflicts?: Array<TaskTraceTeamConflict> | null;
+    conflicts?: Array<TaskTraceTeamConflictWritable> | null;
     last_error?: string;
     last_sync?: string;
     link?: string;
@@ -5537,6 +5545,22 @@ export type TaskTraceTeamBindingStatusWritable = {
 export type TaskTraceTeamConfigureRequestWritable = {
     notify?: boolean;
     share_id?: string;
+};
+
+export type TaskTraceTeamConflictWritable = {
+    base?: string;
+    field?: string;
+    id?: string;
+    node_id?: string;
+    options?: Array<TaskTraceTeamConflictOptionWritable> | null;
+    share_id?: string;
+    task_id?: number;
+    task_title?: string;
+};
+
+export type TaskTraceTeamConflictOptionWritable = {
+    author?: string;
+    value?: string;
 };
 
 export type TaskTraceTeamImportRequestWritable = {
@@ -5638,7 +5662,7 @@ export type TaskTraceTeamResolveRequestWritable = {
 
 export type TaskTraceTeamStatusWritable = {
     bindings?: Array<TaskTraceTeamBindingStatusWritable> | null;
-    conflicts?: Array<TaskTraceTeamConflict> | null;
+    conflicts?: Array<TaskTraceTeamConflictWritable> | null;
     enabled?: boolean;
     notifications?: Array<TaskTraceTeamNotification> | null;
     profiles?: Array<TaskTraceTeamMemberProfile> | null;
@@ -7976,6 +8000,33 @@ export type NotificationsAtomFeedResponses = {
 };
 
 export type NotificationsAtomFeedResponse = NotificationsAtomFeedResponses[keyof NotificationsAtomFeedResponses];
+
+export type NotificationsDeleteData = {
+    body?: never;
+    path: {
+        notificationid: number;
+    };
+    query?: never;
+    url: '/notifications/{notificationid}';
+};
+
+export type NotificationsDeleteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type NotificationsDeleteError = NotificationsDeleteErrors[keyof NotificationsDeleteErrors];
+
+export type NotificationsDeleteResponses = {
+    /**
+     * No Content
+     */
+    204: void;
+};
+
+export type NotificationsDeleteResponse = NotificationsDeleteResponses[keyof NotificationsDeleteResponses];
 
 export type NotificationsMarkReadData = {
     body: DatabaseNotificationsWritable;

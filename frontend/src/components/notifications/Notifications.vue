@@ -2,7 +2,7 @@
 	<div class="notifications">
 		<slot
 			name="trigger"
-			toggle-open="() => showNotifications = !showNotifications"
+			:toggle-open="() => showNotifications = !showNotifications"
 			:has-unread-notifications="unreadNotifications > 0"
 		>
 			<BaseButton
@@ -48,8 +48,21 @@
 						</BaseButton>
 					</div>
 				</div>
+				<div
+					class="reading-status"
+					role="status"
+				>
+					<button
+						v-if="hasPendingChanges"
+						type="button"
+						@click="applyPendingNotifications"
+					>
+						通知有更新，点击查看
+					</button>
+					<span v-else>阅读期间列表保持不动</span>
+				</div>
 				<button
-					v-if="updateStore.shouldNotify"
+					v-if="readingUpdate"
 					type="button"
 					class="single-notification update-release-notification"
 					@click="openUpdateDetails"
@@ -61,7 +74,7 @@
 					</span>
 				</button>
 				<button
-					v-if="isLocalBuild && teamStore.conflictCount"
+					v-if="isLocalBuild && readingConflictCount"
 					type="button"
 					class="single-notification team-notification-row"
 					@click="openTeamActivity"
@@ -69,13 +82,13 @@
 					<span class="read-indicator" />
 					<Icon icon="exclamation-circle" />
 					<span class="detail">
-						<strong>有 {{ teamStore.conflictCount }} 项团队协作冲突需要处理</strong>
-						<span class="created">点击查看并一次性选择处理结果</span>
+						<strong>有 {{ readingConflictCount }} 项团队协作冲突需要处理</strong>
+						<span class="created">点击对比差异，逐项处理</span>
 					</span>
 				</button>
 				<template v-if="isLocalBuild">
 					<div
-						v-for="notice in teamStore.status.notifications"
+						v-for="notice in readingTeamNotifications"
 						:key="notice.id"
 						class="single-notification team-notification-row"
 					>
@@ -104,14 +117,23 @@
 							</span>
 							<span class="created">{{ notice.created ? formatDisplayDate(notice.created) : '刚刚' }}</span>
 						</span>
+						<button
+							type="button"
+							class="notification-delete"
+							aria-label="删除此条团队通知"
+							:disabled="deleting.has(`team:${notice.id}`)"
+							@click.stop="deleteTeamNotification(notice)"
+						>
+							<Icon icon="trash-alt" />
+						</button>
 					</div>
 				</template>
 				<div
-					v-for="(n, index) in notifications"
+					v-for="n in notifications"
 					:key="n.id"
 					class="single-notification"
 					:class="{'is-clickable': notificationHasRoute(n)}"
-					@click="() => notificationHasRoute(n) && to(n, index)()"
+					@click="() => notificationHasRoute(n) && to(n)()"
 				>
 					<div
 						class="read-indicator"
@@ -140,7 +162,26 @@
 							{{ formatDisplayDate(n.created) }}
 						</span>
 					</div>
+					<button
+						type="button"
+						class="notification-delete"
+						aria-label="删除此条通知"
+						:disabled="deleting.has(`notice:${n.id}`)"
+						@click.stop="deleteNotification(n)"
+					>
+						<Icon icon="trash-alt" />
+					</button>
 				</div>
+				<XButton
+					v-if="loadedPages < totalPages"
+					variant="tertiary"
+					class="is-fullwidth"
+					:loading="loadingMore"
+					:disabled="loadingMore"
+					@click="loadMoreNotifications"
+				>
+					加载更早的通知
+				</XButton>
 				<XButton
 					v-if="markableUnread > 0"
 					variant="tertiary"
@@ -150,7 +191,7 @@
 					{{ $t('notification.markAllRead') }}
 				</XButton>
 				<p
-					v-if="notifications.length === 0 && !updateStore.shouldNotify && teamStore.activityCount === 0"
+					v-if="notifications.length === 0 && !readingUpdate && readingTeamNotifications.length === 0 && readingConflictCount === 0"
 					class="nothing"
 				>
 					{{ $t('notification.none') }}<br>
@@ -186,7 +227,7 @@
 </template>
 
 <script lang="ts" setup>
-import {computed, onMounted, onUnmounted, ref, watch} from 'vue'
+import {computed, onMounted, onUnmounted, ref, watch, nextTick} from 'vue'
 import equal from 'fast-deep-equal'
 import {useVisiblePolling} from '@/composables/useVisiblePolling'
 import {useRouter, isNavigationFailure, NavigationFailureType, type RouteLocationRaw} from 'vue-router'
@@ -212,7 +253,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import type {TaskTraceTeamNotification} from '@/client/generated'
+import {notificationsDelete, type TaskTraceTeamNotification} from '@/client/generated'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
@@ -225,14 +266,83 @@ const teamStore = useTasktraceTeamStore()
 const allNotifications = ref<INotification[]>([])
 const showNotifications = ref(false)
 const showUpdateDetails = ref(false)
-const popup = ref(null)
+const popup = ref<HTMLElement | null>(null)
+const readingNotifications = ref<INotification[]>([])
+const readingTeamNotifications = ref<TaskTraceTeamNotification[]>([])
+const readingConflictCount = ref(0)
+const readingUpdate = ref(false)
+const loadedPages = ref(1)
+const totalPages = ref(1)
+const loadingMore = ref(false)
+const deleting = ref(new Set<string>())
+const deletedNotificationIds = new Set<number>()
+let initialReadFinished = false
+
+function captureNotifications() {
+	readingNotifications.value = [...allNotifications.value]
+	readingTeamNotifications.value = [...(teamStore.status.notifications ?? [])]
+	readingConflictCount.value = teamStore.conflictCount || 0
+	readingUpdate.value = updateStore.shouldNotify
+}
+watch(showNotifications, open => { if (open) captureNotifications() })
+const hasPendingChanges = computed(() => !equal(readingNotifications.value, allNotifications.value)
+	|| !equal(readingTeamNotifications.value, teamStore.status.notifications ?? [])
+	|| readingConflictCount.value !== (teamStore.conflictCount || 0)
+	|| readingUpdate.value !== updateStore.shouldNotify)
+
+async function applyPendingNotifications() {
+	captureNotifications()
+	await nextTick()
+	if (popup.value) popup.value.scrollTop = 0
+}
+
+async function deleteNotification(notice: INotification) {
+	const key = `notice:${notice.id}`
+	if (deleting.value.has(key)) return
+	deleting.value.add(key)
+	notificationsRevision++
+	try {
+		await notificationsDelete({path: {notificationid: notice.id}})
+		deletedNotificationIds.add(notice.id)
+		notificationsRevision++
+		allNotifications.value = allNotifications.value.filter(item => item.id !== notice.id)
+		readingNotifications.value = readingNotifications.value.filter(item => item.id !== notice.id)
+	} catch (cause) { showError(cause) }
+	finally { deleting.value.delete(key) }
+}
+
+async function deleteTeamNotification(notice: TaskTraceTeamNotification) {
+	if (!notice.id) return
+	const key = `team:${notice.id}`
+	if (deleting.value.has(key)) return
+	deleting.value.add(key)
+	try {
+		await teamStore.dismissNotifications([notice.id])
+		readingTeamNotifications.value = readingTeamNotifications.value.filter(item => item.id !== notice.id)
+	} catch (cause) { showError(cause) }
+	finally { deleting.value.delete(key) }
+}
+
+async function loadMoreNotifications() {
+	if (loadingMore.value) return
+	loadingMore.value = true
+	const previousPages = loadedPages.value
+	loadedPages.value++
+	notificationsRevision++
+	try {
+		await loadNotifications()
+		const known = new Set(readingNotifications.value.map(item => item.id))
+		readingNotifications.value.push(...allNotifications.value.filter(item => !known.has(item.id)))
+	} catch (cause) { loadedPages.value = previousPages; showError(cause) }
+	finally { loadingMore.value = false }
+}
 
 const unreadNotifications = computed(() => {
-	return notifications.value.filter(n => n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0) + (isLocalBuild ? teamStore.activityCount : 0)
+	return allNotifications.value.filter(n => n.name !== '' && n.readAt === null).length + (updateStore.shouldNotify ? 1 : 0) + (isLocalBuild ? teamStore.activityCount : 0)
 })
 const markableUnread = computed(() => notifications.value.filter(n => n.readAt === null).length + (isLocalBuild ? teamStore.notificationCount : 0))
 const notifications = computed(() => {
-	return allNotifications.value ? allNotifications.value.filter(n => n.name !== '') : []
+	return (showNotifications.value ? readingNotifications.value : allNotifications.value).filter(n => n.name !== '')
 })
 const userInfo = computed(() => authStore.info)
 
@@ -258,7 +368,7 @@ onMounted(() => {
 			const notification = new NotificationModel(msg.data as Partial<INotification>)
 			// Avoid duplicates if the same notification was already loaded via REST
 			const exists = allNotifications.value.some(n => n.id === notification.id)
-			if (!exists) {
+			if (!exists && !deletedNotificationIds.has(notification.id)) {
 				notificationsRevision++
 				allNotifications.value = [notification, ...allNotifications.value]
 			}
@@ -376,12 +486,21 @@ function loadNotifications(): Promise<void> {
 	const operation = (async () => {
 		while (!disposed) {
 			const version = notificationsRevision
-			const next = await notificationService.getAll()
+			const next: INotification[] = []
+			for (let page = 1; page <= loadedPages.value; page++) {
+				const batch = await notificationService.getAll(undefined, {per_page: 50}, page)
+				next.push(...batch)
+				totalPages.value = Math.max(1, notificationService.totalPages || 1)
+				if (page >= totalPages.value || disposed) break
+			}
 			if (disposed) return
 			// A websocket event can arrive while the initial history is being read.
 			// Fetch one current snapshot instead of permanently losing the older unread items.
 			if (version !== notificationsRevision) continue
-			if (!equal(allNotifications.value, next)) allNotifications.value = next
+			const unique = [...new Map(next.filter(item => !deletedNotificationIds.has(item.id)).map(item => [item.id, item])).values()]
+			if (!equal(allNotifications.value, unique)) allNotifications.value = unique
+			if (!initialReadFinished && showNotifications.value) captureNotifications()
+			initialReadFinished = true
 			return
 		}
 	})().finally(() => { if (activeRead === operation) activeRead = undefined })
@@ -389,8 +508,8 @@ function loadNotifications(): Promise<void> {
 	return operation
 }
 
-function hidePopup(e) {
-	if (showNotifications.value) {
+function hidePopup(e: MouseEvent) {
+	if (showNotifications.value && popup.value) {
 		closeWhenClickedOutside(e, popup.value, () => showNotifications.value = false)
 	}
 }
@@ -416,19 +535,17 @@ function notificationHasRoute(n: INotification): boolean {
 	return getNotificationRoute(n) !== null
 }
 
-function to(n: INotification, index: number) {
+function to(n: INotification) {
 	return async () => {
 		const route = getNotificationRoute(n)
 		if (route === null) return
 		
 		const failure = await router.push(route)
-		if (isNavigationFailure(failure, NavigationFailureType.duplicated)) {
-			router.go(0)
-		}
+		if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
 
 		notificationsRevision++
 		n.read = true
-		if (allNotifications.value[index]) {
+		if (allNotifications.value.some(item => item.id === n.id)) {
 			const notificationService = new NotificationService()
 			const saved = await notificationService.update(n)
 			notificationsRevision++
@@ -450,7 +567,9 @@ async function markAllRead() {
 	notificationsRevision++
 	success({message: t('notification.markAllReadSuccess')})
 
-	notifications.value.forEach(n => n.readAt = new Date())
+	allNotifications.value.forEach(n => n.readAt = new Date())
+	readingNotifications.value.forEach(n => n.readAt = new Date())
+	readingTeamNotifications.value = []
 }
 
 async function clearAll() {
@@ -463,6 +582,8 @@ async function clearAll() {
 	notificationsRevision++
 	success({message: t('notification.clearAllSuccess')})
 	allNotifications.value = []
+	readingNotifications.value = []
+	readingTeamNotifications.value = []
 }
 </script>
 
@@ -491,12 +612,14 @@ async function clearAll() {
 		position: absolute;
 		inset-inline-end: 1rem;
 		inset-block-start: calc(100% + 1rem);
-		max-block-size: 400px;
+		max-block-size: min(70dvh, 36rem);
+		overscroll-behavior: contain;
+		scrollbar-gutter: stable;
 		overflow-y: auto;
 
 		background: var(--white);
 		color: var(--text);
-		inline-size: 350px;
+		inline-size: 28rem;
 		max-inline-size: calc(100vw - 2rem);
 		padding: .75rem .25rem;
 		border-radius: $radius;
@@ -508,6 +631,10 @@ async function clearAll() {
 		}
 
 		.head {
+			position: sticky;
+			inset-block-start: -.75rem;
+			z-index: 1;
+			background: var(--white);
 			font-family: $vikunja-font;
 			font-size: 1rem;
 			padding: .5rem;
@@ -535,7 +662,14 @@ async function clearAll() {
 		.single-notification {
 			display: flex;
 			align-items: center;
-			padding: 0.25rem 0;
+			padding: .625rem .25rem;
+			border-block-end: 1px solid var(--grey-200);
+
+			.detail {
+				min-inline-size: 0;
+				flex: 1;
+				overflow-wrap: anywhere;
+			}
 
 			transition: background-color $transition;
 
@@ -581,7 +715,7 @@ async function clearAll() {
 			}
 
 			.created {
-				color: var(--grey-400);
+				color: var(--grey-600);
 			}
 
 			&:last-child {
@@ -633,7 +767,9 @@ async function clearAll() {
 			min-inline-size: 0;
 			gap: .125rem;
 		}
-		strong, .detail > span:first-child { overflow-wrap: anywhere; }
+		strong, .detail > span:first-child {
+			overflow-wrap: anywhere;
+		}
 	}
 
 	.team-notification-message {
@@ -679,5 +815,40 @@ async function clearAll() {
 		font-weight: 700;
 	}
 
+}
+.reading-status {
+	padding: .375rem .5rem;
+	min-block-size: 2rem;
+	color: var(--grey-600);
+	font-size: .8rem;
+
+	button {
+		border: 0;
+		padding: 0;
+		background: transparent;
+		color: var(--primary);
+		font: inherit;
+		cursor: pointer;
+	}
+}
+
+.notification-delete {
+	flex: 0 0 2rem;
+	align-self: flex-start;
+	min-block-size: 2rem;
+	border: 0;
+	border-radius: .375rem;
+	background: transparent;
+	color: var(--grey-600);
+	cursor: pointer;
+
+	&:hover {
+		background: var(--grey-100);
+		color: var(--danger);
+	}
+	&:disabled {
+		cursor: wait;
+		opacity: .5;
+	}
 }
 </style>

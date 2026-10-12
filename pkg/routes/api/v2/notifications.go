@@ -77,6 +77,15 @@ func RegisterNotificationRoutes(api huma.API) {
 	}, notificationsMarkAllRead)
 
 	Register(api, huma.Operation{
+		OperationID: "notifications-delete",
+		Summary:     "Delete one notification",
+		Description: "Deletes only the selected notification belonging to the authenticated user. Other users' notifications and link-share requests are refused.",
+		Method:      http.MethodDelete,
+		Path:        "/notifications/{notificationid}",
+		Tags:        tags,
+	}, notificationsDelete)
+
+	Register(api, huma.Operation{
 		OperationID: "notifications-delete-all",
 		Summary:     "Delete all notifications",
 		Description: "Deletes every notification of the authenticated user. Only the caller's own notifications are affected; link shares have no notifications and are refused.",
@@ -153,6 +162,21 @@ func notificationsDeleteAll(ctx context.Context, _ *struct{}) (*emptyBody, error
 		return nil, err
 	}
 	if err := handler.DoDelete(ctx, &models.DatabaseNotifications{}, a); err != nil {
+		return nil, translateDomainError(err)
+	}
+	return &emptyBody{}, nil
+}
+
+func notificationsDelete(ctx context.Context, in *struct {
+	ID int64 `path:"notificationid" minimum:"1"`
+}) (*emptyBody, error) {
+	a, err := authFromCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	n := &models.DatabaseNotifications{}
+	n.ID = in.ID
+	if err := handler.DoDelete(ctx, n, a); err != nil {
 		return nil, translateDomainError(err)
 	}
 	return &emptyBody{}, nil

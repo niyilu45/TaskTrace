@@ -128,19 +128,21 @@ type TaskTraceTeamBase struct {
 }
 
 type TaskTraceTeamConflictOption struct {
-	Author string `json:"author"`
-	Value  string `json:"value"`
+	Author  string `json:"author"`
+	Value   string `json:"value"`
+	Preview string `json:"preview,omitempty" readOnly:"true" doc:"Display-only HTML with available local attachment URLs. Submit value when resolving."`
 }
 
 type TaskTraceTeamConflict struct {
-	ID        string                        `json:"id"`
-	ShareID   string                        `json:"share_id"`
-	NodeID    string                        `json:"node_id"`
-	TaskID    int64                         `json:"task_id"`
-	TaskTitle string                        `json:"task_title"`
-	Field     string                        `json:"field"`
-	Base      string                        `json:"base"`
-	Options   []TaskTraceTeamConflictOption `json:"options"`
+	ID          string                        `json:"id"`
+	ShareID     string                        `json:"share_id"`
+	NodeID      string                        `json:"node_id"`
+	TaskID      int64                         `json:"task_id"`
+	TaskTitle   string                        `json:"task_title"`
+	Field       string                        `json:"field"`
+	Base        string                        `json:"base"`
+	BasePreview string                        `json:"base_preview,omitempty" readOnly:"true" doc:"Display-only base HTML with local attachment URLs."`
+	Options     []TaskTraceTeamConflictOption `json:"options"`
 }
 
 type TaskTraceTeamBinding struct {
@@ -2987,23 +2989,31 @@ func TaskTraceTeamNotificationsRead(s *xorm.Session, a web.Auth, request TaskTra
 		return nil, err
 	}
 	selected := map[string]bool{}
+	deleteAll := len(request.IDs) == 0
 	for _, id := range request.IDs {
 		if parsed, parseErr := uuid.Parse(id); parseErr == nil {
 			selected[parsed.String()] = true
+		} else {
+			return nil, errors.New("invalid team notification ID")
 		}
 	}
 	for i := range state.Bindings {
 		dir := filepath.Join(taskTraceTeamShareDir(state.Bindings[i].Repository, state.Bindings[i].ShareID), "notifications", strings.ToLower(u.Username))
 		entries, readErr := os.ReadDir(dir)
-		if readErr != nil {
+		if os.IsNotExist(readErr) {
 			continue
+		}
+		if readErr != nil {
+			return nil, readErr
 		}
 		for _, entry := range entries {
 			id := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-			if entry.IsDir() || (!selected[id] && len(selected) > 0) {
+			if entry.IsDir() || (!deleteAll && !selected[id]) {
 				continue
 			}
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+			if removeErr := os.Remove(filepath.Join(dir, entry.Name())); removeErr != nil && !os.IsNotExist(removeErr) {
+				return nil, removeErr
+			}
 		}
 	}
 	status, err := taskTraceTeamStatusLockedFast(s, a, state)
@@ -3177,15 +3187,16 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 				}
 			}
 		}
+		conflicts := taskTraceTeamConflictPreviews(&binding)
 		row := TaskTraceTeamBindingStatus{
 			ShareID: binding.ShareID, Owner: binding.Owner, Members: manifest.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle,
 			TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(manifest.Members),
 			Notify: binding.Notify, CanManagePermissions: canManagePermissions,
 			PermissionTargets: permissionTargets,
-			LastSync:          binding.LastSync, LastError: binding.LastError, Conflicts: binding.Conflicts,
+			LastSync:          binding.LastSync, LastError: binding.LastError, Conflicts: conflicts,
 		}
 		status.Bindings = append(status.Bindings, row)
-		status.Conflicts = append(status.Conflicts, binding.Conflicts...)
+		status.Conflicts = append(status.Conflicts, conflicts...)
 		status.Notifications = append(status.Notifications, taskTraceTeamNotifications(s, &binding, u.Username)...)
 		for _, profile := range taskTraceTeamProfiles(&binding) {
 			key := taskTraceTeamProfileKey(profile.Username)

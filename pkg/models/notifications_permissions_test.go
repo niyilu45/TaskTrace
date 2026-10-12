@@ -23,6 +23,7 @@ import (
 	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/notifications"
 	"code.vikunja.io/api/pkg/user"
+	"code.vikunja.io/api/pkg/web"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -265,4 +266,37 @@ func readNotificationNames(t *testing.T, s *xorm.Session, notifiableID int64) []
 		names = append(names, dbn.Name)
 	}
 	return names
+}
+
+func TestDatabaseNotifications_DeleteSelected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		id      int64
+		a       web.Auth
+		allowed bool
+	}{
+		{"own", 1, &user.User{ID: 1}, true},
+		{"other user", 3, &user.User{ID: 1}, false},
+		{"missing", 99999, &user.User{ID: 1}, false},
+		{"link", 1, &LinkSharing{ID: 1}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db.LoadAndAssertFixtures(t)
+			s := db.NewSession()
+			defer s.Close()
+			n := &DatabaseNotifications{DatabaseNotification: notifications.DatabaseNotification{ID: tc.id}}
+			can, err := n.CanDelete(s, tc.a)
+			require.NoError(t, err)
+			require.Equal(t, tc.allowed, can)
+			if can {
+				require.NoError(t, n.Delete(s, tc.a))
+				var remaining []*notifications.DatabaseNotification
+				require.NoError(t, s.Find(&remaining))
+				require.Len(t, remaining, 2)
+				for _, row := range remaining {
+					require.NotEqual(t, tc.id, row.ID)
+				}
+			}
+		})
+	}
 }
