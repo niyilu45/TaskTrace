@@ -63,4 +63,16 @@ func TestHumaTaskTraceTeamNotificationsReadAndDelete(t *testing.T) {
 	_, err = os.Stat(path("user1", id))
 	require.True(t, os.IsNotExist(err))
 	require.FileExists(t, path("user2", id))
+	rec = humaRequest(t, e, http.MethodGet, "/api/v2/tasktrace/notifications/history", "", token, "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var history []models.TaskTraceNotificationHistoryEntry
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &history))
+	require.Len(t, history, 1)
+	require.Equal(t, id, history[0].Team.ID)
+	require.Equal(t, "Keep history", history[0].Team.TaskTitle)
+	require.True(t, history[0].Team.Read)
+	rec = humaRequest(t, e, http.MethodGet, "/api/v2/tasktrace/notifications/history", "", humaTokenFor(t, &testuser2), "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.JSONEq(t, "[]", rec.Body.String())
+
 }

@@ -2414,11 +2414,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			if resolution, ok := resolutions[key]; ok {
 				required = resolution.ID
 			}
-			value, options, conflict := taskTraceTeamFindField(snapshots, node, field, taskTraceTeamBaseValue(base, field), required, localTask)
-			if !conflict && value == "" && hasLocalTask {
-				options = taskTraceTeamUnprovenRemovalOptions(observedSnapshots, &manifest, node, field, required, localTask)
-				conflict = len(options) > 0
-			}
+			value, options, conflict := taskTraceTeamFindMergeField(snapshots, &manifest, node, field, taskTraceTeamBaseValue(base, field), required, localTask)
 			if conflict {
 				if !strings.HasPrefix(field, "outstanding:") || taskTraceTeamCan(&manifest, node, strings.TrimPrefix(field, "outstanding:"), actor, false) {
 					conflicts = append(conflicts, TaskTraceTeamConflict{ID: taskTraceTeamConflictID(binding.ShareID, node, field, options), ShareID: binding.ShareID, NodeID: node, TaskID: taskID, TaskTitle: stored.Title, Field: field, Base: taskTraceTeamBaseValue(base, field), Options: options})
@@ -3002,6 +2998,8 @@ func TaskTraceTeamNotificationsDelete(s *xorm.Session, a web.Auth, request TaskT
 			return nil, errors.New("invalid team notification ID")
 		}
 	}
+	archived := []taskTraceNotificationHistoryRecord{}
+	paths := []string{}
 	for i := range state.Bindings {
 		dir := filepath.Join(taskTraceTeamShareDir(state.Bindings[i].Repository, state.Bindings[i].ShareID), "notifications", strings.ToLower(u.Username))
 		entries, readErr := os.ReadDir(dir)
@@ -3016,10 +3014,24 @@ func TaskTraceTeamNotificationsDelete(s *xorm.Session, a web.Auth, request TaskT
 			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") || (!deleteAll && !selected[id]) {
 				continue
 			}
-			if removeErr := os.Remove(filepath.Join(dir, entry.Name())); removeErr != nil && !os.IsNotExist(removeErr) {
-				return nil, removeErr
+			path := filepath.Join(dir, entry.Name())
+			var notice TaskTraceTeamNotification
+			if err := taskTraceTeamReadJSON(path, &notice); err != nil {
+				return nil, err
 			}
+			notice.ID, notice.ShareID = id, state.Bindings[i].ShareID
+			taskTraceTeamResolveNotificationTarget(s, &state.Bindings[i], &notice)
+			archived = append(archived, taskTraceNotificationHistoryRecord{TaskTraceNotificationHistoryEntry: TaskTraceNotificationHistoryEntry{ID: taskTraceTeamNotificationHistoryKey(notice.ShareID, id), Team: &notice}})
+			paths = append(paths, path)
 		}
+	}
+	// Persist history before removing any shared notification. Personal receipts
+	// also let read-only members clear their own inbox and suppress old replays.
+	if err := taskTraceArchiveNotifications(u.Username, archived); err != nil {
+		return nil, err
+	}
+	for _, path := range paths {
+		_ = os.Remove(path)
 	}
 	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err
@@ -3052,6 +3064,7 @@ func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		return nil
 	}
 	read, _ := taskTraceTeamLoadNotificationReads(binding, username)
+	history, _ := taskTraceNotificationHistoryLoad(username)
 	result := []TaskTraceTeamNotification{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
@@ -3059,6 +3072,9 @@ func taskTraceTeamNotifications(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		}
 		var notice TaskTraceTeamNotification
 		if taskTraceTeamReadJSON(filepath.Join(dir, entry.Name()), &notice) == nil {
+			if history.Dismissed[taskTraceTeamNotificationHistoryKey(binding.ShareID, notice.ID)] {
+				continue
+			}
 			notice.Read = read[notice.ID]
 			notice.Avatar = taskTraceTeamSafeAvatar(notice.Avatar)
 			taskTraceTeamResolveNotificationTarget(s, binding, &notice)

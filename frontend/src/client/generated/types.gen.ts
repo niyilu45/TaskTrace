@@ -2920,6 +2920,36 @@ export type TaskTraceMove = {
     readonly task_id?: number;
 };
 
+export type TaskTraceNotificationHistoryEntry = {
+    /**
+     * When the notification was cleared into history.
+     */
+    readonly archived_at?: string;
+    /**
+     * Stable history identity, scoped by notification source and collaboration share.
+     */
+    readonly id?: string;
+    /**
+     * Archived ordinary notification, if this entry came from the personal notification list.
+     */
+    readonly notification?: DatabaseNotification;
+    /**
+     * Archived collaboration update, if this entry came from a shared task.
+     */
+    readonly team?: TaskTraceTeamNotification;
+};
+
+export type TaskTraceNotificationHistorySettings = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Maximum cleared notifications retained on this installation. Oldest history is removed when this limit is exceeded; defaults to 100.
+     */
+    max_entries?: number;
+};
+
 export type TaskTraceOutstandingMove = {
     /**
      * A URL to the JSON Schema for this object.
@@ -5515,6 +5545,17 @@ export type TaskTraceMoveWritable = {
      * Existing view of the task's project in which to save manual order. Its filters are ignored.
      */
     project_view_id?: number;
+};
+
+export type TaskTraceNotificationHistoryEntryWritable = {
+    [key: string]: never;
+};
+
+export type TaskTraceNotificationHistorySettingsWritable = {
+    /**
+     * Maximum cleared notifications retained on this installation. Oldest history is removed when this limit is exceeded; defaults to 100.
+     */
+    max_entries?: number;
 };
 
 export type TaskTraceOutstandingMoveWritable = {
@@ -11502,6 +11543,106 @@ export type TasktraceDraftWriteResponses = {
 };
 
 export type TasktraceDraftWriteResponse = TasktraceDraftWriteResponses[keyof TasktraceDraftWriteResponses];
+
+export type TasktraceNotificationHistoryListData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/notifications/history';
+};
+
+export type TasktraceNotificationHistoryListErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceNotificationHistoryListError = TasktraceNotificationHistoryListErrors[keyof TasktraceNotificationHistoryListErrors];
+
+export type TasktraceNotificationHistoryListResponses = {
+    /**
+     * OK
+     */
+    200: Array<TaskTraceNotificationHistoryEntry> | null;
+};
+
+export type TasktraceNotificationHistoryListResponse = TasktraceNotificationHistoryListResponses[keyof TasktraceNotificationHistoryListResponses];
+
+export type TasktraceNotificationSettingsReadData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/notifications/settings';
+};
+
+export type TasktraceNotificationSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceNotificationSettingsReadError = TasktraceNotificationSettingsReadErrors[keyof TasktraceNotificationSettingsReadErrors];
+
+export type TasktraceNotificationSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceNotificationHistorySettings;
+};
+
+export type TasktraceNotificationSettingsReadResponse = TasktraceNotificationSettingsReadResponses[keyof TasktraceNotificationSettingsReadResponses];
+
+export type PatchTasktraceNotificationSettingsReadData = {
+    body: Array<JsonPatchOp> | null;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/notifications/settings';
+};
+
+export type PatchTasktraceNotificationSettingsReadErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type PatchTasktraceNotificationSettingsReadError = PatchTasktraceNotificationSettingsReadErrors[keyof PatchTasktraceNotificationSettingsReadErrors];
+
+export type PatchTasktraceNotificationSettingsReadResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceNotificationHistorySettings;
+};
+
+export type PatchTasktraceNotificationSettingsReadResponse = PatchTasktraceNotificationSettingsReadResponses[keyof PatchTasktraceNotificationSettingsReadResponses];
+
+export type TasktraceNotificationSettingsWriteData = {
+    body: TaskTraceNotificationHistorySettingsWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/notifications/settings';
+};
+
+export type TasktraceNotificationSettingsWriteErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceNotificationSettingsWriteError = TasktraceNotificationSettingsWriteErrors[keyof TasktraceNotificationSettingsWriteErrors];
+
+export type TasktraceNotificationSettingsWriteResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceNotificationHistorySettings;
+};
+
+export type TasktraceNotificationSettingsWriteResponse = TasktraceNotificationSettingsWriteResponses[keyof TasktraceNotificationSettingsWriteResponses];
 
 export type TasktraceTeamStatusData = {
     body?: never;

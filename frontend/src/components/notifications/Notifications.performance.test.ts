@@ -51,7 +51,7 @@ function start() {
 	wrapper = mount(Notifications, {global: {
 		mocks: {$t: (key: string) => key},
 		directives: {tooltip: {}},
-		stubs: {Icon: true, BaseButton: {template: '<button><slot /></button>'}, CustomTransition: {template: '<div><slot /></div>'}, User: true, Modal: true, XButton: true, VersionChanges: true, TeamMemberIdentity: true},
+		stubs: {Icon: true, BaseButton: {template: '<button><slot /></button>'}, CustomTransition: {template: '<div><slot /></div>'}, User: true, Modal: true, XButton: true, VersionChanges: true, TeamMemberIdentity: true, NotificationHistory: true},
 	}})
 }
 async function show() {await wrapper!.get('.trigger-button').trigger('click'); await flushPromises()}
@@ -154,7 +154,7 @@ describe('reading and deleting notifications', () => {
 		mocks.team.status.notifications = [{id: 'new', actor: 'Bob', task_title: '新事项'}, ...mocks.team.status.notifications]
 		await nextTick()
 		expect(wrapper!.text()).not.toContain('新事项')
-		await wrapper!.get('[aria-label="删除此条团队通知"]').trigger('click'); await flushPromises()
+		await wrapper!.get('[aria-label="清除此条团队通知（移入历史）"]').trigger('click'); await flushPromises()
 		expect(mocks.team.dismissNotifications).toHaveBeenCalledWith(['first'])
 		expect(wrapper!.findAll('.team-notification-row')).toHaveLength(0)
 		await wrapper!.get('.reading-status button').trigger('click'); await nextTick()
@@ -289,4 +289,43 @@ describe('member update navigation', () => {
 		expect(mocks.team.refresh).not.toHaveBeenCalled()
 		expect(mocks.team.sync).not.toHaveBeenCalled()
 	})
+})
+
+
+describe('archived notification navigation', () => {
+ it('opens archived updates without deleting, marking read, or changing current unread notices', async () => {
+  mocks.read.mockResolvedValue([])
+  mocks.team.status.notifications = [{id: 'active', actor: 'Alice', task_title: 'Current', read: false}]
+  vi.spyOn(document, 'getElementById').mockReturnValue(document.createElement('div'))
+  start(); await flushPromises(); await show()
+  await wrapper!.get('.history-toggle').trigger('click')
+  const history = wrapper!.findComponent({name: 'NotificationHistory'})
+  expect(history.exists()).toBe(true)
+  expect(wrapper!.findAll('.team-notification-row')).toHaveLength(0)
+  history.vm.$emit('openTeam', {id: 'archived', actor: 'Alice', task_id: 12, comment_id: 34, read: true})
+  await flushPromises()
+  expect(mocks.routerPush).toHaveBeenCalledWith({name: 'task.detail', params: {id: 12}, hash: '#comment-34'})
+  expect(mocks.team.markNotificationsRead).not.toHaveBeenCalled()
+  expect(mocks.team.dismissNotifications).not.toHaveBeenCalled()
+  expect(mocks.team.status.notifications).toHaveLength(1)
+  expect(mocks.team.unreadNotificationCount).toBe(1)
+ })
+})
+
+
+describe('archive failures', () => {
+ it('retains failed notices, reflects the successfully archived group, and permits retry', async () => {
+  mocks.read.mockResolvedValue([notice(1)])
+  mocks.remove.mockRejectedValueOnce(new Error('archive disk full')).mockResolvedValueOnce({})
+  mocks.team.status.notifications = [{id: 'team', actor: 'Alice', task_title: 'Archive me'}]
+  mocks.team.dismissNotifications.mockImplementation(async () => {mocks.team.status.notifications = []})
+  start(); await flushPromises(); await show()
+  await wrapper!.get('[aria-label="notification.clearAll"]').trigger('click'); await flushPromises()
+  expect(wrapper!.findAll('.single-notification')).toHaveLength(1)
+  expect(wrapper!.findAll('.team-notification-row')).toHaveLength(0)
+  expect(showError).toHaveBeenCalledWith(expect.objectContaining({message: 'archive disk full'}))
+  expect(wrapper!.get('[aria-label="notification.clearAll"]').attributes('disabled')).toBeUndefined()
+  await wrapper!.get('[aria-label="notification.clearAll"]').trigger('click'); await flushPromises()
+  expect(wrapper!.findAll('.single-notification')).toHaveLength(0)
+ })
 })

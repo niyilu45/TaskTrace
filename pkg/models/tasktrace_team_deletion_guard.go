@@ -17,6 +17,7 @@
 package models
 
 import (
+	"sort"
 	"strings"
 
 	"golang.org/x/net/html"
@@ -24,7 +25,7 @@ import (
 
 // Old clients can publish an incomplete list (and advance manifest.Base to it).
 // Missing data is not a deletion command. Accept an explicit item operation or
-// a move to another task, otherwise leave the saved local item for resolution.
+// a move to another task, otherwise retain the saved item without manufacturing a conflict.
 // The wire schema remains compatible with clients that do not know this guard.
 func taskTraceTeamHasOutstandingRemoval(snapshots []TaskTraceTeamSnapshot, manifest *TaskTraceTeamManifest, node, id, requiredResolution string) bool {
 	field := "outstanding:" + id
@@ -80,17 +81,68 @@ func taskTraceOutstandingDeletionActivity(body, id string) bool {
 	return found
 }
 
-//nolint:gosmopolitan // Conflict choices are displayed in the Chinese local UI.
-func taskTraceTeamUnprovenRemovalOptions(snapshots []TaskTraceTeamSnapshot, manifest *TaskTraceTeamManifest, node, field, requiredResolution string, local TaskTraceTeamTask) []TaskTraceTeamConflictOption {
+// taskTraceTeamFindMergeField distinguishes missing peer data from an actual
+// deletion. Old peers may omit an item, including from the shared baseline.
+// Only an authorized delete/move operation can contribute an empty version.
+func taskTraceTeamFindMergeField(snapshots []TaskTraceTeamSnapshot, manifest *TaskTraceTeamManifest, node, field, base, requiredResolution string, local TaskTraceTeamTask) (string, []TaskTraceTeamConflictOption, bool) {
 	if !strings.HasPrefix(field, "outstanding:") {
-		return nil
+		return taskTraceTeamFindField(snapshots, node, field, base, requiredResolution, local)
 	}
-	localValue := taskTraceTeamCanonicalFieldValue(local, field, taskTraceTeamFieldValue(local, field))
-	if localValue == "" || taskTraceTeamHasOutstandingRemoval(snapshots, manifest, node, strings.TrimPrefix(field, "outstanding:"), requiredResolution) {
-		return nil
+	id := strings.TrimPrefix(field, "outstanding:")
+	candidates := make([]TaskTraceTeamSnapshot, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if requiredResolution != "" && snapshot.ResolutionAcks[node+":"+field] != requiredResolution {
+			continue
+		}
+		task, exists := taskTraceTeamTaskMap(snapshot)[node]
+		if !exists {
+			continue
+		}
+		if taskTraceTeamFieldValue(task, field) == "" && !taskTraceTeamHasOutstandingRemoval([]TaskTraceTeamSnapshot{snapshot}, manifest, node, id, requiredResolution) {
+			continue
+		}
+		candidates = append(candidates, snapshot)
 	}
-	return []TaskTraceTeamConflictOption{
-		{Author: "保留本机已保存内容", Value: localValue},
-		{Author: "其他设备清单中缺失（未找到明确删除记录）", Value: ""},
+	value, options, conflict := taskTraceTeamFindField(candidates, node, field, base, requiredResolution, local)
+	if taskTraceTeamHasOutstandingRemoval(candidates, manifest, node, id, requiredResolution) {
+		return value, options, conflict
 	}
+	if conflict {
+		nonempty := make([]TaskTraceTeamConflictOption, 0, len(options))
+		for _, option := range options {
+			if option.Value != "" {
+				nonempty = append(nonempty, option)
+			}
+		}
+		if len(nonempty) == 1 {
+			return nonempty[0].Value, nil, false
+		}
+		if len(nonempty) > 1 {
+			return value, nonempty, true
+		}
+	}
+	if value != "" {
+		return value, nil, false
+	}
+	// A legacy writer can erase manifest.Base after this client acknowledged
+	// an addition. Recover the unchanged, saved values instead of treating the
+	// missing baseline as a new deletion or asking the user to choose emptiness.
+	byValue := map[string][]string{}
+	for _, snapshot := range candidates {
+		task := taskTraceTeamTaskMap(snapshot)[node]
+		stored := taskTraceTeamCanonicalFieldValue(task, field, taskTraceTeamFieldValue(task, field))
+		if stored != "" {
+			byValue[stored] = append(byValue[stored], snapshot.Actor)
+		}
+	}
+	options = nil
+	for stored, authors := range byValue {
+		if len(byValue) == 1 {
+			return stored, nil, false
+		}
+		sort.Strings(authors)
+		options = append(options, TaskTraceTeamConflictOption{Author: strings.Join(authors, "、"), Value: stored})
+	}
+	sort.Slice(options, func(i, j int) bool { return options[i].Author < options[j].Author })
+	return value, options, len(options) > 1
 }

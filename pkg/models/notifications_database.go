@@ -125,6 +125,9 @@ func (d *DatabaseNotifications) Update(s *xorm.Session, _ web.Auth) (err error) 
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /notifications [delete]
 func (d *DatabaseNotifications) Delete(s *xorm.Session, a web.Auth) (err error) {
+	if err := taskTraceArchiveDatabaseNotifications(s, a, d.ID); err != nil {
+		return err
+	}
 	if d.ID != 0 {
 		_, err = s.Where("id = ? AND notifiable_id = ?", d.ID, a.GetID()).Delete(&notifications.DatabaseNotification{})
 		return err

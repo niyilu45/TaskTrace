@@ -28,8 +28,8 @@ import (
 
 func TestTaskTraceTeamUnprovenRemoteRemovalPreservesSavedItem(t *testing.T) {
 	for _, sharedAlreadyEmpty := range []bool{false, true} {
-		for _, keep := range []bool{false, true} {
-			t.Run(fmt.Sprintf("sharedAlreadyEmpty=%t/keep=%t", sharedAlreadyEmpty, keep), func(t *testing.T) {
+		for _, missingPeerBase := range []bool{false, true} {
+			t.Run(fmt.Sprintf("sharedAlreadyEmpty=%t/missingPeerBase=%t", sharedAlreadyEmpty, missingPeerBase), func(t *testing.T) {
 				db.LoadAndAssertFixtures(t)
 				t.Setenv("TASKTRACE_DATA_ROOT", t.TempDir())
 				repository := t.TempDir()
@@ -62,6 +62,9 @@ func TestTaskTraceTeamUnprovenRemoteRemovalPreservesSavedItem(t *testing.T) {
 				// It has no user deletion or move operation. Some older builds also
 				// advanced the shared manifest before this device got the next poll.
 				remote := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: "user2", DeviceID: "other-pc", Base: binding.Base, Tasks: []TaskTraceTeamTask{{NodeID: "root", Title: task.Title, Status: TaskStatusTodo}}}
+				if missingPeerBase {
+					remote.Base = nil
+				}
 				require.NoError(t, taskTraceTeamWriteSnapshot(&binding, remote))
 				rewritePeer := func() {
 					t.Helper()
@@ -77,7 +80,6 @@ func TestTaskTraceTeamUnprovenRemoteRemovalPreservesSavedItem(t *testing.T) {
 						require.NoError(t, taskTraceTeamWriteJSON(path, legacyManifest))
 					}
 				}
-				var lastConflict TaskTraceTeamConflict
 				for cycle := 0; cycle < 3; cycle++ {
 					rewritePeer()
 					sync := db.NewSession()
@@ -93,42 +95,10 @@ func TestTaskTraceTeamUnprovenRemoteRemovalPreservesSavedItem(t *testing.T) {
 					state, stateErr := taskTraceTeamLoadState()
 					require.NoError(t, stateErr)
 					require.Empty(t, state.Bindings[0].LastError)
-					require.Len(t, state.Bindings[0].Conflicts, 1)
-					lastConflict = state.Bindings[0].Conflicts[0]
+					require.Empty(t, state.Bindings[0].Conflicts, "a missing peer item is not a competing edit")
 					count, countErr := sync.Where("task_id = ? AND comment LIKE ?", task.ID, "%item-activity%").Count(&TaskComment{})
 					require.NoError(t, countErr)
 					require.EqualValues(t, 1, count, "passive sync must not manufacture deletion or duplicate add activity")
-					require.NoError(t, sync.Close())
-				}
-				value := ""
-				if keep {
-					value = taskTraceTeamCanonicalHTML(content, nil)
-				}
-				require.Equal(t, "outstanding:new", lastConflict.Field)
-				resolve := db.NewSession()
-				t.Cleanup(func() { _ = resolve.Close() })
-				_, err = TaskTraceTeamResolve(resolve, actor, TaskTraceTeamResolveRequest{ShareID: binding.ShareID, Resolutions: []TaskTraceTeamResolution{{ConflictID: lastConflict.ID, Value: value}}})
-				require.NoError(t, err)
-				require.NoError(t, resolve.Commit())
-				require.NoError(t, resolve.Close())
-				for range 2 {
-					rewritePeer()
-					sync := db.NewSession()
-					t.Cleanup(func() { _ = sync.Close() })
-					_, err = TaskTraceTeamSync(sync, actor)
-					require.NoError(t, err)
-					require.NoError(t, sync.Commit())
-					list, readErr := taskTraceReadOutstanding(sync, task.ID)
-					require.NoError(t, readErr)
-					if keep {
-						require.Contains(t, list.original, "New outstanding")
-					} else {
-						require.Empty(t, list.original)
-					}
-					state, stateErr := taskTraceTeamLoadState()
-					require.NoError(t, stateErr)
-					require.Empty(t, state.Bindings[0].LastError)
-					require.Empty(t, state.Bindings[0].Conflicts, "a confirmed resolution must not prompt again on each poll")
 					require.NoError(t, sync.Close())
 				}
 			})
@@ -244,4 +214,26 @@ func TestTaskTraceTeamExplicitRemoteRemovalStillSyncs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTaskTraceTeamOutstandingDifferentEditsStillConflict(t *testing.T) {
+	base := taskTraceTeamOutstandingHTML(map[string]string{"one": "original"}, nil)
+	manifest := &TaskTraceTeamManifest{Owner: "alice", Members: []string{"alice", "bob"}}
+	makeSnapshot := func(actor, content string) TaskTraceTeamSnapshot {
+		return TaskTraceTeamSnapshot{Actor: actor, Base: map[string]TaskTraceTeamBase{"root": {Outstanding: base}}, Tasks: []TaskTraceTeamTask{{NodeID: "root", Outstanding: taskTraceTeamOutstandingHTML(map[string]string{"one": content}, nil)}}}
+	}
+	alice, bob := makeSnapshot("alice", "Alice edit"), makeSnapshot("bob", "Bob edit")
+	_, options, conflict := taskTraceTeamFindMergeField([]TaskTraceTeamSnapshot{alice, bob}, manifest, "root", "outstanding:one", "original", "", alice.Tasks[0])
+	require.True(t, conflict)
+	require.Len(t, options, 2)
+	for _, option := range options {
+		require.NotEmpty(t, option.Value)
+	}
+	// A recorded deletion remains a real alternative when someone else edits.
+	bob.Tasks[0].Outstanding = ""
+	bob.Tasks[0].Comments = []TaskTraceTeamComment{{Body: `<p data-tasktrace-comment-type="item-activity" data-item-id="one" data-tasktrace-item-action="delete">Deleted</p>`}}
+	manifest.Permissions = map[string][]TaskTraceTeamMemberPermission{"root": {{Username: "bob", Read: true, Write: true}}}
+	_, options, conflict = taskTraceTeamFindMergeField([]TaskTraceTeamSnapshot{alice, bob}, manifest, "root", "outstanding:one", "original", "", alice.Tasks[0])
+	require.True(t, conflict)
+	require.Len(t, options, 2)
 }

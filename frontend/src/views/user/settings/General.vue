@@ -290,6 +290,8 @@
 		</div>
 	</Card>
 
+	<NotificationHistorySettings />
+
 	<div class="sticky-save">
 		<CustomTransition name="fade">
 			<XButton
@@ -307,6 +309,7 @@
 
 
 <script setup lang="ts">
+import NotificationHistorySettings from '@/components/notifications/NotificationHistorySettings.vue'
 import AutoSaveSettings from '@/components/tasks/partials/AutoSaveSettings.vue'
 import {computed, watch, ref, onBeforeMount} from 'vue'
 import {useI18n} from 'vue-i18n'

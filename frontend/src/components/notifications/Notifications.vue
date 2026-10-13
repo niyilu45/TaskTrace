@@ -26,13 +26,22 @@
 				class="notifications-list"
 			>
 				<div class="head">
-					<span>{{ $t('notification.title') }}</span>
+					<span>{{ showHistory ? '历史通知' : $t('notification.title') }}</span>
 					<div class="actions">
 						<BaseButton
-							v-if="notifications.length > 0 || teamStore.notificationCount > 0"
+							v-if="isLocalBuild"
+							class="history-toggle action-link"
+							:aria-pressed="showHistory"
+							@click="showHistory = !showHistory"
+						>
+							{{ showHistory ? '当前通知' : '历史通知' }}
+						</BaseButton>
+						<BaseButton
+							v-if="!showHistory && (notifications.length > 0 || teamStore.notificationCount > 0)"
 							v-tooltip="$t('notification.clearAll')"
 							class="action-link"
 							:aria-label="$t('notification.clearAll')"
+							:disabled="clearingAll"
 							@click="clearAll"
 						>
 							<Icon icon="check-double" />
@@ -48,163 +57,170 @@
 						</BaseButton>
 					</div>
 				</div>
-				<div
-					class="reading-status"
-					role="status"
-				>
-					<button
-						v-if="hasPendingChanges"
-						type="button"
-						@click="applyPendingNotifications"
-					>
-						通知有更新，点击查看
-					</button>
-					<span v-else>阅读期间列表保持不动</span>
-				</div>
-				<button
-					v-if="readingUpdate"
-					type="button"
-					class="single-notification update-release-notification"
-					@click="openUpdateDetails"
-				>
-					<span class="read-indicator" />
-					<span class="detail">
-						<strong>发现新版本 {{ updateStore.state.latest_version }}</strong>
-						<span class="created">{{ displayReleaseDate(updateStore.state.published_at) }}</span>
-					</span>
-				</button>
-				<button
-					v-if="isLocalBuild && readingConflictCount"
-					type="button"
-					class="single-notification team-notification-row"
-					@click="openTeamConflicts"
-				>
-					<span class="read-indicator" />
-					<Icon icon="exclamation-circle" />
-					<span class="detail">
-						<strong>有 {{ readingConflictCount }} 项团队协作冲突需要处理</strong>
-						<span class="created">点击对比差异，逐项处理</span>
-					</span>
-				</button>
-				<template v-if="isLocalBuild">
+				<NotificationHistory
+					v-if="showHistory"
+					@openTeam="notice => openTeamNotification(notice, true)"
+					@openNotification="notice => to(notice)()"
+				/>
+				<template v-else>
 					<div
-						v-for="notice in readingTeamNotifications"
-						:key="notice.id"
-						class="single-notification team-notification-row"
+						class="reading-status"
+						role="status"
 					>
-						<span
-							class="read-indicator"
-							:class="{read: notice.read}"
-							:aria-label="notice.read ? '已读' : '未读'"
-						/>
-						<img
-							v-if="teamAvatar(notice.actor || '', notice.avatar)"
-							:src="teamAvatar(notice.actor || '', notice.avatar)"
-							alt=""
-							class="team-notification-avatar"
+						<button
+							v-if="hasPendingChanges"
+							type="button"
+							@click="applyPendingNotifications"
 						>
-						<span
-							v-else
-							class="team-notification-avatar team-notification-avatar--fallback"
-						>{{ initials(notice.actor || '') }}</span>
+							通知有更新，点击查看
+						</button>
+						<span v-else>阅读期间列表保持不动</span>
+					</div>
+					<button
+						v-if="readingUpdate"
+						type="button"
+						class="single-notification update-release-notification"
+						@click="openUpdateDetails"
+					>
+						<span class="read-indicator" />
 						<span class="detail">
-							<span class="team-notification-message">
-								<strong><TeamMemberIdentity :username="notice.actor || '协作成员'" /></strong> 更新了事项
-								<button
-									type="button"
-									class="team-task-link"
-									:title="`打开“${notice.task_title || '团队任务'}”的对应评论`"
-									:disabled="openingTeamNotification"
-									:aria-busy="openingTeamNotification"
-									@click.stop="openTeamNotification(notice)"
-								>
-									“{{ notice.task_title || '团队任务' }}”
-								</button>
-							</span>
-							<span class="created">{{ notice.created ? formatDisplayDate(notice.created) : '刚刚' }}</span>
+							<strong>发现新版本 {{ updateStore.state.latest_version }}</strong>
+							<span class="created">{{ displayReleaseDate(updateStore.state.published_at) }}</span>
 						</span>
+					</button>
+					<button
+						v-if="isLocalBuild && readingConflictCount"
+						type="button"
+						class="single-notification team-notification-row"
+						@click="openTeamConflicts"
+					>
+						<span class="read-indicator" />
+						<Icon icon="exclamation-circle" />
+						<span class="detail">
+							<strong>有 {{ readingConflictCount }} 项团队协作冲突需要处理</strong>
+							<span class="created">点击对比差异，逐项处理</span>
+						</span>
+					</button>
+					<template v-if="isLocalBuild">
+						<div
+							v-for="notice in readingTeamNotifications"
+							:key="notice.id"
+							class="single-notification team-notification-row"
+						>
+							<span
+								class="read-indicator"
+								:class="{read: notice.read}"
+								:aria-label="notice.read ? '已读' : '未读'"
+							/>
+							<img
+								v-if="teamAvatar(notice.actor || '', notice.avatar)"
+								:src="teamAvatar(notice.actor || '', notice.avatar)"
+								alt=""
+								class="team-notification-avatar"
+							>
+							<span
+								v-else
+								class="team-notification-avatar team-notification-avatar--fallback"
+							>{{ initials(notice.actor || '') }}</span>
+							<span class="detail">
+								<span class="team-notification-message">
+									<strong><TeamMemberIdentity :username="notice.actor || '协作成员'" /></strong> 更新了事项
+									<button
+										type="button"
+										class="team-task-link"
+										:title="`打开“${notice.task_title || '团队任务'}”的对应评论`"
+										:disabled="openingTeamNotification"
+										:aria-busy="openingTeamNotification"
+										@click.stop="openTeamNotification(notice)"
+									>
+										“{{ notice.task_title || '团队任务' }}”
+									</button>
+								</span>
+								<span class="created">{{ notice.created ? formatDisplayDate(notice.created) : '刚刚' }}</span>
+							</span>
+							<button
+								type="button"
+								class="notification-delete"
+								aria-label="清除此条团队通知（移入历史）"
+								:disabled="deleting.has(`team:${notice.id}`)"
+								@click.stop="deleteTeamNotification(notice)"
+							>
+								<Icon icon="trash-alt" />
+							</button>
+						</div>
+					</template>
+					<div
+						v-for="n in notifications"
+						:key="n.id"
+						class="single-notification"
+						:class="{'is-clickable': notificationHasRoute(n)}"
+						@click="() => notificationHasRoute(n) && to(n)()"
+					>
+						<div
+							class="read-indicator"
+							:class="{'read': n.readAt !== null}"
+						/>
+						<User
+							v-if="n.notification.doer"
+							:user="n.notification.doer"
+							:show-username="false"
+							:avatar-size="16"
+						/>
+						<div class="detail">
+							<div>
+								<span
+									v-if="n.notification.doer"
+									class="has-text-weight-bold mie-1"
+								>
+									{{ getDisplayName(n.notification.doer) }}
+								</span>
+								{{ n.toText(userInfo) }}
+							</div>
+							<span
+								v-tooltip="formatDateLong(n.created)"
+								class="created"
+							>
+								{{ formatDisplayDate(n.created) }}
+							</span>
+						</div>
 						<button
 							type="button"
 							class="notification-delete"
-							aria-label="删除此条团队通知"
-							:disabled="deleting.has(`team:${notice.id}`)"
-							@click.stop="deleteTeamNotification(notice)"
+							aria-label="清除此条通知（移入历史）"
+							:disabled="deleting.has(`notice:${n.id}`)"
+							@click.stop="deleteNotification(n)"
 						>
 							<Icon icon="trash-alt" />
 						</button>
 					</div>
-				</template>
-				<div
-					v-for="n in notifications"
-					:key="n.id"
-					class="single-notification"
-					:class="{'is-clickable': notificationHasRoute(n)}"
-					@click="() => notificationHasRoute(n) && to(n)()"
-				>
-					<div
-						class="read-indicator"
-						:class="{'read': n.readAt !== null}"
-					/>
-					<User
-						v-if="n.notification.doer"
-						:user="n.notification.doer"
-						:show-username="false"
-						:avatar-size="16"
-					/>
-					<div class="detail">
-						<div>
-							<span
-								v-if="n.notification.doer"
-								class="has-text-weight-bold mie-1"
-							>
-								{{ getDisplayName(n.notification.doer) }}
-							</span>
-							{{ n.toText(userInfo) }}
-						</div>
-						<span
-							v-tooltip="formatDateLong(n.created)"
-							class="created"
-						>
-							{{ formatDisplayDate(n.created) }}
-						</span>
-					</div>
-					<button
-						type="button"
-						class="notification-delete"
-						aria-label="删除此条通知"
-						:disabled="deleting.has(`notice:${n.id}`)"
-						@click.stop="deleteNotification(n)"
+					<XButton
+						v-if="loadedPages < totalPages"
+						variant="tertiary"
+						class="is-fullwidth"
+						:loading="loadingMore"
+						:disabled="loadingMore"
+						@click="loadMoreNotifications"
 					>
-						<Icon icon="trash-alt" />
-					</button>
-				</div>
-				<XButton
-					v-if="loadedPages < totalPages"
-					variant="tertiary"
-					class="is-fullwidth"
-					:loading="loadingMore"
-					:disabled="loadingMore"
-					@click="loadMoreNotifications"
-				>
-					加载更早的通知
-				</XButton>
-				<XButton
-					v-if="markableUnread > 0"
-					variant="tertiary"
-					class="mbs-2 is-fullwidth"
-					@click="markAllRead"
-				>
-					{{ $t('notification.markAllRead') }}
-				</XButton>
-				<p
-					v-if="notifications.length === 0 && !readingUpdate && readingTeamNotifications.length === 0 && readingConflictCount === 0"
-					class="nothing"
-				>
-					{{ $t('notification.none') }}<br>
-					<span class="explainer">
-						{{ $t('notification.explainer') }}
-					</span>
-				</p>
+						加载更早的通知
+					</XButton>
+					<XButton
+						v-if="markableUnread > 0"
+						variant="tertiary"
+						class="mbs-2 is-fullwidth"
+						@click="markAllRead"
+					>
+						{{ $t('notification.markAllRead') }}
+					</XButton>
+					<p
+						v-if="notifications.length === 0 && !readingUpdate && readingTeamNotifications.length === 0 && readingConflictCount === 0"
+						class="nothing"
+					>
+						{{ $t('notification.none') }}<br>
+						<span class="explainer">
+							{{ $t('notification.explainer') }}
+						</span>
+					</p>
+				</template>
 			</div>
 		</CustomTransition>
 		<Modal
@@ -238,6 +254,7 @@ import equal from 'fast-deep-equal'
 import {useVisiblePolling} from '@/composables/useVisiblePolling'
 import {useRouter, isNavigationFailure, NavigationFailureType, type RouteLocationRaw} from 'vue-router'
 
+import NotificationHistory from './NotificationHistory.vue'
 import NotificationService from '@/services/notification'
 import NotificationModel from '@/models/notification'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -259,7 +276,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import {notificationsDelete, type TaskTraceTeamNotification} from '@/client/generated'
+import {notificationsDelete, tasktraceNotificationHistoryList, type TaskTraceTeamNotification} from '@/client/generated'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
@@ -271,6 +288,8 @@ const teamStore = useTasktraceTeamStore()
 
 const allNotifications = ref<INotification[]>([])
 const showNotifications = ref(false)
+const showHistory = ref(false)
+const clearingAll = ref(false)
 const showUpdateDetails = ref(false)
 const popup = ref<HTMLElement | null>(null)
 const readingNotifications = ref<INotification[]>([])
@@ -425,10 +444,15 @@ function hasTeamNotificationTarget(notice: TaskTraceTeamNotification) {
 		&& (!notice.shared_comment_id || (Number.isSafeInteger(notice.comment_id) && Number(notice.comment_id) > 0))
 }
 
-async function openTeamNotification(notice: TaskTraceTeamNotification) {
+async function openTeamNotification(notice: TaskTraceTeamNotification, archived = false) {
 	if (openingTeamNotification.value) return
 	openingTeamNotification.value = true
-	const currentNotice = () => (notice.id && teamStore.status.notifications?.find(candidate => candidate.id === notice.id)) || notice
+	const currentNotice = () => (!archived && notice.id && teamStore.status.notifications?.find(candidate => candidate.id === notice.id)) || notice
+	async function resolvedNotice() {
+		if (!archived) return currentNotice()
+		const history = (await tasktraceNotificationHistoryList()).data || []
+		return history.find(entry => entry.team?.id === notice.id && entry.team?.share_id === notice.share_id)?.team || notice
+	}
 	try {
 		// The reading list is a stable snapshot. Prefer an already resolved local
 		// target, then refresh status before requesting any LAN synchronization.
@@ -436,10 +460,10 @@ async function openTeamNotification(notice: TaskTraceTeamNotification) {
 		if (!hasTeamNotificationTarget(target) && notice.id) {
 			try {
 				await teamStore.refresh(true)
-				target = currentNotice()
+				target = await resolvedNotice()
 				if (!hasTeamNotificationTarget(target)) {
 					await teamStore.sync()
-					target = currentNotice()
+					target = await resolvedNotice()
 				}
 			} catch (cause) {
 				showError(new Error('暂时无法读取这条成员更新，请检查团队共享目录或网络连接后重试。', {cause}))
@@ -463,7 +487,7 @@ async function openTeamNotification(notice: TaskTraceTeamNotification) {
 			showError({message: '已打开事项，但暂时无法显示这条更新的评论。请稍后重试；通知尚未标记为已读。'})
 			return
 		}
-		if (notice.id && !target.read) {
+		if (!archived && notice.id && !target.read) {
 			await teamStore.markNotificationsRead([notice.id])
 			readingTeamNotifications.value = readingTeamNotifications.value.map(item => item.id === notice.id ? {...item, read: true} : item)
 		}
@@ -596,18 +620,32 @@ async function markAllRead() {
 }
 
 async function clearAll() {
+	if (clearingAll.value) return
+	clearingAll.value = true
 	notificationsRevision++
+	const ids = new Set(allNotifications.value.map(notice => notice.id))
+	const teamIds = (teamStore.status.notifications || []).map(notice => notice.id).filter((id): id is string => !!id)
 	const notificationService = new NotificationService()
-	await Promise.all([
-		notifications.value.length ? notificationService.delete(new NotificationModel({})) : Promise.resolve(),
-		isLocalBuild && teamStore.notificationCount ? teamStore.dismissNotifications() : Promise.resolve(),
-	])
-	notificationsRevision++
-	success({message: t('notification.clearAllSuccess')})
-	allNotifications.value = []
-	readingNotifications.value = []
-	readingTeamNotifications.value = []
+	try {
+		const results = await Promise.allSettled([
+			ids.size ? notificationService.delete(new NotificationModel({})).then(() => {
+				ids.forEach(id => deletedNotificationIds.add(id))
+				allNotifications.value = allNotifications.value.filter(notice => !ids.has(notice.id))
+				readingNotifications.value = readingNotifications.value.filter(notice => !ids.has(notice.id))
+			}) : Promise.resolve(),
+			isLocalBuild && teamIds.length ? teamStore.dismissNotifications(teamIds).then(() => {
+				readingTeamNotifications.value = readingTeamNotifications.value.filter(notice => !teamIds.includes(notice.id || ''))
+			}) : Promise.resolve(),
+		])
+		const failures = results.filter(result => result.status === 'rejected')
+		if (failures.length) failures.forEach(result => showError(result.reason))
+		else success({message: isLocalBuild ? '通知已移入历史通知。' : t('notification.clearAllSuccess')})
+	} finally {
+		notificationsRevision++
+		clearingAll.value = false
+	}
 }
+
 </script>
 
 <style lang="scss" scoped>
