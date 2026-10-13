@@ -52,13 +52,14 @@ internal sealed partial class FloatingWindow {
         var high=new PendingItem{Id="high",Html="High <img src='/image/1'>",Priority=1,Number=60};
         var shared=new SharedList{CommentId=1,Items=new List<PendingItem>{firstDone,low,lastDone,high}};
         foreach(bool simple in new[]{false,true}) {
-            simpleMode=simple;prioritySort.Checked=false;showCompleted.Checked=true;parent.Nodes.Clear();
+            // The isolated constructor skips UI preference events; set the selected sort explicitly.
+            simpleMode=simple;prioritySort.Checked=false;completionSort.Clear();showCompleted.Checked=true;parent.Nodes.Clear();
             CheckNumbering(ApplySimpleOutstanding(parent,shared),"Initial render skipped");
             var leaves=parent.Nodes.Cast<TreeNode>().Where(node=>node.Tag is OutstandingLeaf).ToArray();
             CheckNumbering(leaves.Select(node=>((OutstandingLeaf)node.Tag).Id).SequenceEqual(new[]{"low","high","done","done-two"}),"Completed outstanding items were not placed last");
             for(int i=0;i<leaves.Length;i++)CheckNumbering(leaves[i].Text.StartsWith((i+1)+". "),"Outstanding numbering reused saved/stale indexes");
             CheckNumbering(!ApplySimpleOutstanding(parent,shared),"Unchanged display was rebuilt");
-            prioritySort.Checked=true;CheckNumbering(ApplySimpleOutstanding(parent,shared),"Priority switch did not reorder");
+            prioritySort.Checked=true;completionSort=new List<string>{"priority:asc"};CheckNumbering(ApplySimpleOutstanding(parent,shared),"Priority switch did not reorder");
             CheckNumbering(((OutstandingLeaf)parent.Nodes[0].Tag).Id=="high" && parent.Nodes[0].Text.StartsWith("1. "),"Highest unfinished priority should be first");
             CheckNumbering(!ApplySimpleOutstanding(parent,shared),"Sorted shared list flickers on unchanged refresh");
             showCompleted.Checked=false;DateTime next=DateTime.MaxValue;

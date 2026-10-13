@@ -106,7 +106,7 @@ internal sealed partial class FloatingWindow {
         var ordered=OrderCompletionNodes(nodes,all);
         RenumberSingleLineNodes(ordered);return ordered;
     }
-    List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists) {
+    List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists,HashSet<long> matchingTasks=null) {
         var flat=new List<TreeNode>();foreach(var root in roots)CollectFlatTaskNodes(root,flat);
         var hasTaskChildren=flat.ToDictionary(node=>(long)node.Tag,node=>node.Nodes.Cast<TreeNode>().Any(child=>child.Tag is long));
         foreach(var node in flat)if(node.Parent!=null)node.Remove();
@@ -114,7 +114,7 @@ internal sealed partial class FloatingWindow {
         foreach(var node in flat) {
             long id=(long)node.Tag;SharedList shared;sharedLists.TryGetValue(id,out shared);
             bool hasPending=shared!=null && shared.Items.Any(item=>!item.Done);
-            if(!hasTaskChildren[id] && !hasPending)visible.Add(node);
+            if(!hasTaskChildren[id] && !hasPending && (matchingTasks==null || matchingTasks.Contains(id)))visible.Add(node);
             if(shared==null)continue;
             var titles=new List<string>();long cursor=id;
             while(all.ContainsKey(cursor)) {titles.Add((string)all[cursor]["title"]);if(!parents.ContainsKey(cursor))break;cursor=parents[cursor];}
@@ -203,19 +203,27 @@ internal sealed partial class FloatingWindow {
                 if(!seen.Add(cursor)){parents.Remove(cursor);break;}cursor=parents[cursor];
             }
         }
-        var included=new HashSet<long>();var matches=new HashSet<long>();string query=search.Text.Trim();
-        var sharedLists=new Dictionary<long,SharedList>();var reminderSharedLists=new Dictionary<long,SharedList>();var candidates=new List<long>();
+        var included=new HashSet<long>();var matches=new HashSet<long>();var matchingTasks=new HashSet<long>();string query=search.Text.Trim();
+        // A task's own visibility must not decide whether we read its outstanding
+        // list. Completed/nonmatching owners can still contain matching entries.
+        var reminderSharedLists=new Dictionary<long,SharedList>();
+        if(visiblePriorities.Count>0)await ReadSharedLists(ordered,reminderSharedLists,all,current);
+        if(!current())return false;
+        var sharedLists=new Dictionary<long,SharedList>();
         foreach(long id in ordered) {
-            if(HideCompletedTask(id,Convert.ToBoolean(all[id]["done"]),ref nextCompletionRefreshUtc))continue;
-            if(query.Length>0 && ((string)all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
-            candidates.Add(id);
-        }
-        if(PriorityFilterActive && visiblePriorities.Count>0){await ReadSharedLists(candidates,sharedLists,all,current);foreach(var pair in sharedLists)reminderSharedLists[pair.Key]=pair.Value;}
-        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
-        if(!TaskLoadCurrent(version,context,background))return false;
-        foreach(long id in candidates) {
-            SharedList shared;bool outstandingMatch=sharedLists.TryGetValue(id,out shared) && shared.Items.Any(MatchesPriority);
-            if(!MatchesPriority(all[id]) && !outstandingMatch)continue;
+            bool titleMatch=query.Length==0 || Convert.ToString(all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)>=0;
+            bool taskMatch=!HideCompletedTask(id,Convert.ToBoolean(all[id]["done"]),ref nextCompletionRefreshUtc) && titleMatch && MatchesPriority(all[id]);
+            if(taskMatch)matchingTasks.Add(id);
+            SharedList saved;
+            if(!reminderSharedLists.TryGetValue(id,out saved))saved=new SharedList();
+            var filtered=new SharedList{CommentId=saved.CommentId};
+            foreach(var item in saved.Items) {
+                if(HideCompletedOutstanding(id,item,ref nextCompletionRefreshUtc) || !MatchesPriority(item))continue;
+                if(!titleMatch && OutstandingText(item.Html).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
+                filtered.Items.Add(item);
+            }
+            sharedLists[id]=filtered;
+            if(!taskMatch && filtered.Items.Count==0)continue;
             matches.Add(id);long cursor=id;
             while(included.Add(cursor) && parents.ContainsKey(cursor))cursor=parents[cursor];
         }
@@ -236,16 +244,11 @@ internal sealed partial class FloatingWindow {
         ApplyLocalAppearance(nodes,parents);
         NumberTasks(roots,all);
         int groupCount=roots.Count;
-        await ReadSharedLists(nodes.Keys.Where(id=>!sharedLists.ContainsKey(id)),sharedLists,all,current);
-        if(!TaskLoadCurrent(version,context,background))return false;
-        foreach(var pair in sharedLists)if(!reminderSharedLists.ContainsKey(pair.Key))reminderSharedLists[pair.Key]=pair.Value;
         UpdateReminderTargets(all,reminderSharedLists);
         foreach(var pair in nodes) {SharedList owned;reminderSharedLists.TryGetValue(pair.Key,out owned);var taskNode=pair.Value as TaskNode;if(taskNode!=null)taskNode.ReminderCount=DirectTaskReminderCount(all[pair.Key],owned);}
-        if(!showCompleted.Checked)foreach(long id in sharedLists.Keys.ToArray())sharedLists[id]=FilterCompletedOutstanding(id,sharedLists[id],ref nextCompletionRefreshUtc);
-        if(PriorityFilterActive)sharedLists=sharedLists.ToDictionary(pair=>pair.Key,pair=>FilterOutstandingPriorities(pair.Value));
         if(!TaskLoadCurrent(version,context,background))return false;
         if(singleLine.Checked){
-            roots=PrepareSingleLineNodes(FlattenTaskNodes(roots,all,parents,sharedLists),all);
+            roots=PrepareSingleLineNodes(FlattenTaskNodes(roots,all,parents,sharedLists,matchingTasks),all);
         }
         foreach(var node in roots)tasks.SyncCompletionState(node);
         page=1;
