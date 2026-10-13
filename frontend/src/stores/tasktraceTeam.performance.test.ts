@@ -47,6 +47,20 @@ describe('collaboration refresh work', () => {
 		stop()
 		expect(changed).not.toHaveBeenCalled()
 	})
+	it('shares an in-flight sync between the automatic timer and explicit entry points', async () => {
+		let finish!: (value: never) => void
+		vi.mocked(tasktraceTeamSync).mockImplementationOnce(() => new Promise<never>(resolve => {finish = resolve}))
+		const store = useTasktraceTeamStore()
+		const automatic = store.sync()
+		const manual = store.sync()
+		await Promise.resolve()
+		await Promise.resolve()
+		expect(tasktraceTeamSync).toHaveBeenCalledTimes(1)
+		finish({data: snapshot()} as never)
+		const results = await Promise.all([automatic, manual])
+		expect(results[0]).toEqual(results[1])
+		expect(store.loading).toBe(false)
+	})
 	it('does not turn an explicit synchronization into an in-flight status read', async () => {
 		let finish!: (value: never) => void
 		vi.mocked(tasktraceTeamStatus).mockImplementationOnce(() => new Promise<never>(resolve => { finish = resolve }))

@@ -16,6 +16,7 @@ import ProjectTable from '@/components/project/views/ProjectTable.vue'
 import ProjectKanban from '@/components/project/views/ProjectKanban.vue'
 import TasktraceTeamImportButton from '@/components/project/TasktraceTeamImportButton.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {useTasktraceTeamSync} from '@/composables/useTasktraceTeamSync'
 
 import {DEFAULT_PROJECT_VIEW_SETTINGS} from '@/modelTypes/IProjectView'
 import {saveProjectToHistory} from '@/modules/projectHistory'
@@ -33,6 +34,7 @@ const route = useRoute()
 
 const editing = computed(() => props.projectId <= 0 || route.query.mode === 'edit')
 const editRevision = ref(0)
+const {syncing, syncMessage, syncDetails, syncNow} = useTasktraceTeamSync()
 function setEditing(value: boolean) { void router.replace({query: {...route.query, mode: value ? 'edit' : 'browse'}}) }
 const currentProject = computed(() => projectStore.projects[props.projectId])
 
@@ -143,6 +145,15 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 				@imported="editRevision++"
 			/>
 			<XButton
+				v-if="isLocalBuild"
+				variant="secondary"
+				:loading="syncing"
+				title="立即同步所有协作任务的已保存内容"
+				@click="syncNow"
+			>
+				{{ syncing ? '同步中…' : '立即同步' }}
+			</XButton>
+			<XButton
 				v-if="editing || (currentProject?.maxPermission > 0 && !currentProject?.isArchived)"
 				class="button is-primary"
 				@click="setEditing(!editing)"
@@ -150,6 +161,35 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 				{{ editing ? '返回展示模式' : '进入编辑模式' }}
 			</XButton>
 		</div>
+	</div>
+	<div
+		v-if="isLocalBuild && syncMessage"
+		class="project-sync-feedback"
+		:aria-busy="syncing"
+	>
+		<div>
+			<p role="status">
+				{{ syncMessage }}
+			</p>
+			<ul v-if="syncDetails.length">
+				<li
+					v-for="(detail, index) in syncDetails"
+					:key="index"
+				>
+					{{ detail }}
+				</li>
+			</ul>
+			<p class="help">
+				同步范围为本机所有协作任务的已保存内容；其他成员也需同步才能收到最新内容。
+			</p>
+		</div>
+		<XButton
+			variant="tertiary"
+			:disabled="syncing"
+			@click="syncMessage = ''"
+		>
+			收起同步结果
+		</XButton>
 	</div>
 	<ProjectProgressOverview
 		v-if="!editing"
@@ -209,5 +249,32 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 	align-items: center;
 	flex-wrap: wrap;
 	gap: .75rem;
+}
+.project-sync-feedback {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: .75rem;
+	padding: .75rem;
+	margin-block-end: 1rem;
+	border: 1px solid var(--grey-300);
+	border-radius: $radius;
+	background: var(--white);
+	color: var(--text);
+	overflow-wrap: anywhere;
+
+	> div {
+		flex: 1 1 20rem;
+		min-inline-size: 0;
+	}
+
+	ul {
+		max-block-size: 12rem;
+		overflow-y: auto;
+		padding-inline-start: 1.25rem;
+		margin-block: .5rem;
+		list-style: disc;
+	}
 }
 </style>

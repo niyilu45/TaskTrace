@@ -235,6 +235,7 @@ internal sealed partial class FloatingWindow : Form {
             try { Process.Start(new ProcessStartInfo(root) { UseShellExecute = true }); }
             catch(Exception e) { MessageBox.Show(this, "无法打开程序路径。\r\n\r\n" + e.Message, "TaskTrace", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         });
+        InitializeTeamSyncMenu(menu);
         menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
@@ -482,7 +483,7 @@ internal sealed partial class FloatingWindow : Form {
             bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && path != "/tasktrace/team/sync";
             if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
-            using(var response = await http.SendAsync(request)) {
+            using(var response = await (path == "/tasktrace/team/sync" ? teamSyncHttp : http).SendAsync(request)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
                     await refreshGate.WaitAsync();
                     try {
@@ -498,7 +499,7 @@ internal sealed partial class FloatingWindow : Form {
                     string message = response.StatusCode == HttpStatusCode.Forbidden
                         ? "当前不具备写权限，修改已保留。所属人开放写权限后无需关闭窗口，直接重试保存即可。"
                         : "操作未保存（" + (int)response.StatusCode + "），请刷新后重试。";
-                    if(path == "/tasktrace/undo") try { var problem = ReadObject(responseBody); object detail; if(problem.TryGetValue("detail", out detail) || problem.TryGetValue("message", out detail)) message = Convert.ToString(detail); } catch { }
+                    if(path == "/tasktrace/undo" || path == "/tasktrace/team/sync") try { var problem = ReadObject(responseBody); object detail; if(problem.TryGetValue("detail", out detail) || problem.TryGetValue("message", out detail)) message = Convert.ToString(detail); } catch { }
                     throw new Exception(message);
                 }
                 var result = ReadObject(responseBody);

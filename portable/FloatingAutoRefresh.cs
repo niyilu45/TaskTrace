@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -22,7 +23,10 @@ internal sealed partial class FloatingWindow {
     DateTime autoRefreshDatabaseRetryAfterUtc;
     string autoRefreshDatabaseError="";
     readonly System.Windows.Forms.Timer teamSyncTimer=new System.Windows.Forms.Timer {Interval=15000};
-    bool teamSyncRunning;
+    // Collaboration can touch several LAN shares; keep its timeout separate from quick local reads.
+    readonly HttpClient teamSyncHttp = new HttpClient(new HttpClientHandler {UseProxy=false}) {Timeout=TimeSpan.FromSeconds(90)};
+    readonly FloatingTeamSyncRequest teamSyncRequest = new FloatingTeamSyncRequest();
+    ToolStripMenuItem teamSyncMenu;
 
     [DllImport("winsqlite3.dll",EntryPoint="sqlite3_open_v2",ExactSpelling=true,CallingConvention=CallingConvention.Cdecl)]
     static extern int AutoRefreshSqliteOpen(byte[] path,out IntPtr database,int flags,IntPtr vfs);
@@ -74,11 +78,77 @@ internal sealed partial class FloatingWindow {
     async void TeamSyncTimerTick(object sender,EventArgs e) {
         // Editors pause the view-refresh timer, not collaboration. Slow LAN reads must
         // not hold up local task refresh, and an in-flight sync must never overlap itself.
-        if(selfTest || closing || IsDisposed || teamSyncRunning)return;
-        teamSyncRunning=true;
-        try {await Api("POST","/tasktrace/team/sync",null);}
+        if(selfTest || closing || IsDisposed || teamSyncRequest.InProgress)return;
+        try {await SynchronizeTeam();}
         catch { }
-        finally {teamSyncRunning=false;}
+    }
+
+    Task<Dictionary<string,object>> SynchronizeTeam() {
+        return teamSyncRequest.Run(delegate {return Api("POST","/tasktrace/team/sync",null);});
+    }
+
+    void InitializeTeamSyncMenu(ContextMenuStrip menu) {
+        teamSyncMenu = new ToolStripMenuItem("立即同步");
+        teamSyncMenu.ToolTipText = "立即同步所有协作任务的已保存内容";
+        teamSyncMenu.Click += async delegate {await SynchronizeTeamFromTray();};
+        menu.Items.Add(teamSyncMenu);
+    }
+
+    async Task SynchronizeTeamFromTray() {
+        if(closing || IsDisposed || !teamSyncMenu.Enabled)return;
+        teamSyncMenu.Enabled=false;teamSyncMenu.Text="同步中…";
+        var resultWindow=new Form {
+            Text="TaskTrace · 协作同步",Size=new System.Drawing.Size(620,360),MinimumSize=new System.Drawing.Size(380,240),
+            StartPosition=FormStartPosition.CenterScreen,ShowInTaskbar=true,Font=Font,Icon=Icon,AutoScaleMode=AutoScaleMode.Dpi
+        };
+        var details=new TextBox {
+            Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BorderStyle=BorderStyle.None,
+            BackColor=System.Drawing.SystemColors.Window,ForeColor=System.Drawing.SystemColors.WindowText,
+            Text="正在与团队共享目录同步…\r\n\r\n仅同步已保存的内容。可以关闭此窗口，同步会在后台继续。"
+        };
+        var progress=new ProgressBar {Dock=DockStyle.Top,Height=6,Style=ProgressBarStyle.Marquee};
+        var close=new Button {Text="关闭",AutoSize=true};
+        close.Click+=delegate {resultWindow.Close();};
+        var actions=new FlowLayoutPanel {Dock=DockStyle.Bottom,AutoSize=true,FlowDirection=FlowDirection.RightToLeft};
+        actions.Controls.Add(close);
+        resultWindow.Padding=new Padding(16);resultWindow.Controls.Add(details);resultWindow.Controls.Add(progress);resultWindow.Controls.Add(actions);
+        resultWindow.CancelButton=close;
+        try {
+            resultWindow.Show();
+            var result=await SynchronizeTeam();
+            if(!resultWindow.IsDisposed)details.Text=TeamSyncResultText(result);
+        } catch(Exception error) {
+            string reason=error is TaskCanceledException?"等待共享目录响应超时。":error.Message;
+            if(!resultWindow.IsDisposed)details.Text="同步未完成："+reason+"\r\n\r\n请检查团队共享目录或网络连接后，从托盘菜单重试。";
+        } finally {
+            if(!resultWindow.IsDisposed)progress.Visible=false;
+            if(!IsDisposed && !closing){teamSyncMenu.Enabled=true;teamSyncMenu.Text="立即同步";}
+        }
+    }
+
+    static string TeamSyncResultText(Dictionary<string,object> result) {
+        object raw;
+        if(result==null || !result.TryGetValue("enabled",out raw) || !Convert.ToBoolean(raw))
+            return "协作同步不可用，请检查本机协作设置。";
+        var bindings=result.TryGetValue("bindings",out raw)?raw as System.Collections.IEnumerable:null;
+        int count=0,conflicts=0;
+        var errors=new List<string>();
+        if(bindings!=null)foreach(Dictionary<string,object> binding in bindings) {
+            count++;
+            string error=binding.TryGetValue("last_error",out raw)?Convert.ToString(raw):"";
+            if(!String.IsNullOrWhiteSpace(error)) {
+                string title=binding.TryGetValue("root_task_title",out raw)?Convert.ToString(raw):"";
+                if(String.IsNullOrWhiteSpace(title))title="任务 #"+(binding.TryGetValue("root_task_id",out raw)?Convert.ToString(raw):"?");
+                errors.Add(title+"："+error);
+            }
+            var items=binding.TryGetValue("conflicts",out raw)?raw as System.Collections.IEnumerable:null;
+            if(items!=null)foreach(object item in items)conflicts++;
+        }
+        string message=count==0?"当前没有需要同步的协作任务。":errors.Count>0
+            ?"同步未全部完成："+errors.Count+" / "+count+" 项协作任务同步失败。\r\n\r\n"+String.Join("\r\n\r\n",errors)
+            :"本机与共享目录同步完成，共 "+count+" 项协作任务。";
+        if(conflicts>0)message+="\r\n\r\n有 "+conflicts+" 项冲突待处理，请打开完整界面的通知查看差异。";
+        return message+"\r\n\r\n同步范围为本机所有协作任务的已保存内容；其他成员也需同步才能收到最新内容。";
     }
 
     static bool IsAutoRefreshDataFile(string name) {
@@ -256,6 +326,7 @@ internal sealed partial class FloatingWindow {
         }
         timer.Tick-=AutoRefreshTimerTick;
         Shown-=TeamSyncTimerTick;teamSyncTimer.Stop();teamSyncTimer.Tick-=TeamSyncTimerTick;teamSyncTimer.Dispose();
+        teamSyncHttp.Dispose();
         if(watcher!=null)try {watcher.Dispose();}catch { }
     }
 
@@ -436,5 +507,17 @@ internal sealed partial class FloatingWindow {
         File.WriteAllText(Path.Combine(data,"floating-auto-refresh-test.txt"),failure==null?
             "PASS: real isolated parent/child tasks and shared outstanding; both layouts share direct leaves and accept in-flight reads across switches; unchanged background load in both layouts retains task and leaf instances, selection, expansion, scroll, bounds, enabled state and zero invalidation; file bursts debounce to one silent read; idle polling makes no data request; committed task and outstanding edits are detected through persistent read-only SQLite data_version plus filesystem hints and apply; busy/hidden events persist until resumed; changes during reads keep a pending revision; fixtures removed.":"FAIL: "+failure);
         if(failure!=null)throw new Exception("Auto refresh self-test failed",failure);
+    }
+}
+
+// Timer and explicit tray requests run on the UI thread and share one network operation.
+internal sealed class FloatingTeamSyncRequest {
+    Task<Dictionary<string,object>> pending;
+    internal bool InProgress {get {return pending!=null;}}
+    internal async Task<Dictionary<string,object>> Run(Func<Task<Dictionary<string,object>>> synchronize) {
+        if(pending!=null)return await pending;
+        var request=synchronize();pending=request;
+        try {return await request;}
+        finally {if(Object.ReferenceEquals(pending,request))pending=null;}
     }
 }
