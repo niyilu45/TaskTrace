@@ -588,6 +588,7 @@ internal sealed partial class FloatingWindow : Form {
         SetBusy(true); timer.Stop();
         try {
             var task=await Api("GET","/tasks/"+id,null);
+            taskTitle=Convert.ToString(task["title"]);
             var history = await ReadHistory(id);
             using(var dialog=DpiDialog(new Form {Text="每日进展 · "+taskTitle,Size=new Size(620,860),MinimumSize=new Size(460,700),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true})) {
                 var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=9};
@@ -615,6 +616,12 @@ internal sealed partial class FloatingWindow : Form {
                 var deleteTask=new Button {Text="删除此任务",Dock=DockStyle.Fill,BackColor=Color.Firebrick,ForeColor=Color.White,FlatStyle=FlatStyle.Flat};
                 var actionRow=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=2,RowCount=1};actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,68));actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,32));actionRow.Controls.Add(save,0,0);actionRow.Controls.Add(deleteTask,1,0);
                 var feedback=new Label {Dock=DockStyle.Fill};
+                var taskName=new TaskNameEditor(taskTitle,delegate(string original,string title){return WriteTaskName(id,original,title,delegate(string method,string path,object body){return Api(method,path,body);});},delegate(string message){if(!dialog.IsDisposed)feedback.Text=message;});
+                taskName.Saved+=async delegate {
+                    taskTitle=taskName.SavedTitle;dialog.Text="每日进展 · "+taskTitle;
+                    if(taskCache.ContainsKey(id))taskCache[id]["title"]=taskTitle;
+                    try{await LoadTasks();}catch(Exception error){if(!dialog.IsDisposed)feedback.Text="任务名已保存，列表刷新失败："+error.Message;}
+                };
                 taskAppearance.SelectedIndexChanged+=delegate{SetLocalTaskAppearance(id,SelectedAppearance(taskAppearance));feedback.Text=taskCanInherit&&SelectedAppearance(taskAppearance)==""?"背景色已设为继承父任务，仅保存在本机。":"背景色已保存到本机，不会同步给协作成员。";};
                 var referenceGroup=new GroupBox {Text="引用历史进展",Dock=DockStyle.Fill,Padding=new Padding(8)};
                 var referenceLayout=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
@@ -626,12 +633,13 @@ internal sealed partial class FloatingWindow : Form {
                 var referenceActions=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false};
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
-                layout.Controls.Add(descriptionPanel,0,0);layout.Controls.Add(day,0,1);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,2);layout.Controls.Add(progress,0,3);layout.Controls.Add(collaboratorGroup,0,4);layout.Controls.Add(referenceGroup,0,5);layout.Controls.Add(navigationRow,0,6);layout.Controls.Add(actionRow,0,7);layout.Controls.Add(feedback,0,8);dialog.Controls.Add(layout);
+                layout.Controls.Add(descriptionPanel,0,0);layout.Controls.Add(day,0,1);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,2);layout.Controls.Add(progress,0,3);layout.Controls.Add(collaboratorGroup,0,4);layout.Controls.Add(referenceGroup,0,5);layout.Controls.Add(navigationRow,0,6);layout.Controls.Add(actionRow,0,7);layout.Controls.Add(feedback,0,8);var editorLayout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};editorLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));editorLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));editorLayout.Controls.Add(taskName,0,0);editorLayout.Controls.Add(layout,0,1);dialog.Controls.Add(editorLayout);
                 int inlineImageDoubleClicks=0;
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"",originalDescriptionEditorHtml="",originalProgressEditorHtml="",originalReferenceSnapshot="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();int originalDescriptionVersion=0,originalProgressVersion=0;bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,progressDraftRestored=false,updateDiscarded=false;
+                taskName.CanSave=delegate{return !submitting && !descriptionSaving;};
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;originalDescriptionVersion=descriptionEditor.ChangeVersion;
                 WarnIfTeamReadOnly(id,dialog,feedback);
                 Action renderImages=delegate { };
@@ -641,7 +649,7 @@ internal sealed partial class FloatingWindow : Form {
                 Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=originalDescriptionVersion && !SameProgressEditorContent(descriptionEditor.Html,originalDescriptionEditorHtml);};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
-                    if(descriptionSaving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
+                    if(descriptionSaving || taskName.Saving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
 
                     descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
                     try {
@@ -724,7 +732,7 @@ internal sealed partial class FloatingWindow : Form {
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};
                 Func<bool,Task<bool>> write=async delegate(bool finish) {
-                    if(submitting || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
+                    if(submitting || taskName.Saving || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
                     if(!progressDirty() && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return true;}
 
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);
@@ -753,6 +761,7 @@ internal sealed partial class FloatingWindow : Form {
                 var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate {if(autoSaveEnabled && !editingOutstanding && !submitting && progressDirty())try{cacheSelectedDay();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
                 Action discardTaskEditorChanges=delegate{
                     updateDiscarded=true;
+                    taskName.Discard();
                     autoTimer.Stop();
                     drafts.Clear();
                     lastCached="";
@@ -766,7 +775,7 @@ internal sealed partial class FloatingWindow : Form {
                     originalDescriptionVersion=descriptionEditor.ChangeVersion;
                 };
                 deleteTask.Click+=async delegate {
-                    if(submitting || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？删除后可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+                    if(submitting || taskName.Saving || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？删除后可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);feedback.Text="正在删除任务…";
                     try {await Api("DELETE","/tasks/"+id,null);await RefreshUndo();taskDeleted=true;submitting=false;dialog.Close();}
                     catch(Exception e){feedback.Text=e.Message;}
@@ -774,7 +783,7 @@ internal sealed partial class FloatingWindow : Form {
                 };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
                     if(e.Control && e.KeyCode==Keys.V && !submitting && !descriptionSaving && (progress.ContainsFocus || descriptionEditor.ContainsFocus) && Clipboard.ContainsImage()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);var target=descriptionEditor.ContainsFocus?descriptionEditor:progress;target.InsertImage(stream.ToArray());feedback.Text=target==descriptionEditor?"图片已嵌入任务描述，双击可查看大图。":"图片已嵌入进展正文，共 "+progress.ImageCount+" 张；选中图片后可按退格或 Delete 删除。";}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
-                    if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;if(descriptionEditor.ContainsFocus)saveDescription.PerformClick();else save.PerformClick();}
+                    if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;if(taskName.ContainsFocus)taskName.SaveButton.PerformClick();else if(descriptionEditor.ContainsFocus)saveDescription.PerformClick();else save.PerformClick();}
                 };
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate {
@@ -842,18 +851,19 @@ internal sealed partial class FloatingWindow : Form {
                 };
                 dialog.FormClosing+=async delegate(object sender,FormClosingEventArgs e){
                     if(taskDeleted || closeAfterSave || verify)return;
-                    if(submitting || descriptionSaving){e.Cancel=true;return;}
-                    stash();bool unsavedDescription=descriptionDirty();if(drafts.Count==0 && !unsavedDescription){DeleteDraftCache("progress",id,selectedDay);return;}
-                    string unsavedText=(unsavedDescription?"任务描述":"")+(unsavedDescription && drafts.Count>0?"和":"")+(drafts.Count>0?drafts.Count+" 个日期的进展":"");
+                    if(submitting || descriptionSaving || taskName.Saving){e.Cancel=true;return;}
+                    stash();bool unsavedDescription=descriptionDirty(),unsavedName=taskName.Dirty;if(drafts.Count==0 && !unsavedDescription && !unsavedName){DeleteDraftCache("progress",id,selectedDay);return;}
+                    var unsavedParts=new List<string>();if(unsavedName)unsavedParts.Add("任务名");if(unsavedDescription)unsavedParts.Add("任务描述");if(drafts.Count>0)unsavedParts.Add(drafts.Count+" 个日期的进展");string unsavedText=String.Join("和",unsavedParts);
                     var choice=MessageBox.Show(dialog,unsavedText+"尚未保存。是否保存后关闭？\r\n\r\n选择“不保存”会丢弃草稿，下次打开显示最近一次正式保存的内容。","任务编辑",MessageBoxButtons.YesNoCancel,MessageBoxIcon.Question);
                     if(choice==DialogResult.Cancel){e.Cancel=true;return;}
                     if(choice==DialogResult.No){discardTaskEditorChanges();return;}
                     e.Cancel=true;autoTimer.Stop();
-                    bool descriptionSaved=!unsavedDescription || await writeDescription();
+                    bool nameSaved=!unsavedName || await taskName.Save();
+                    bool descriptionSaved=nameSaved && (!unsavedDescription || await writeDescription());
                     if(descriptionSaved && await saveAllDrafts()){closeAfterSave=true;dialog.Close();}
-                    else {feedback.Text="任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
+                    else {feedback.Text="任务名、任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
-                using(var updateRegistration=RegisterUnsavedUpdateEditor("任务描述或每日进展编辑窗口",delegate{stash();return drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving)return false;stash();bool descriptionSaved=!descriptionDirty() || await writeDescription();return descriptionSaved && await saveAllDrafts();},discardTaskEditorChanges))
+                using(var updateRegistration=RegisterUnsavedUpdateEditor("任务名、任务描述或每日进展编辑窗口",delegate{stash();return taskName.Dirty || drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving || taskName.Saving)return false;stash();bool nameSaved=!taskName.Dirty || await taskName.Save();bool descriptionSaved=nameSaved && (!descriptionDirty() || await writeDescription());return descriptionSaved && await saveAllDrafts();},discardTaskEditorChanges))
                 try{await ShowEditorWindowAsync(dialog,this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }

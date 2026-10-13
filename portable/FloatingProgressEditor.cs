@@ -12,6 +12,47 @@ using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
+// Task names have their own saved baseline; editing a name must not create progress.
+internal sealed class TaskNameEditor : UserControl {
+    internal readonly TextBox Input = new TextBox {Dock=DockStyle.Fill,MaxLength=250,AccessibleName="任务名",AccessibleDescription="修改任务名后点击保存任务名"};
+    internal readonly Button SaveButton = new Button {Text="保存任务名",Dock=DockStyle.Fill,AccessibleName="保存任务名"};
+    readonly Func<string,string,Task<string>> write;
+    readonly Action<string> feedback;
+    internal Func<bool> CanSave;
+    internal string SavedTitle {get;private set;}
+    internal bool Saving {get;private set;}
+    internal bool Dirty {get{return !String.Equals(Input.Text.Trim(),SavedTitle.Trim(),StringComparison.Ordinal);}}
+    internal event EventHandler Saved;
+    internal TaskNameEditor(string title,Func<string,string,Task<string>> write,Action<string> feedback) {
+        this.write=write;this.feedback=feedback;SavedTitle=title??"";
+        Dock=DockStyle.Fill;Margin=Padding.Empty;Padding=new Padding(14,8,14,0);
+        var row=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=2,Margin=Padding.Empty};
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,112));
+        row.RowStyles.Add(new RowStyle(SizeType.Absolute,20));row.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        var label=new Label{Text="任务名",Dock=DockStyle.Fill,TextAlign=System.Drawing.ContentAlignment.MiddleLeft,AccessibleName="任务名说明"};
+        row.Controls.Add(label,0,0);row.SetColumnSpan(label,2);row.Controls.Add(Input,0,1);row.Controls.Add(SaveButton,1,1);Controls.Add(row);
+        Input.Text=SavedTitle;SaveButton.Enabled=false;
+        Input.TextChanged+=delegate{SaveButton.Enabled=!Saving && Dirty;};
+        Input.KeyDown+=delegate(object sender,KeyEventArgs e){if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;SaveButton.PerformClick();}};
+        SaveButton.Click+=async delegate{await Save();};
+    }
+    internal void Discard() {if(Saving)return;Input.Text=SavedTitle;SaveButton.Enabled=false;}
+    internal async Task<bool> Save() {
+        if(Saving)return false;
+        if(!Dirty)return true;
+        string title=Input.Text.Trim();
+        if(title.Length==0){feedback("任务名不能为空，请填写后再保存。");Input.Focus();return false;}
+        if(CanSave!=null && !CanSave()){feedback("正在保存其他内容，请稍后再保存任务名。");return false;}
+        Saving=true;Input.ReadOnly=true;SaveButton.Enabled=false;
+        try {
+            SavedTitle=await write(SavedTitle,title);Input.Text=SavedTitle;
+            feedback("任务名已保存。");var handler=Saved;if(handler!=null)handler(this,EventArgs.Empty);
+            return true;
+        } catch(Exception error){feedback("任务名未保存："+error.Message);return false;}
+        finally{Saving=false;if(!IsDisposed){Input.ReadOnly=false;SaveButton.Enabled=Dirty;}}
+    }
+}
+
 [ComVisible(true)]
 public sealed class ProgressHtmlEditorBridge {
     internal Action<string,string> ImageDoubleClicked;
@@ -138,6 +179,16 @@ internal sealed class ProgressHtmlEditor : UserControl {
 }
 
 internal sealed partial class FloatingWindow {
+    internal static async Task<string> WriteTaskName(long id,string original,string title,Func<string,string,object,Task<Dictionary<string,object>>> request) {
+        var latest=await request("GET","/tasks/"+id,null);
+        string current=Convert.ToString(latest["title"]);
+        if(String.Equals(current,title,StringComparison.Ordinal))return current;
+        if(!String.Equals(current,original,StringComparison.Ordinal))throw new Exception("任务名已在其他窗口或由协作成员修改，请重新打开任务后再编辑。");
+        // Patch only the name, preserving progress, description and outstanding items.
+        var saved=await request("PATCH","/tasks/"+id,new{title=title});
+        return saved.ContainsKey("title")?Convert.ToString(saved["title"]):title;
+    }
+
     GalleryImage ProgressEditorGalleryImage(ProgressEditorImageEventArgs image,string caption) {
         foreach(string raw in new[]{image.RetainedSource,image.Source}.Where(value=>!String.IsNullOrWhiteSpace(value)).Distinct()) {
             string path=AttachmentPath(raw);if(path!=null)return new GalleryImage{Source=path,Caption=caption};
