@@ -48,7 +48,14 @@ func TestTaskTraceTeamRestoredListSurvivesPendingResolution(t *testing.T) {
 				require.Contains(t, items, "new", "resolving one old item must not delete a separately saved item")
 				require.Contains(t, items["new"], "Saved note")
 				require.Contains(t, items["new"], "data:image/png")
-				require.Equal(t, resolved, items["old"])
+				// Completion metadata is now part of the shared item value; compare
+				// the resolved content separately instead of treating its default 0 as text.
+				content, state := taskTraceTeamOutstandingState(items["old"])
+				require.Equal(t, resolved, content)
+				require.NotContains(t, state, `data-done="true"`)
+				if resolved == "" {
+					require.NotContains(t, items, "old")
+				}
 				require.NoError(t, sync.Close())
 			}
 		})

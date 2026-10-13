@@ -296,10 +296,46 @@ internal sealed partial class FloatingWindow : Form {
         foreach(string value in match.Groups[1].Value.Split(',')) if(long.TryParse(value,out id) && id>0) result.Add(id);
         return result;
     }
+    static DateTimeOffset ProgressCreated(Dictionary<string,object> note) {
+        object value;DateTimeOffset stamp;
+        return note.TryGetValue("created",out value) && DateTimeOffset.TryParse(Convert.ToString(value),System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.AssumeUniversal,out stamp)?stamp:DateTimeOffset.MinValue;
+    }
+    static string ProgressLineage(Dictionary<string,object> note) {
+        var marker=ReadFloatingTeamMarker(Convert.ToString(note["comment"]));string author=marker==null?"":marker.author;
+        object raw;var user=note.TryGetValue("author",out raw)?raw as Dictionary<string,object>:null;
+        if(String.IsNullOrWhiteSpace(author) && user!=null) {object name;if(user.TryGetValue("username",out name))author=Convert.ToString(name);else if(user.TryGetValue("name",out name))author=Convert.ToString(name);}
+        return DayOf(note)+"\\0"+TeamIdentityName(author??"").ToLowerInvariant();
+    }
     static List<Dictionary<string,object>> DailyHistory(List<Dictionary<string,object>> notes) {
-        var hidden = new HashSet<long>(notes.SelectMany(note => MergedIds((string)note["comment"])));
-        var hiddenTeam = new HashSet<string>(notes.SelectMany(note => TeamMergedIds((string)note["comment"])),StringComparer.OrdinalIgnoreCase);
-        return notes.Where(note => {var marker=ReadFloatingTeamMarker((string)note["comment"]);return DayOf(note)!="" && !hidden.Contains(Convert.ToInt64(note["id"])) && (marker==null || !hiddenTeam.Contains(marker.id));}).OrderByDescending(note => DayOf(note)).ThenByDescending(note => Convert.ToInt64(note["id"])).ToList();
+        var daily=notes.Where(note=>DayOf(note)!="" && !IsSharedComment(Convert.ToString(note["comment"]))).GroupBy(note=>Convert.ToInt64(note["id"])).Select(group=>group.First()).ToList();
+        var byId=daily.ToDictionary(note=>Convert.ToInt64(note["id"]));
+        var byTeam=daily.Where(note=>ReadFloatingTeamMarker(Convert.ToString(note["comment"]))!=null)
+            .GroupBy(note=>ReadFloatingTeamMarker(Convert.ToString(note["comment"])).id,StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group=>group.Key,group=>group.First(),StringComparer.OrdinalIgnoreCase);
+        var hidden=new HashSet<long>();
+        foreach(var source in daily) {
+            foreach(long id in MergedIds(Convert.ToString(source["comment"]))) {
+                Dictionary<string,object> target;
+                // Numeric ids belong to the sending database, not the receiving one.
+                // Marked records can only be superseded by their stable shared id.
+                if(byId.TryGetValue(id,out target) && ReadFloatingTeamMarker(Convert.ToString(target["comment"]))==null &&
+                    ProgressLineage(source)==ProgressLineage(target) &&
+                    (ProgressCreated(source)>ProgressCreated(target) || (ProgressCreated(source)==ProgressCreated(target) && Convert.ToInt64(source["id"])>id)))
+                    hidden.Add(id);
+            }
+            foreach(string id in TeamMergedIds(Convert.ToString(source["comment"]))) {
+                Dictionary<string,object> target;
+                if(byTeam.TryGetValue(id,out target) && !Object.ReferenceEquals(source,target) && ProgressLineage(source)==ProgressLineage(target))
+                    hidden.Add(Convert.ToInt64(target["id"]));
+            }
+        }
+        // Older collaborators may publish numeric revision references only. Show
+        // their final revision per author/day, as the web daily-progress view does.
+        var sharedLineages=new HashSet<string>(daily.Where(note=>ReadFloatingTeamMarker(Convert.ToString(note["comment"]))!=null).Select(ProgressLineage));
+        var seen=new HashSet<string>();
+        return daily.Where(note=>!hidden.Contains(Convert.ToInt64(note["id"]))).OrderByDescending(note=>DayOf(note))
+            .ThenByDescending(note=>ProgressCreated(note)).ThenByDescending(note=>Convert.ToInt64(note["id"]))
+            .Where(note=>!sharedLineages.Contains(ProgressLineage(note)) || seen.Add(ProgressLineage(note))).ToList();
     }    static List<DateTime> ProgressDates(List<Dictionary<string,object>> notes) {
         var dates=new List<DateTime>();DateTime date;
         foreach(string value in DailyHistory(notes).Select(note=>DayOf(note)).Distinct())if(DateTime.TryParseExact(value,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))dates.Add(date.Date);

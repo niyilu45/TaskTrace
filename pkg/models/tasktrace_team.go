@@ -2012,10 +2012,31 @@ func taskTraceTeamMergeComments(s *xorm.Session, a web.Auth, binding *TaskTraceT
 		}
 		body := taskTraceTeamAddMarker(shared.Body, shared.ID, shared.Author)
 		if existing := byID[shared.ID]; existing != nil {
-			_, marked := taskTraceTeamReadMarker(existing.Comment)
-			if !marked || (existing.Comment != body && shared.Updated.After(existing.Updated)) {
-				existing.Comment = body
+			marker, marked := taskTraceTeamReadMarker(existing.Comment)
+			author := actor
+			if marked {
+				author = marker.Author
+			}
+			current := TaskTraceTeamComment{ID: shared.ID, Body: taskTraceTeamAddMarker(existing.Comment, shared.ID, author), Author: author, Created: existing.Created, Updated: existing.Updated}
+			candidate := shared
+			candidate.Body = body
+			if taskTraceTeamCommentEventSupersedes(candidate, current) {
+				current = candidate
+			}
+			eventTimeChanged := !existing.Updated.Equal(current.Updated)
+			if existing.Comment != current.Body {
+				existing.Comment = current.Body
 				if err := existing.Update(s, a); err != nil {
+					return err
+				}
+				eventTimeChanged = true
+			}
+			if eventTimeChanged {
+				// Import is not another edit. Preserve the originating event clock
+				// so a receiving computer cannot make an old body newer than the
+				// sender's next edit or deletion. Use the same tie-breaker as snapshots.
+				existing.Updated = current.Updated
+				if _, err := s.ID(existing.ID).NoAutoTime().Cols("updated").Update(existing); err != nil {
 					return err
 				}
 			}

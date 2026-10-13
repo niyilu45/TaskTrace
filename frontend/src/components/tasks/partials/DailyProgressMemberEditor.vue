@@ -68,6 +68,7 @@ const mergedIds = ref<number[]>([])
 const mergedTeamIds = ref<string[]>([])
 let pendingCreate: {identity: string, signature: string, id: string} | undefined
 let version = 0
+let loadedIdentity = ''
 
 const imageCount = computed(() => countProgressImages(progress.value))
 const snapshot = computed(() => JSON.stringify([editorContentSignature(progress.value), references.value]))
@@ -79,6 +80,11 @@ type CachedDraft = {progress?: string, references?: ProgressReference[]}
 useTasktraceUndoGuard(() => saving.value || restoring.value || !unchanged.value, '请先保存协作成员的每日进展草稿。')
 
 async function load() {
+	const identity = JSON.stringify([props.taskId, props.date, props.author])
+	// A synchronization refresh may update other members while this editor
+	// contains a draft. Reload pristine editors, but keep an active edit intact.
+	if (identity === loadedIdentity && (saving.value || (!restoring.value && !unchanged.value))) return
+	loadedIdentity = identity
 	const request = ++version
 	restoring.value = true
 	message.value = ''

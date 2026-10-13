@@ -76,7 +76,11 @@ export function sortProgressNotes(notes: TaskComment[]) {
 		for (const value of source.mergedIds) {
 			const id = Number(value)
 			const target = byId.get(id)
-			if (id > 0 && id !== source.raw.id && target?.parsed.daily && `${target.parsed.date}\u0000${progressAuthorKey(target.parsed.author)}` === lineage) absorbed.add(id)
+			// Database ids are device-local. Once the target has a shared identity,
+			// only stable team references may absorb it. Otherwise an older revision
+			// imported from another computer can hide the newest revision as well.
+			const olderLocalRecord = target && !target.parsed.teamId && (target.parsed.created < source.parsed.created || (target.parsed.created === source.parsed.created && id < (source.raw.id || 0)))
+			if (id > 0 && olderLocalRecord && target?.parsed.daily && `${target.parsed.date}\u0000${progressAuthorKey(target.parsed.author)}` === lineage) absorbed.add(id)
 		}
 		for (const id of source.mergedTeamIds) {
 			const target = byTeamId.get(id)

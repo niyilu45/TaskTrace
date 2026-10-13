@@ -238,3 +238,26 @@ it('keeps outstanding operation records out of daily progress and the canonical 
 	expect(mergedDay([activity], '2026-10-10').text).toBe('')
 	expect(progressBacklinks([activity])).toEqual({})
 })
+
+describe('progress shared across independent databases', () => {
+	it('keeps the newest revision when an old imported numeric id points to it', () => {
+		const history = [
+			{id: 40, created: '2026-10-13T08:00:00Z', comment: daily('2026-10-13', 'first') + serializeTeamCommentMarker({id: 'first', author: 'member'})},
+			{id: 41, created: '2026-10-13T09:00:00Z', comment: '<h3 data-tasktrace-merged="42" data-tasktrace-team-merged="first">每日进展 · 2026-10-13</h3><p>second</p>' + serializeTeamCommentMarker({id: 'second', author: 'member'})},
+			{id: 42, created: '2026-10-13T10:00:00Z', comment: '<h3 data-tasktrace-merged="42,43" data-tasktrace-team-merged="first,second">每日进展 · 2026-10-13</h3><p>final</p>' + serializeTeamCommentMarker({id: 'final', author: 'member'})},
+		]
+		expect(sortProgressNotes(history).map(note => note.id)).toEqual([42])
+		expect(finalProgressNotes(history).map(note => note.author)).toEqual(['member'])
+		expect(mergedDay(history, '2026-10-13', 'member').text).toBe('final')
+		expect(history).toHaveLength(3)
+	})
+
+	it('never suppresses a newer legacy revision with an older numeric reference', () => {
+		const history = [
+			{id: 9, created: '2026-10-13T10:00:00Z', comment: daily('2026-10-13', 'new')},
+			{id: 8, created: '2026-10-13T09:00:00Z', comment: '<h3 data-tasktrace-merged="9">每日进展 · 2026-10-13</h3><p>old</p>'},
+		]
+		expect(mergedDay(history, '2026-10-13', 'unknown').html).toBe('')
+		expect(sortProgressNotes(history)[0].id).toBe(9)
+	})
+})

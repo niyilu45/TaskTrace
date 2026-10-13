@@ -228,3 +228,18 @@ describe('daily progress Undo drafts', () => {
 		expect(draftMocks.remove).toHaveBeenCalledWith('progress', 81, date)
 	})
 })
+
+it('refreshes saved member progress without replacing an in-progress local edit', async () => {
+	const record = (id: number, text: string) => ({id, created: '2026-10-13T10:00:00Z', comment: '<h3>每日进展 · 2026-10-13</h3><p>' + text + '</p>' + serializeTeamCommentMarker({id: 'revision-' + id, author: 'alice'})})
+	wrapper = mount(DailyProgressMemberEditor, {props: {taskId: 81, date: '2026-10-13', author: 'alice', editor: 'current', history: [record(10, 'saved')]}})
+	await flushPromises()
+	await wrapper.setProps({history: [record(11, 'remote latest')]})
+	await flushPromises()
+	expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toContain('remote latest')
+	await wrapper.get<HTMLTextAreaElement>('textarea').setValue('<p>my unsaved correction</p>')
+	await wrapper.setProps({history: [record(12, 'another remote update')]})
+	await flushPromises()
+	expect(wrapper.get<HTMLTextAreaElement>('textarea').element.value).toBe('<p>my unsaved correction</p>')
+	expect(wrapper.get('button[type=submit]').attributes('disabled')).toBeUndefined()
+	expect(taskCommentsCreate).not.toHaveBeenCalled()
+})
