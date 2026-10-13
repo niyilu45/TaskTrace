@@ -256,7 +256,9 @@ internal sealed partial class FloatingWindow {
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
             (oldProject==null?0:oldProject.Id)!=(project==null?0:project.Id);
         bool treeChanged=!background || json.Serialize(TaskTreeShape(tasks.Nodes.Cast<TreeNode>()))!=json.Serialize(TaskTreeShape(visibleRoots));
-        var expansion=SimpleTaskNodes(tasks.Nodes).ToDictionary(node=>(long)node.Tag,node=>node.IsExpanded);
+        // Childless nodes report IsExpanded=false even when the user never collapsed
+        // them. Do not carry that state onto children arriving from the web/team sync.
+        var expansion=SimpleTaskNodes(tasks.Nodes).Where(node=>node.Nodes.Count>0).ToDictionary(node=>(long)node.Tag,node=>node.IsExpanded);
         string selectedKey=RefreshNodeKey(tasks.SelectedNode),topKey=RefreshNodeKey(tasks.TopNode);
         long selectedId=SelectedTaskId();
         taskCache=all;taskParents=parents;taskOrder=order.Positions;taskViewId=order.ViewId;

@@ -73,19 +73,6 @@ internal sealed partial class FloatingWindow : Form {
     const string SharedTypeMarker = "data-tasktrace-comment-type=\"outstanding\"";
     static readonly Regex OutstandingNotePattern = new Regex(@"<aside\b[^>]*\bdata-tasktrace-outstanding-note(?:\s*=\s*[""']?true[""']?)?[^>]*>(?<note>.*?)</aside\s*>",RegexOptions.Singleline|RegexOptions.IgnoreCase);
 
-    static IEnumerable<SharedItemMarkup> SharedItemMarkups(string html) {
-        var tags=Regex.Matches(html??"",@"</?li\b[^>]*>",RegexOptions.Singleline|RegexOptions.IgnoreCase);
-        for(int i=0;i<tags.Count;i++) {
-            var opening=tags[i];if(opening.Value.StartsWith("</",StringComparison.Ordinal) || !Regex.IsMatch(opening.Value,@"\bdata-id\s*=",RegexOptions.IgnoreCase))continue;
-            int depth=1,bodyStart=opening.Index+opening.Length;
-            for(int j=i+1;j<tags.Count;j++) {
-                if(tags[j].Value.StartsWith("</",StringComparison.Ordinal))depth--;else depth++;
-                if(depth!=0)continue;
-                yield return new SharedItemMarkup{Attrs=opening.Value.Substring(3,opening.Value.Length-4),Body=html.Substring(bodyStart,tags[j].Index-bodyStart)};i=j;break;
-            }
-        }
-    }
-
     sealed class Project { public long Id; public string Title { get; set; } }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, string text);
     static void Hint(TextBox input, string text) { input.HandleCreated += delegate { SendMessage(input.Handle, 0x1501, new IntPtr(1), text); }; }
@@ -318,10 +305,6 @@ internal sealed partial class FloatingWindow : Form {
         foreach(string value in DailyHistory(notes).Select(note=>DayOf(note)).Distinct())if(DateTime.TryParseExact(value,"yyyy-MM-dd",System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,out date))dates.Add(date.Date);
         return dates;
     }
-    static bool IsSharedComment(string html) {
-        html=html??"";
-        return Regex.IsMatch(html,"\\bdata-tasktrace-comment-type\\s*=\\s*(['\\\"]?)outstanding\\1",RegexOptions.IgnoreCase) || html.Contains(SharedHeading) || Regex.IsMatch(html,"\\bdata-tasktrace-outstanding-note\\s*=",RegexOptions.IgnoreCase);
-    }
     static string ProgressBody(string html,long taskId=0) {
         return ProgressDisplayBody(SplitProgressReferences(html,taskId).Body);
     }
@@ -330,17 +313,19 @@ internal sealed partial class FloatingWindow : Form {
         var record = notes.OrderByDescending(note => Convert.ToInt64(note["id"])).FirstOrDefault(note => IsSharedComment(Convert.ToString(note["comment"])));
         if(record != null) {
             list.CommentId = Convert.ToInt64(record["id"]);
+            int index=0;
             foreach(var match in SharedItemMarkups((string)record["comment"])) {
-                string attrs=match.Attrs;
-                var id=Regex.Match(attrs,"\\bdata-id\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
-                if(!id.Success)continue;
-                var completedAt=Regex.Match(attrs,"\\bdata-completed-at\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
-                var done=Regex.Match(attrs,"\\bdata-done\\s*=\\s*\"(?<value>true|false)\"",RegexOptions.IgnoreCase);
-                var priority=Regex.Match(attrs,"\\bdata-priority\\s*=\\s*\"(?<value>[0-9])\"",RegexOptions.IgnoreCase);
-                var reminder=Regex.Match(attrs,"\\bdata-reminder\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
-                int value=defaultPriority;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
+                string tag="<li "+match.Attrs+">";
+                string id=OutstandingAttribute(tag,"data-id");
+                if(String.IsNullOrEmpty(id))id="item-"+index;
+                index++;
+                int value=7,parsed;
+                if(Int32.TryParse(OutstandingAttribute(tag,"data-priority"),out parsed))value=parsed;
                 string content=match.Body;var note=OutstandingNotePattern.Match(content);
-                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,ReminderAt=reminder.Success?WebUtility.HtmlDecode(reminder.Groups["value"].Value):null,Completion=ManualCompletion(ReferenceAttribute("<li "+attrs+">","data-progress")),Priority=Math.Max(0,Math.Min(9,value))});
+                list.Items.Add(new PendingItem {Id=id,Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",
+                    Done=String.Equals(OutstandingAttribute(tag,"data-done"),"true",StringComparison.OrdinalIgnoreCase),
+                    CompletedAt=OutstandingAttribute(tag,"data-completed-at"),ReminderAt=OutstandingAttribute(tag,"data-reminder"),
+                    Completion=ManualCompletion(OutstandingAttribute(tag,"data-progress")),Priority=Math.Max(0,Math.Min(9,value))});
             }
         } else {
             var latest = DailyHistory(notes).FirstOrDefault();

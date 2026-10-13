@@ -64,6 +64,49 @@ internal sealed partial class FloatingWindow {
         var actual=SimpleTaskNodes(tasks.Nodes).Select(node=>(long)node.Tag).OrderBy(id=>id);
         if(!actual.SequenceEqual(expected.OrderBy(id=>id)))throw new Exception("Task ancestor/sibling filtering failed: "+String.Join(",",actual));
     }
+    internal async Task TestNewChildrenAndLegacyLists(VisibilityApi api) {
+        visiblePriorities.Clear();visiblePriorities.UnionWith(Enumerable.Range(0,10));showCompleted.Checked=true;search.Text="";
+        singleLine.Checked=false;tasks.SingleLinePaths=false;
+        await ReadVisibility();
+        var failures=new List<string>();
+        api.Tasks.Add(new Dictionary<string,object>{{"id",211},{"title","Newly shared child"},{"done",false},{"priority",3},{"comment_count",0},
+            {"related_tasks",new Dictionary<string,object>{{"parenttask",new[]{new Dictionary<string,object>{{"id",4}}}}}}});
+        api.AddNote(5,"new-leaf","Newly shared outstanding",7,false);
+        await ReadVisibility(true);
+        var child=tasks.Nodes.Find("211",true).Single();
+        var outstanding=OutstandingDescendants(tasks.Nodes).Single(n=>n.Tag is OutstandingLeaf && ((OutstandingLeaf)n.Tag).Id=="new-leaf");
+        if(taskSurface.NodeBounds(child).IsEmpty)failures.Add("First child under a previously childless task is incorrectly collapsed during background refresh.");
+        if(taskSurface.NodeBounds(outstanding).IsEmpty)failures.Add("First outstanding item under a previously childless task is incorrectly collapsed during background refresh.");
+        api.AddNote(6,"quoted","Single quoted item",2,false);
+        api.Notes[6][0]["comment"]="<h3>TaskTrace 遗留事项清单</h3><ul><li data-id=''quoted'' data-priority=''2''>Single quoted item</li><li data-id=bare data-priority=3>Bare attribute item</li><li>Legacy ID-less item</li></ul>";
+        api.AddNote(7,"mentioned-heading","Saved outstanding",7,false);
+        api.Notes[7].Add(new Dictionary<string,object>{{"id",9999},{"comment","<p>检查 TaskTrace 遗留事项清单 后继续</p>"}});
+        await ReadVisibility();
+        foreach(string id in new[]{"quoted","bare","item-2","mentioned-heading"})if(!HasVisibleLeaf(id))failures.Add("Saved outstanding item is not parsed: "+id);
+        if(failures.Count>0)throw new Exception(String.Join(Environment.NewLine,failures));
+        var parent=tasks.Nodes.Find("4",true).Single();parent.Collapse();collapsedTasks.Add(4);
+        api.AddNote(4,"collapsed-leaf","Keep manually collapsed",7,false);await ReadVisibility(true);
+        if(tasks.Nodes.Find("4",true).Single().IsExpanded)throw new Exception("A user-collapsed branch was expanded by new outstanding content.");
+        foreach(bool simple in new[]{false,true}) {
+            simpleMode=simple;await ReadVisibility();
+            foreach(string id in new[]{"quoted","bare","item-2","mentioned-heading","new-leaf"})
+                if(!HasVisibleLeaf(id))throw new Exception("A parsed item is missing in full/simple tree mode: "+id);
+            singleLine.Checked=true;tasks.SingleLinePaths=true;await ReadVisibility();
+            foreach(string id in new[]{"quoted","bare","item-2","mentioned-heading","new-leaf"})
+                if(!HasVisibleLeaf(id))throw new Exception("A parsed item is missing in flat mode: "+id);
+            singleLine.Checked=false;tasks.SingleLinePaths=false;
+        }
+        var nested=ReadShared(new List<Dictionary<string,object>>{new Dictionary<string,object>{{"id",1},{"comment",
+            "<h3>TaskTrace <span>遗留事项清单</span></h3><ul><li data-id=''a&amp;b'' title=''a > b'' data-done=true data-priority=2 data-progress=30 data-reminder=''2026-12-01T09:00:00Z''>Main<ul><li data-id=nested>Nested bullet</li></ul><img src=''/image/1''><aside data-tasktrace-outstanding-note=true hidden>Memo<ol><li>Memo bullet</li></ol><img src=''/image/2''></aside></li><li data-id=second>Next<li data-id=third>Last</ul>"}}});
+        var first=nested.Items.First();
+        if(nested.Items.Count!=3 || first.Id!="a&b" || !first.Done || first.Priority!=2 || first.Completion!=30 || first.ReminderAt!="2026-12-01T09:00:00Z" ||
+            !first.Html.Contains("Nested bullet") || !first.Html.Contains("/image/1") || first.Html.Contains("Memo") || !first.NoteHtml.Contains("/image/2") ||
+            nested.Items[1].Html!="Next" || nested.Items[2].Html!="Last")
+            throw new Exception("Nested bullets/images/notes/metadata or optional list closing tags were lost.");
+        if(IsSharedComment("<p title=''mention data-tasktrace-comment-type=outstanding''>Normal</p>"))
+            throw new Exception("An attribute-looking phrase in a normal comment became a shared list.");
+        Console.WriteLine("PASS: new synchronized children are visible, manual collapse survives; legacy lists, nested bullets, images, memo, metadata and ordinary heading mentions work in full/simple/tree/flat modes.");
+    }
     internal async Task TestVisibility(VisibilityApi api) {
         await ReadVisibility();
         if(SimpleTaskNodes(tasks.Nodes).Count()!=210 || api.TaskPages!=3 || !HasVisibleLeaf("child-leaf"))throw new Exception("Task/comment pagination dropped entries.");
@@ -115,7 +158,7 @@ internal static class FloatingVisibilityTests {
     [STAThread] static int Main(){
         Application.EnableVisualStyles();var api=new VisibilityApi();int result=0;
         using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-            app.Shown+=async delegate{try{await app.TestVisibility(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
+            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
             Application.Run(app);
         }
         return result;
