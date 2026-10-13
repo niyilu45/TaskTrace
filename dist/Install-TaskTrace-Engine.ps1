@@ -444,6 +444,76 @@ function Install-ProgramFiles([string]$SourceDirectory, [string]$DestinationDire
     } finally { Remove-Item -LiteralPath $transactionRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+function New-InstallCopyArchive([string]$SourceDirectory, [string]$DestinationPath, [string[]]$Names) {
+    Add-Type -AssemblyName System.IO.Compression
+    $destination = [IO.Path]::GetFullPath($DestinationPath)
+    $directory = [IO.Path]::GetDirectoryName($destination)
+    $expected = @{}
+    foreach ($name in $Names) {
+        if ([IO.Path]::GetFileName($name) -ne $name -or $expected.ContainsKey($name)) { throw ('无效的程序文件名：' + $name) }
+        $path = Join-Path $SourceDirectory $name
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw ('无法生成安全复制包，缺少 ' + $name) }
+        $expected[$name] = (Get-Item -LiteralPath $path).Length
+    }
+    # Build next to the destination without truncating the last good ZIP.
+    # Stream the explicit allowlist only, never runtime folders/settings.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $pending = Join-Path $directory ('.TaskTrace-copy-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+        $owned = $false
+        try {
+            $file = [IO.File]::Open($pending, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+            $owned = $true
+            try {
+                $archive = [IO.Compression.ZipArchive]::new($file, [IO.Compression.ZipArchiveMode]::Create, $true)
+                try {
+                    foreach ($name in $Names) {
+                        Write-InstallLog ('复制包：正在压缩 ' + $name)
+                        $source = [IO.File]::Open((Join-Path $SourceDirectory $name), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+                        try {
+                            $entry = $archive.CreateEntry($name, [IO.Compression.CompressionLevel]::Optimal)
+                            $output = $entry.Open()
+                            try { $source.CopyTo($output) } finally { $output.Dispose() }
+                        } finally { $source.Dispose() }
+                    }
+                } finally { $archive.Dispose() }
+                $file.Flush($true)
+            } finally { $file.Dispose() }
+            $file = [IO.File]::OpenRead($pending)
+            try {
+                $archive = [IO.Compression.ZipArchive]::new($file, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    if ($archive.Entries.Count -ne $Names.Count) { throw '复制包中的程序文件数量不完整。' }
+                    foreach ($entry in $archive.Entries) {
+                        if (!$expected.ContainsKey($entry.FullName) -or $entry.Length -ne $expected[$entry.FullName]) { throw ('复制包校验失败：' + $entry.FullName) }
+                        $input = $entry.Open()
+                        try { $input.CopyTo([IO.Stream]::Null) } finally { $input.Dispose() }
+                    }
+                } finally { $archive.Dispose() }
+            } finally { $file.Dispose() }
+            try {
+                if ([IO.File]::Exists($destination)) { [IO.File]::Replace($pending, $destination, [NullString]::Value) }
+                else { [IO.File]::Move($pending, $destination) }
+                return $destination
+            } catch {
+                $failure = $_.Exception.GetBaseException()
+                if ($failure -isnot [IO.IOException] -and $failure -isnot [UnauthorizedAccessException]) { throw }
+                $alternate = Join-Path $directory ('TaskTrace-program-files-' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8) + '.zip')
+                [IO.File]::Move($pending, $alternate)
+                Write-InstallLine ('旧复制包暂时无法替换，已保留旧包并另存本次复制包：' + $alternate) Yellow
+                Write-InstallLog ('旧复制包替换失败原因：' + $failure.Message)
+                return $alternate
+            }
+        } catch {
+            $failure = $_.Exception.GetBaseException()
+            if ($attempt -ge 3 -or ($failure -isnot [IO.IOException] -and $failure -isnot [UnauthorizedAccessException])) { throw }
+            Write-InstallLine ('复制包文件暂时无法访问，正在重试（' + $attempt + '/3）：' + $failure.Message) Yellow
+            Start-Sleep -Milliseconds 500
+        } finally {
+            if ($owned -and [IO.File]::Exists($pending)) { Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue }
+        }
+    }
+}
+
 function Add-DependencyIssue([string]$Problem, [string]$Hint) {
     $issues.Add($Problem)
     if (![string]::IsNullOrWhiteSpace($Hint) -and !$hints.Contains($Hint)) { $hints.Add($Hint) }
@@ -806,8 +876,7 @@ try {
     foreach ($file in @('TaskTrace.exe', 'TaskTrace-server.exe', 'TaskTrace-floating.exe', 'Launch-TaskTrace.ps1', 'SOURCE-COMMIT.txt')) {
         if (!(Test-Path -LiteralPath (Join-Path $buildOutputDirectory $file) -PathType Leaf)) { throw ('生成结果不完整，缺少 ' + $file) }
     }
-    $stage = '生成安全复制包'
-    $copyArchive = Join-Path $PSScriptRoot 'TaskTrace-program-files.zip'
+    $stage = '检查安装结果文件'
     $programFileNames = @(
         'TaskTrace.exe',
         'TaskTrace-updater.exe',
@@ -823,23 +892,35 @@ try {
         'SOURCE-COMMIT.txt',
         'VERSION.txt'
     )
-    $programFiles = @($programFileNames | ForEach-Object {
+    $programFileNames | ForEach-Object {
         $programFile = Join-Path $buildOutputDirectory $_
         if (!(Test-Path -LiteralPath $programFile -PathType Leaf)) { throw ('无法生成安全复制包，缺少 ' + $_) }
-        $programFile
-    })
-    Compress-Archive -LiteralPath $programFiles -DestinationPath $copyArchive -Force
-    if (!(Test-Path -LiteralPath $copyArchive -PathType Leaf)) { throw '安全复制包生成失败。' }
+    }
+    $stage = '生成安全复制包'
+    $copyArchive = ''
+    $archiveWarning = ''
+    try {
+        $copyArchive = New-InstallCopyArchive $buildOutputDirectory (Join-Path $PSScriptRoot 'TaskTrace-program-files.zip') $programFileNames
+    } catch {
+        $archiveWarning = '本次安全复制包未生成：' + $_.Exception.GetBaseException().Message
+        Write-InstallLine $archiveWarning Yellow
+        Write-InstallLog ($_ | Out-String)
+        Write-InstallLog $_.ScriptStackTrace
+        Write-InstallLine '将继续安装已编译好的程序；不要使用旧复制包更新其他电脑。' Yellow
+    }
     $stage = '安装程序文件'
     Install-ProgramFiles $buildOutputDirectory $outputDirectory $programFileNames
     Write-InstallLine ''
     Write-InstallLine '免安装程序生成并安装成功。' Green
     Write-InstallLine ('程序位置：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
-    Write-InstallLine ('复制到其他电脑请使用：' + $copyArchive) Green
+    if ($copyArchive) { Write-InstallLine ('复制到其他电脑请使用：' + $copyArchive) Green }
+    else { Write-InstallLine $archiveWarning Yellow }
     Write-InstallLine '本次安装只覆盖程序文件；配置、data、teamData、.cache、backups 和其他用户文件均未修改。' Yellow
     Write-InstallLine '运行程序不再需要 Node.js、pnpm、Go、GCC 或 C# 编译器。'
     Write-InstallLine ('详细记录：' + $logFile)
-    Show-InstallResult 'TaskTrace：安装成功' ("TaskTrace 已安装到：`r`n" + $outputDirectory + "`r`n`r`n只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。`r`n`r`n同时生成安全复制包：`r`n" + $copyArchive + "`r`n`r`n详细记录：" + $logFile)
+    $archiveSummary = if ($copyArchive) { '同时生成安全复制包：' + [Environment]::NewLine + $copyArchive } else { $archiveWarning + [Environment]::NewLine + '程序已经安装成功；请勿使用旧复制包更新其他电脑。' }
+    $resultTitle = if ($copyArchive) { 'TaskTrace：安装成功' } else { 'TaskTrace：安装成功，复制包未生成' }
+    Show-InstallResult $resultTitle ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
     exit 0
 } catch {
     if ($_.Exception -is [OperationCanceledException]) {
