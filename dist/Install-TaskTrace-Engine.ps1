@@ -12,17 +12,22 @@ $root = Split-Path $PSScriptRoot -Parent
 $defaultInstallDirectory = Join-Path $PSScriptRoot 'TaskTrace-local'
 $outputDirectory = $defaultInstallDirectory
 $buildStagingRoot = ''
-$logFile = Join-Path $PSScriptRoot 'install.log'
+# Do not touch the shared log until this source directory is exclusively owned.
+$logFile = ''
+$sourceInstallLock = $null
+$targetInstallLock = $null
 $issues = New-Object 'System.Collections.Generic.List[string]'
 $hints = New-Object 'System.Collections.Generic.List[string]'
 $stage = '检查构建环境'
 
 function Write-InstallLine([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray) {
     Write-Host $Text -ForegroundColor $Color
+    if (!$logFile) { return }
     try { [IO.File]::AppendAllText($logFile, $Text + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
 }
 
 function Write-InstallLog([string]$Text) {
+    if (!$logFile) { return }
 	try { [IO.File]::AppendAllText($logFile, $Text + [Environment]::NewLine, [Text.UTF8Encoding]::new($true)) } catch { }
 }
 
@@ -153,6 +158,56 @@ public static class TaskTraceInstallNative {
     static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int kind, IntPtr buffer, int size, out int returned);
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CommandLineToArgvW(string command, out int count);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+    [StructLayout(LayoutKind.Sequential)] struct UnicodeString { public ushort Length, MaximumLength; public IntPtr Buffer; }
+    public static int ParentId(int id) {
+        IntPtr handle = OpenProcess(0x1000, false, id);
+        if(handle == IntPtr.Zero) return 0;
+        IntPtr buffer = Marshal.AllocHGlobal(IntPtr.Size * 6);
+        try {
+            int returned;
+            if(NtQueryInformationProcess(handle, 0, buffer, IntPtr.Size * 6, out returned) != 0) return 0;
+            return Marshal.ReadIntPtr(buffer, IntPtr.Size * 5).ToInt32();
+        } finally { Marshal.FreeHGlobal(buffer); CloseHandle(handle); }
+    }
+    // Query without slow WMI/network discovery; the returned UNICODE_STRING uses
+    // the caller's bitness, including when x86 inspects x64. null = unreadable.
+    public static string LaunchScript(int id) {
+        IntPtr handle = OpenProcess(0x1000, false, id);
+        if(handle == IntPtr.Zero) return null;
+        IntPtr buffer = IntPtr.Zero;
+        IntPtr argv = IntPtr.Zero;
+        try {
+            int length;
+            NtQueryInformationProcess(handle, 60, IntPtr.Zero, 0, out length);
+            if(length <= 0 || length > 1024 * 1024) return null;
+            buffer = Marshal.AllocHGlobal(length);
+            if(NtQueryInformationProcess(handle, 60, buffer, length, out length) != 0) return null;
+            var command = (UnicodeString)Marshal.PtrToStructure(buffer, typeof(UnicodeString));
+            int count;
+            argv = CommandLineToArgvW(Marshal.PtrToStringUni(command.Buffer, command.Length / 2), out count);
+            if(argv == IntPtr.Zero) return null;
+            for(int i = 1; i < count - 1; i++) {
+                string argument = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, i * IntPtr.Size));
+                // Never mistake text inside -Command for an executable script.
+                if(argument.Length > 1 && ("-Command".StartsWith(argument, StringComparison.OrdinalIgnoreCase) ||
+                   "-EncodedCommand".StartsWith(argument, StringComparison.OrdinalIgnoreCase) ||
+                   String.Equals(argument, "-ec", StringComparison.OrdinalIgnoreCase) ||
+                   String.Equals(argument, "-CommandWithArgs", StringComparison.OrdinalIgnoreCase))) return "";
+                if(!String.Equals(argument, "-File", StringComparison.OrdinalIgnoreCase)) continue;
+                string script = Marshal.PtrToStringUni(Marshal.ReadIntPtr(argv, (i + 1) * IntPtr.Size));
+                if(!Path.IsPathRooted(script) || !String.Equals(Path.GetFileName(script), "Launch-TaskTrace.ps1", StringComparison.OrdinalIgnoreCase)) return "";
+                return Path.Combine(DirectoryPath(Path.GetDirectoryName(script)), "Launch-TaskTrace.ps1");
+            }
+            return "";
+        } finally {
+            if(argv != IntPtr.Zero) LocalFree(argv);
+            if(buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+            CloseHandle(handle);
+        }
+    }
     public static string ProcessPath(int id) {
         IntPtr handle = OpenProcess(0x1000, false, id);
         if(handle == IntPtr.Zero) return null;
@@ -164,6 +219,11 @@ public static class TaskTraceInstallNative {
     }
     public static string DirectoryPath(string directory) {
         string full = Path.GetFullPath(directory);
+        // New destinations can also be addressed through an existing junction.
+        if(!Directory.Exists(full)) {
+            string parent = Path.GetDirectoryName(full.TrimEnd('\\'));
+            if(!String.IsNullOrEmpty(parent)) return DirectoryPath(parent) + "\\" + Path.GetFileName(full.TrimEnd('\\'));
+        }
         // Resolve junctions, short names and mapped paths before comparison.
         using(var handle = CreateFile(full, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
             if(handle.IsInvalid) return full.TrimEnd('\\');
@@ -180,6 +240,26 @@ public static class TaskTraceInstallNative {
 '@
 }
 
+function Enter-InstallDirectoryLock([string]$Directory, [string]$Kind) {
+    Initialize-InstallProcessInspection
+    $canonical = [TaskTraceInstallNative]::DirectoryPath($Directory).ToUpperInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $key = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($canonical))).Replace('-', '') }
+    finally { $sha.Dispose() }
+    $mutex = $null
+    try {
+        # Global also covers elevated installers and other Windows login sessions.
+        $mutex = [Threading.Mutex]::new($false, ('Global\TaskTrace.Install.' + $Kind + '.' + $key))
+        try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
+        if ($owned) { return $mutex }
+    } catch [UnauthorizedAccessException] {
+        # Another account may own the lock. Never bypass it and risk overwriting.
+    } catch { if ($null -ne $mutex) { $mutex.Dispose() }; throw }
+    if ($null -ne $mutex) { $mutex.Dispose() }
+    $label = if ($Kind -eq 'Source') { '此源码目录已有 install 正在运行' } else { '此安装目录已有 install 正在运行' }
+    throw [OperationCanceledException]::new($label + '：' + $Directory + '。请等待其完成或退出后重试。本次安装已退出，不会关闭正在运行的程序或改写文件。')
+}
+
 function Get-InstallProcessImagePath([Diagnostics.Process]$Process) {
     Initialize-InstallProcessInspection
     return [TaskTraceInstallNative]::ProcessPath($Process.Id)
@@ -189,6 +269,26 @@ function Get-RunningInstallationProcesses([string]$Directory) {
     Initialize-InstallProcessInspection
     $targetDirectory = [TaskTraceInstallNative]::DirectoryPath($Directory)
     $found = New-Object 'System.Collections.Generic.List[object]'
+    $supervisors = @{}
+    # Stop the PowerShell supervisor BEFORE its floating/server children. Old
+    # releases otherwise mistake forced child exit for failure and keep a dialog,
+    # session lock and log handles alive throughout installation.
+    foreach ($hostName in @('powershell', 'pwsh')) {
+        foreach ($hostProcess in @(Get-Process -Name $hostName -ErrorAction SilentlyContinue)) {
+            try {
+                if ($hostProcess.Id -eq $PID) { continue }
+                $launchScript = [TaskTraceInstallNative]::LaunchScript($hostProcess.Id)
+                if (!$launchScript -or ![string]::Equals([IO.Path]::GetDirectoryName($launchScript), $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) { continue }
+                $supervisors[$hostProcess.Id] = $true
+                $found.Add([pscustomobject]@{
+                    ProcessId = $hostProcess.Id
+                    ImagePath = Get-InstallProcessImagePath $hostProcess
+                    LaunchScript = $launchScript
+                    DisplayName = 'TaskTrace 启动脚本（PID ' + $hostProcess.Id + '）'
+                })
+            } finally { $hostProcess.Dispose() }
+        }
+    }
     foreach ($name in @('TaskTrace', 'TaskTrace-floating', 'TaskTrace-server', 'TaskTrace-updater')) {
         foreach ($running in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
             try {
@@ -205,6 +305,14 @@ function Get-RunningInstallationProcesses([string]$Directory) {
                 }
                 $runningDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($runningPath))
                 if ([string]::Equals($runningDirectory, $targetDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+                    $parentId = [TaskTraceInstallNative]::ParentId($running.Id)
+                    if ($parentId -gt 0 -and !$supervisors.ContainsKey($parentId)) {
+                        $parentPath = [TaskTraceInstallNative]::ProcessPath($parentId)
+                        if ([IO.Path]::GetFileNameWithoutExtension($parentPath) -in @('powershell', 'pwsh') -and
+                            $null -eq [TaskTraceInstallNative]::LaunchScript($parentId)) {
+                            throw '无法确认 TaskTrace 启动脚本的运行路径，请手动退出程序后重试；尚未关闭任何进程。'
+                        }
+                    }
                     $found.Add([pscustomobject]@{
                         ProcessId = $running.Id
                         ImagePath = $runningPath
@@ -226,6 +334,7 @@ function Confirm-StopRunningInstallation([string]$Directory, [object[]]$Processe
 }
 
 function Stop-RunningInstallationProcesses([string]$Directory) {
+    Initialize-InstallProcessInspection
     # Reinspect after confirmation: the user may have closed or restarted a copy
     # while the dialog was open. Never kill a process identified only by its name.
     $targetDirectory = [TaskTraceInstallNative]::DirectoryPath($Directory)
@@ -244,9 +353,16 @@ function Stop-RunningInstallationProcesses([string]$Directory) {
             $null = $process.Handle
             $imagePath = Get-InstallProcessImagePath $process
             if (!$imagePath) { throw '无法再次确认运行路径。' }
-            $processDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($imagePath))
-            if (![string]::Equals($targetDirectory, $processDirectory, [StringComparison]::OrdinalIgnoreCase) -or
-                ![string]::Equals([IO.Path]::GetFileName($entry.ImagePath), [IO.Path]::GetFileName($imagePath), [StringComparison]::OrdinalIgnoreCase)) { continue }
+            if ($entry.LaunchScript) {
+                # Its host is outside the target. Verify the exact -File script
+                # again while holding the process handle against PID recycling.
+                $launchScript = [TaskTraceInstallNative]::LaunchScript($process.Id)
+                if (![string]::Equals($launchScript, $entry.LaunchScript, [StringComparison]::OrdinalIgnoreCase)) { throw '启动脚本路径无法再次确认。' }
+            } else {
+                $processDirectory = [TaskTraceInstallNative]::DirectoryPath([IO.Path]::GetDirectoryName($imagePath))
+                if (![string]::Equals($targetDirectory, $processDirectory, [StringComparison]::OrdinalIgnoreCase) -or
+                    ![string]::Equals([IO.Path]::GetFileName($entry.ImagePath), [IO.Path]::GetFileName($imagePath), [StringComparison]::OrdinalIgnoreCase)) { continue }
+            }
             $process.Kill()
             if (!$process.WaitForExit(5000)) { throw '等待程序退出超时。' }
             Write-InstallLine ('已强制关闭：' + $entry.DisplayName) Yellow
@@ -476,6 +592,9 @@ function Read-CommandText([string]$Command, [string[]]$Arguments) {
 }
 
 try {
+    $stage = '检查并发安装'
+    $sourceInstallLock = Enter-InstallDirectoryLock $root 'Source'
+    $logFile = Join-Path $PSScriptRoot 'install.log'
     [IO.File]::WriteAllText($logFile, ('TaskTrace build started: ' + [DateTime]::Now.ToString('o') + [Environment]::NewLine), [Text.UTF8Encoding]::new($true))
     Write-InstallLine 'TaskTrace 免安装程序生成工具' Cyan
     Write-InstallLine ('源码目录：' + $root)
@@ -487,6 +606,7 @@ try {
         }
         $outputDirectory = $selectedDirectory
         Write-InstallLine ('安装目录：' + $outputDirectory) Cyan
+        $targetInstallLock = Enter-InstallDirectoryLock $outputDirectory 'Target'
         $stage = '检查程序运行状态及文件占用'
         Write-InstallLine '首先检查程序运行状态及安装目录文件占用...'
         try { Assert-InstallationAvailable $outputDirectory -PromptToStop }
@@ -724,8 +844,9 @@ try {
 } catch {
     if ($_.Exception -is [OperationCanceledException]) {
         Write-InstallLine $_.Exception.Message Yellow
-        # ERROR_CANCELLED: the command wrapper must exit without a result popup
-        # or its normal success/failure pause. The finally block still cleans up.
+        if ($stage -eq '检查并发安装') { Show-InstallResult 'TaskTrace：已有安装正在进行' $_.Exception.Message }
+        # ERROR_CANCELLED: skip the wrapper's normal success/failure pause.
+        # A duplicate install has one explanation; declining shutdown has none.
         exit 1223
     }
     Write-InstallLine ''
@@ -739,5 +860,8 @@ try {
     Show-InstallResult 'TaskTrace：生成失败' ("失败阶段：" + $stage + "`r`n`r`n错误：" + $_.Exception.Message + "`r`n`r`n详细记录：" + $logFile) $true
     exit 1
 } finally {
+    foreach ($installLock in @($targetInstallLock, $sourceInstallLock)) {
+        if ($null -ne $installLock) { try { $installLock.ReleaseMutex() } finally { $installLock.Dispose() } }
+    }
     if (![string]::IsNullOrWhiteSpace($buildStagingRoot)) { Remove-Item -LiteralPath $buildStagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
