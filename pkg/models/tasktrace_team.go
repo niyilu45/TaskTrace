@@ -920,7 +920,7 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 			continue
 		}
 		if err := attachment.File.LoadFileByID(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read local attachment %q (task %d, attachment %d): %w", attachment.File.Name, taskID, attachment.ID, err)
 		}
 		content, readErr := io.ReadAll(attachment.File.File)
 		_ = attachment.File.File.Close()
@@ -1252,7 +1252,7 @@ func taskTraceTeamReadSnapshots(binding *TaskTraceTeamBinding) ([]TaskTraceTeamS
 		}
 		var snapshot TaskTraceTeamSnapshot
 		if err := taskTraceTeamReadJSON(path, &snapshot); err != nil {
-			return err
+			return fmt.Errorf("read member snapshot %s: %w", path, err)
 		}
 		if snapshot.Schema == taskTraceTeamSchema && snapshot.ShareID == binding.ShareID {
 			result = append(result, snapshot)
@@ -2301,7 +2301,7 @@ func taskTraceTeamValidateBinding(binding *TaskTraceTeamBinding, actor string) e
 		return errors.New("the task link is invalid or has been revoked")
 	}
 	for _, member := range manifest.Members {
-		if strings.EqualFold(member, actor) {
+		if taskTraceTeamMembersEqual(member, actor) {
 			binding.Members = manifest.Members
 			return nil
 		}
@@ -2331,7 +2331,7 @@ func taskTraceTeamPruneMissingTaskMappings(s *xorm.Session, binding *TaskTraceTe
 
 func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, actor string) error {
 	if err := taskTraceTeamValidateBinding(binding, actor); err != nil {
-		return err
+		return fmt.Errorf("validate team membership: %w", err)
 	}
 	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID)
 	if err != nil {
@@ -2352,7 +2352,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	}
 	local, err := taskTraceTeamBuildSnapshot(s, binding, actor, state.DeviceID)
 	if err != nil {
-		return err
+		return fmt.Errorf("prepare local collaboration data: %w", err)
 	}
 	taskTraceTeamRememberOutstandingPriorities(binding, local)
 	var manifest TaskTraceTeamManifest
@@ -2392,7 +2392,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	}
 	snapshots, err := taskTraceTeamReadSnapshots(binding)
 	if err != nil {
-		return err
+		return fmt.Errorf("read member updates: %w", err)
 	}
 	// Keep each device snapshot during the three-way merge. One user may edit
 	// different fields on two computers at the same time; collapsing both into
@@ -2402,10 +2402,10 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	snapshots = taskTraceTeamAcknowledgeSnapshots(snapshots, &manifest)
 	snapshots = taskTraceTeamFilterSnapshotsPermissions(snapshots, binding, &manifest)
 	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots); err != nil {
-		return err
+		return fmt.Errorf("import shared tasks: %w", err)
 	}
 	if err := taskTraceTeamEnsureAttachments(s, a, binding, snapshots); err != nil {
-		return err
+		return fmt.Errorf("import shared attachments: %w", err)
 	}
 	allByNode := map[string][]struct {
 		actor string
@@ -2596,7 +2596,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			comments = append(comments, comment)
 		}
 		if err := taskTraceTeamMergeComments(s, a, binding, node, actor, taskID, comments); err != nil {
-			return err
+			return fmt.Errorf("merge shared comments: %w", err)
 		}
 		mergedPercentDone := percentDone
 		if completionConflict {

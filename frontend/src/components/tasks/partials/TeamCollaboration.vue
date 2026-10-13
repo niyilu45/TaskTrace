@@ -14,7 +14,7 @@
 				<span class="icon is-grey"><Icon icon="users" /></span>
 				团队协作
 			</span>
-			<span class="team-collaboration__toggle-label">{{ expanded ? '收起' : '展开' }}</span>
+			<span class="team-collaboration__toggle-label">{{ binding?.last_error ? '同步异常 · ' : '' }}{{ expanded ? '收起' : '展开' }}</span>
 		</button>
 
 		<div
@@ -48,13 +48,28 @@
 						v-if="binding.last_sync"
 						class="has-text-grey"
 					>
-						最近同步：{{ formatDisplayDate(binding.last_sync) }}
+						最近成功同步：{{ formatDisplayDate(binding.last_sync) }}
 					</p>
 					<p
 						v-if="binding.last_error"
 						class="notification is-warning is-light"
 					>
-						共享路径暂时不可用：{{ binding.last_error }}。本地修改已保留，重新连接后会自动合并。
+						同步未完成：{{ binding.last_error }}。本地保存的内容仍保留，请根据错误检查后重试。
+					</p>
+					<XButton
+						variant="secondary"
+						:loading="syncing"
+						:disabled="syncing"
+						@click="syncNow"
+					>
+						立即同步
+					</XButton>
+					<p
+						v-if="syncFeedback"
+						role="status"
+						class="team-sync-feedback"
+					>
+						{{ syncFeedback }}
 					</p>
 					<XButton
 						v-if="binding.member_link"
@@ -302,6 +317,8 @@ const showPermissions = ref(false)
 const openingPermissions = ref(false)
 const editingMembers = ref(false)
 const expanded = ref(false)
+const syncing = ref(false)
+const syncFeedback = ref('')
 
 const binding = computed(() => teamStore.bindingForTask(props.taskId))
 const candidateMembers = computed(() => teamStore.memberRoster.filter(member => teamStore.memberKey(member) !== teamStore.memberKey(teamStore.status.username)))
@@ -325,6 +342,7 @@ function toggleExpanded() {
 }
 
 watch(() => props.taskId, () => {
+	syncFeedback.value = ''
 	expanded.value = false
 	editingMembers.value = false
 	showPermissions.value = false
@@ -443,6 +461,32 @@ async function ensureTeamDataAccess(members: string[]) {
 	}
 }
 
+async function syncNow() {
+	if (syncing.value || !binding.value?.share_id) return
+	const taskId = props.taskId
+	const shareId = binding.value.share_id
+	syncing.value = true
+	syncFeedback.value = '正在与团队共享目录同步…'
+	try {
+		const result = await teamStore.sync()
+		if (props.taskId !== taskId) return
+		const current = result.bindings?.find(item => item.share_id === shareId)
+		if (!current) {
+			syncFeedback.value = '没有找到该任务的协作关系，请检查任务链接。'
+		} else if (current.last_error) {
+			syncFeedback.value = `同步未完成：${current.last_error}`
+		} else if (current.conflicts?.length) {
+			syncFeedback.value = `同步完成，有 ${current.conflicts.length} 项冲突待处理，请打开通知查看差异。`
+		} else {
+			syncFeedback.value = '本机与共享目录同步完成。其他成员也需同步后才能收到最新内容。'
+		}
+	} catch (cause) {
+		if (props.taskId === taskId) syncFeedback.value = `同步未完成：${getErrorText(cause)}`
+	} finally {
+		syncing.value = false
+	}
+}
+
 async function openPermissions() {
 	if (openingPermissions.value) return
 	openingPermissions.value = true
@@ -474,6 +518,12 @@ async function setNotify(notify: boolean) {
 	display: flex;
 	flex-wrap: wrap;
 	gap: .5rem 1.5rem;
+}
+
+.team-sync-feedback {
+	flex-basis: 100%;
+	overflow-wrap: anywhere;
+	color: var(--text);
 }
 
 .team-members {
