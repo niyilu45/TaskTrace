@@ -165,6 +165,10 @@ internal sealed partial class FloatingWindow {
         var menu=new ContextMenuStrip();
         var selectionSummary=menu.Items.Add("已选中 1 项");selectionSummary.Enabled=false;
         menu.Items.Add(CreatePriorityFilterMenuItem());
+        var expandSelected=menu.Items.Add("全部展开",null,delegate{SetSelectedBranchesExpanded(true);});
+        var collapseSelected=menu.Items.Add("全部收起",null,delegate{SetSelectedBranchesExpanded(false);});
+        expandSelected.ToolTipText="展开选中任务及其全部下级；仅作用于当前筛选范围。";
+        collapseSelected.ToolTipText="收起选中任务及其全部下级；仅作用于当前筛选范围。";
         var setPriority=menu.Items.Add("设置优先级…",null,async delegate{await ShowPriority();});
         var batchPriority=CreateBatchPriorityMenu();menu.Items.Add(batchPriority);
         var setAppearance=CreateAppearanceMenuItem();menu.Items.Add(setAppearance);
@@ -178,6 +182,7 @@ internal sealed partial class FloatingWindow {
         menu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){
             e.Cancel=busy;var selection=SelectedActionNodes();int count=selection.Count;bool single=count==1;var node=single?selection[0]:null;
             selectionSummary.Visible=count>1;selectionSummary.Text="已选中 "+count+" 项";
+            expandSelected.Enabled=collapseSelected.Enabled=CanSetSelectedBranchesExpanded();
             setPriority.Visible=count<=1;setPriority.Enabled=single;batchPriority.Visible=count>1;
             RefreshAppearanceMenu(setAppearance);progressMenu.Enabled=count>0;completion.Enabled=count>0;completion.Text=count>1?"批量设置完成状态":"设置完成状态";
             setStatus.Visible=setReminder.Visible=images.Visible=outstanding.Visible=toRoot.Visible=count<=1;

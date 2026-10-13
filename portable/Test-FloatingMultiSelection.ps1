@@ -104,6 +104,63 @@ internal sealed partial class FloatingWindow {
         tasks.Nodes.Clear();taskSurface.Rebuild(false);
         Console.WriteLine("PASS Ctrl/Shift/Ctrl+Shift, right-click selection, modified hit targets, filtered/visible/offscreen Ctrl+A, refresh identities, deselection, flat/root color, inheritance and local persistence.");
     }
+    internal void TestBranchMenu(SelectionApi api) {
+        InitializeInteractions();taskSurface.ContextMenuStrip=tasks.ContextMenuStrip;
+        var menu=tasks.ContextMenuStrip;
+        var expand=menu.Items.Cast<ToolStripItem>().Single(item=>item.Text=="全部展开");
+        var collapse=menu.Items.Cast<ToolStripItem>().Single(item=>item.Text=="全部收起");
+        Action prepare=delegate {
+            var args=new System.ComponentModel.CancelEventArgs();
+            typeof(ContextMenuStrip).GetMethod("OnOpening",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(menu,new object[]{args});
+        };
+        int writes=api.Writes.Count,reads=api.Reads;
+        using(var host=new Form{ShowInTaskbar=false,Opacity=0,ClientSize=new Size(570,300)}) {
+            host.Controls.Add(taskSurface);host.Show();Application.DoEvents();
+            foreach(bool simple in new[]{false,true}) {
+                simpleMode=simple;rendering=true;tasks.Nodes.Clear();collapsedTasks.Clear();simpleCollapsedDuringRead.Clear();
+                singleLine.Checked=false;tasks.SingleLinePaths=false;
+                var root=SelectionTask(11,"1. [P7] 选中任务");
+                var child=SelectionTask(12,"1.1. [P7] 子任务");
+                var grandchild=SelectionTask(13,"1.1.1. [P7] 下级任务");
+                var leaf=SelectionLeaf(13,"nested","1. [P7] 遗留事项");
+                grandchild.Nodes.Add(leaf);child.Nodes.Add(grandchild);root.Nodes.Add(child);
+                var other=SelectionTask(21,"2. [P7] 未选中任务");var otherLeaf=SelectionLeaf(21,"other","1. [P7] 另一条遗留事项");other.Nodes.Add(otherLeaf);
+                tasks.Nodes.AddRange(new[]{root,other});tasks.CollapseAll();rendering=false;taskSurface.Rebuild(false);
+                taskSurface.SelectItem(root,Keys.None,MouseButtons.Left);prepare();
+                Check(expand.Enabled&&collapse.Enabled,"Branch commands are not available for a selected collapsed task.");
+                expand.PerformClick();
+                Check(root.IsExpanded&&child.IsExpanded&&grandchild.IsExpanded&&!other.IsExpanded&&!taskSurface.NodeBounds(leaf).IsEmpty,"Expand did not include descendants or changed an unselected branch.");
+                taskSurface.SelectItem(child,Keys.Control,MouseButtons.Left);prepare();collapse.PerformClick();
+                Check(!root.IsExpanded&&!child.IsExpanded&&!grandchild.IsExpanded&&!other.IsExpanded&&SelectedActionNodes().SequenceEqual(new[]{root}),"Collapse lost parent selection, skipped overlapping descendants, or changed unselected branch.");
+                collapsedTasks.Clear();LoadTreePreferences();
+                Check(new long[]{11,12,13}.All(collapsedTasks.Contains)&&!collapsedTasks.Contains(21),"Branch preferences were not saved locally.");
+                prepare();expand.PerformClick();Check(!collapsedTasks.Contains(11)&&!collapsedTasks.Contains(12)&&!simpleCollapsedDuringRead.Contains(13),"Expanded branches would be collapsed again by refresh.");
+
+                // Ctrl+A selects displayed roots even when their descendants are folded.
+                taskSurface.TestKey(Keys.Control|Keys.A);prepare();collapse.PerformClick();
+                Check(!root.IsExpanded&&!other.IsExpanded,"Select-all collapse missed a root.");
+                taskSurface.TestKey(Keys.Control|Keys.A);prepare();expand.PerformClick();
+                Check(root.IsExpanded&&child.IsExpanded&&grandchild.IsExpanded&&other.IsExpanded,"Select-all expand missed folded descendants.");
+
+                // A filtered-out task remains untouched, including its saved state.
+                rendering=true;tasks.Nodes.Remove(other);rendering=false;taskSurface.Rebuild(true);
+                collapsedTasks.Add(99);taskCache[99]=new Dictionary<string,object>{{"title","Filtered out"}};
+                var savedBefore=collapsedTasks.Contains(21);
+                search.Text="选中";taskSurface.TestKey(Keys.Control|Keys.A);prepare();collapse.PerformClick();
+                Check(other.IsExpanded&&collapsedTasks.Contains(99)&&collapsedTasks.Contains(21)==savedBefore,"Filtered select-all changed a hidden task.");
+                prepare();expand.PerformClick();search.Clear();
+                taskSurface.SelectItem(leaf,Keys.None,MouseButtons.Left);prepare();Check(!expand.Enabled&&!collapse.Enabled,"Leaf-only selection has misleading enabled branch commands.");
+                taskSurface.ClearSelection();prepare();Check(!expand.Enabled&&!collapse.Enabled,"Empty selection enables branch commands.");
+                taskSurface.SelectItem(root,Keys.None,MouseButtons.Left);singleLine.Checked=true;prepare();Check(!expand.Enabled&&!collapse.Enabled,"Flat mode enables tree-only commands.");
+                singleLine.Checked=false;
+            }
+            host.Controls.Remove(taskSurface);host.Close();
+        }
+        Check(api.Writes.Count==writes&&api.Reads==reads,"Expand/collapse touched shared task data.");
+        tasks.Nodes.Clear();taskSurface.Rebuild(false);simpleMode=false;collapsedTasks.Clear();simpleCollapsedDuringRead.Clear();
+        Console.WriteLine("PASS branch menu: partial/Ctrl+A selections, nested/overlapping tasks, filtered scope, local preference reload, full/simple parity, selection retention, leaf/empty/flat disabled states; no API writes.");
+    }
+
     internal async Task TestBatchWrites(SelectionApi api) {
         for(long id=1;id<=3;id++)api.Tasks[id]=new Dictionary<string,object>{{"id",id},{"title","Task "+id},{"done",false},{"priority",3},{"description","Keep description"}};
         string list="<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul><li data-id=\"a\" data-priority=\"7\">Alpha<img src=\"/image/a\"><aside data-tasktrace-outstanding-note=\"true\" hidden>Keep note</aside></li><li data-id=\"b\" data-priority=\"7\">Beta</li><li data-id=\"keep\" data-priority=\"4\" data-reminder=\"2030-01-01T12:00:00Z\">Do not change</li></ul>";
@@ -127,7 +184,14 @@ internal static class FloatingMultiSelectionTests {
     [STAThread] static int Main() {
         try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            using(var api=new SelectionApi())using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){window.TestSelectionAndColors();window.TestBatchWrites(api).GetAwaiter().GetResult();}
+            using(var api=new SelectionApi())using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
+                int result=0;window.ShowInTaskbar=false;window.Opacity=0;
+                window.Shown+=async delegate {
+                    try{window.TestSelectionAndColors();window.TestBranchMenu(api);await window.TestBatchWrites(api);}
+                    catch(Exception error){Console.Error.WriteLine(error);result=1;}finally{window.Close();}
+                };
+                Application.Run(window);if(result!=0)return result;
+            }
             return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

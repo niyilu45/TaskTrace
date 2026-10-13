@@ -82,6 +82,35 @@ internal sealed partial class FloatingWindow {
         var node=tasks.SelectedNode;
         return node!=null&&(node.Tag is long||node.Tag is OutstandingLeaf)?new List<TreeNode>{node}:new List<TreeNode>();
     }
+    bool CanSetSelectedBranchesExpanded() {
+        return !busy && !closing && !singleLine.Checked &&
+            SelectedActionNodes().Any(node=>node.Tag is long && node.Nodes.Count>0);
+    }
+    void SetSelectedBranchesExpanded(bool expanded) {
+        if(!CanSetSelectedBranchesExpanded())return;
+        // Snapshot before collapsing: descendants can leave the visible selection.
+        // Only traverse the filtered tree, never the unfiltered task cache.
+        var branches=SelectedActionNodes().Where(node=>node.Tag is long)
+            .SelectMany(node=>new[]{node}.Concat(SimpleTaskNodes(node.Nodes))).Distinct().ToList();
+        bool wasRendering=rendering;rendering=true;tasks.BeginUpdate();
+        try {
+            foreach(var node in branches) {
+                long id=(long)node.Tag;
+                if(expanded) {
+                    simpleCollapsedDuringRead.Remove(id);
+                    if(search.Text.Trim().Length==0)collapsedTasks.Remove(id);
+                    if(node.Nodes.Count>0)node.Expand();
+                } else if(node.Nodes.Count>0) {
+                    simpleCollapsedDuringRead.Add(id);
+                    if(search.Text.Trim().Length==0)collapsedTasks.Add(id);
+                    node.Collapse(true);
+                }
+            }
+            if(search.Text.Trim().Length==0)SaveTreePreferences();
+        } finally {tasks.EndUpdate();rendering=wasRendering;}
+        taskSurface.Rebuild(true);UpdateSimpleActionState();
+    }
+
     sealed class BatchEditResult {
         public int Saved,Unchanged;
         public readonly List<string> Failures=new List<string>();
