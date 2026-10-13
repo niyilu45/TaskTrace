@@ -148,33 +148,93 @@ internal sealed partial class FloatingWindow {
         }
     }
     sealed class ProgressHistoryRow {public string Date,Html,Text;public int ImageCount;}
-    async Task ShowProgressHistory(long taskId,string taskTitle,List<Dictionary<string,object>> history,Form owner,bool verify=false) {
-        var rows=DailyHistory(history).GroupBy(note=>DayOf(note)).OrderByDescending(group=>group.Key).Select(group=>{
+    List<ProgressHistoryRow> ProgressHistoryRows(long taskId,List<Dictionary<string,object>> history) {
+        return DailyHistory(history).GroupBy(note=>DayOf(note)).OrderByDescending(group=>group.Key).Select(group=>{
             var ordered=group.OrderBy(note=>Convert.ToInt64(note["id"])).ToList();
-            string own=String.Join("",ordered.Select(note=>ProgressBody((string)note["comment"],taskId)));
-            var references=ordered.SelectMany(note=>SplitProgressReferences((string)note["comment"],taskId).References).GroupBy(item=>item.Id).Select(items=>items.First()).ToList();
-            string referenceHtml=String.Join("",references.Select(item=>item.Html));string displayHtml=own+referenceHtml;
             bool hasTeamAuthors=ordered.Any(note=>ReadFloatingTeamMarker((string)note["comment"])!=null);
-            string text=String.Join("\r\n\r\n",ordered.Select(note=>{
-                string value=Plain(ProgressBody((string)note["comment"],taskId));var marker=ReadFloatingTeamMarker((string)note["comment"]);
-                return hasTeamAuthors && marker!=null && !String.IsNullOrWhiteSpace(marker.author)?marker.author+"："+(String.IsNullOrWhiteSpace(value)?"（仅包含图片或引用）":value):value;
-            }).Where(value=>!String.IsNullOrWhiteSpace(value)));int imageCount=Regex.Matches(displayHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
-            if(imageCount>0)text+=(text.Length==0?"":"\r\n")+"（含 "+imageCount+" 张图片）";
-            if(references.Count>0)text+=(text.Length==0?"":"\r\n\r\n")+"引用历史进展：\r\n"+String.Join("\r\n",references.Select(item=>item.Date+"："+Plain(item.Html).Replace("\r\n"," ").Replace("\n"," ")));
-            return new ProgressHistoryRow{Date=group.Key,Html=displayHtml,Text=group.Key+"："+(String.IsNullOrWhiteSpace(text)?"（仅包含无法直接显示的内容）":text),ImageCount=imageCount};
+            var html=new StringBuilder();var summaries=new List<string>();
+            foreach(var note in ordered) {
+                string saved=(string)note["comment"],body=ProgressBody(saved,taskId);
+                var marker=ReadFloatingTeamMarker(saved);string author=hasTeamAuthors && marker!=null?marker.author:"";
+                html.Append("<div>");
+                if(!String.IsNullOrWhiteSpace(author))html.Append("<p><strong>").Append(WebUtility.HtmlEncode(author)).Append("：</strong></p>");
+                // Keep each author's text, inline pictures and references together in saved order.
+                html.Append(body).Append(SerializeProgressReferences(SplitProgressReferences(saved,taskId).References)).Append("</div>");
+                string text=Plain(body);
+                if(!String.IsNullOrWhiteSpace(author))text=author+"："+(String.IsNullOrWhiteSpace(text)?"（仅包含图片或引用）":text);
+                if(!String.IsNullOrWhiteSpace(text))summaries.Add(text);
+            }
+            var references=ordered.SelectMany(note=>SplitProgressReferences((string)note["comment"],taskId).References).GroupBy(item=>item.Id).Select(items=>items.First()).ToList();
+            if(references.Count>0)summaries.Add("引用历史进展：\r\n"+String.Join("\r\n",references.Select(item=>item.Date+"："+Plain(item.Html).Replace("\r\n"," ").Replace("\n"," "))));
+            var images=new List<GalleryImage>();CollectImages(images,html.ToString(),"");
+            return new ProgressHistoryRow{Date=group.Key,Html=html.ToString(),Text=group.Key+"："+(summaries.Count==0?"（仅包含图片或引用）":String.Join("\r\n\r\n",summaries)),ImageCount=images.Count};
         }).ToList();
+    }
+    static DataGridView ProgressHistoryTable(List<ProgressHistoryRow> rows) {
+        var table=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=true,AutoGenerateColumns=false,RowHeadersVisible=false,ReadOnly=true,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=false,AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCellsExceptHeaders,AccessibleName="所有历史进展"};
+        table.DefaultCellStyle.WrapMode=DataGridViewTriState.True;
+        table.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="日期：进展",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true});
+        table.Columns.Add(new DataGridViewLinkColumn{HeaderText="图片",Width=110,ReadOnly=true,LinkBehavior=LinkBehavior.AlwaysUnderline,LinkColor=Color.FromArgb(0,76,170),ActiveLinkColor=Color.FromArgb(0,76,170),VisitedLinkColor=Color.FromArgb(0,76,170),TrackVisitedState=false});
+        table.Columns.Add(new DataGridViewButtonColumn{HeaderText="详情",Width=100,ReadOnly=true,FlatStyle=FlatStyle.Standard});
+        // Keep blue links legible when the row is selected.
+        table.DefaultCellStyle.SelectionBackColor=Color.FromArgb(225,237,252);table.DefaultCellStyle.SelectionForeColor=Color.Black;
+        foreach(var item in rows){int index=table.Rows.Add(item.Text,item.ImageCount>0?"含 "+item.ImageCount+" 张图片":"","完整信息");table.Rows[index].Tag=item;table.Rows[index].MinimumHeight=42;}
+        return table;
+    }
+    async Task<string> ProgressHistoryDocument(string html,Func<string,Task<byte[]>> download) {
+        // Allow only passive formatting. Images are fetched through the authenticated local API.
+        string safe=TaskDescriptionEditorHtml(html??"");var output=new StringBuilder();int cursor=0;
+        var downloaded=new Dictionary<string,string>();
+        foreach(Match token in ProgressTags.Matches(safe)) {
+            output.Append(safe.Substring(cursor,token.Index-cursor));cursor=token.Index+token.Length;
+            var tag=Regex.Match(token.Value,@"^<\s*(/?)\s*([a-z0-9]+)\b",RegexOptions.IgnoreCase);if(!tag.Success)continue;
+            bool closing=tag.Groups[1].Value=="/";string name=tag.Groups[2].Value.ToLowerInvariant();
+            if(name=="img" && !closing) {
+                var images=new List<GalleryImage>();CollectImages(images,token.Value,"");
+                if(images.Count==0){output.Append("<span>（图片地址无法识别）</span>");continue;}
+                var image=images[0];string source;
+                if(!downloaded.TryGetValue(image.Source,out source)) {
+                    try{source="data:image/png;base64,"+Convert.ToBase64String(image.Bytes??await download(image.Source));}
+                    catch{source="";}
+                    downloaded[image.Source]=source;
+                }
+                output.Append(source==""?"<span>（图片加载失败，请关闭后重试）</span>":"<img src=\""+source+"\" alt=\"进展图片\">");continue;
+            }
+            if(!Regex.IsMatch(name,@"^(?:p|div|span|br|strong|b|em|i|u|s|strike|ul|ol|li|blockquote|pre|code|table|thead|tbody|tfoot|tr|th|td|h[1-6]|hr|sub|sup)$"))continue;
+            output.Append(closing?"</"+name+">":"<"+name+">");
+        }
+        output.Append(safe.Substring(cursor));
+        return "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{margin:0;background:#fff;color:#17212d;font:15px/1.6 'Microsoft YaHei UI','Segoe UI',sans-serif}body{padding:16px;overflow-wrap:break-word;word-wrap:break-word}p{margin:.5em 0}img{max-width:100%;height:auto;vertical-align:middle}blockquote{margin:12px 0;padding:8px 12px;background:#f1f5fa}pre{white-space:pre-wrap}table{max-width:100%;border-collapse:collapse}td,th{border:1px solid #cbd3dc;padding:6px}</style></head><body>"+output+"</body></html>";
+    }
+    async Task ShowProgressHistoryDetails(ProgressHistoryRow item,string taskTitle,Form owner) {
+        using(var dialog=DpiDialog(new Form{Text="完整信息 · "+item.Date+" · "+taskTitle,Size=new Size(760,640),MinimumSize=new Size(440,330),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true})) {
+            var heading=new Label{Text=item.Date+" · 正在读取完整进展…",Dock=DockStyle.Top,Height=48,Padding=new Padding(14,10,14,0),AccessibleName="完整进展日期"};
+            var browser=new WebBrowser{Dock=DockStyle.Fill,AllowWebBrowserDrop=false,IsWebBrowserContextMenuEnabled=false,ScriptErrorsSuppressed=true,AccessibleName="进展完整图文内容"};
+            browser.Navigating+=delegate(object sender,WebBrowserNavigatingEventArgs e){if(e.Url.AbsoluteUri!="about:blank")e.Cancel=true;};
+            dialog.Controls.Add(browser);dialog.Controls.Add(heading);
+            dialog.Shown+=async delegate {
+                try{string document=await ProgressHistoryDocument(item.Html,DownloadImage);if(dialog.IsDisposed)return;browser.DocumentText=document;heading.Text=item.Date+" · 完整信息";}
+                catch(Exception error){if(!dialog.IsDisposed)heading.Text="完整信息读取失败："+error.Message;}
+            };
+            await ShowEditorWindowAsync(dialog,owner);
+        }
+    }
+    Task ShowProgressHistory(long taskId,string taskTitle,List<Dictionary<string,object>> history,Form owner,bool verify=false) {
+        var rows=ProgressHistoryRows(taskId,history);
         using(var dialog=DpiDialog(new Form{Text="所有进展 · "+taskTitle,Size=new Size(760,540),MinimumSize=new Size(480,330),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=2};layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-            layout.Controls.Add(new Label{Text=rows.Count==0?"暂无每日进展。":"全部每日进展 · 日期越新越靠前",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="历史进展说明"},0,0);
-            var table=new DataGridView{Dock=DockStyle.Fill,AllowUserToAddRows=false,AllowUserToDeleteRows=false,AllowUserToResizeRows=true,AutoGenerateColumns=false,RowHeadersVisible=false,ReadOnly=true,SelectionMode=DataGridViewSelectionMode.FullRowSelect,MultiSelect=false,AutoSizeRowsMode=DataGridViewAutoSizeRowsMode.AllCellsExceptHeaders,AccessibleName="所有历史进展"};
-            table.DefaultCellStyle.WrapMode=DataGridViewTriState.True;table.Columns.Add(new DataGridViewTextBoxColumn{HeaderText="日期：进展",AutoSizeMode=DataGridViewAutoSizeColumnMode.Fill,ReadOnly=true});table.Columns.Add(new DataGridViewButtonColumn{HeaderText="图片",Width=110,ReadOnly=true,FlatStyle=FlatStyle.Standard});
-            foreach(var item in rows){int index=table.Rows.Add(item.Text,item.ImageCount>0?"查看图片（"+item.ImageCount+"）":"无图片");table.Rows[index].Tag=item;table.Rows[index].MinimumHeight=42;}
-            table.CellContentClick+=async delegate(object sender,DataGridViewCellEventArgs e){if(e.RowIndex<0 || e.ColumnIndex!=1)return;var item=table.Rows[e.RowIndex].Tag as ProgressHistoryRow;if(item!=null && item.ImageCount>0)await ShowImageGallery(taskId,item.Html,dialog,"每日进展 · "+item.Date);};
+            var heading=new Label{Text=rows.Count==0?"暂无每日进展。":"全部每日进展 · 日期越新越靠前",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="历史进展说明"};layout.Controls.Add(heading,0,0);
+            var table=ProgressHistoryTable(rows);
+            table.CellContentClick+=async delegate(object sender,DataGridViewCellEventArgs e){
+                if(e.RowIndex<0 || e.ColumnIndex<1)return;var item=table.Rows[e.RowIndex].Tag as ProgressHistoryRow;if(item==null)return;
+                try{if(e.ColumnIndex==2)await ShowProgressHistoryDetails(item,taskTitle,dialog);else if(item.ImageCount>0)await ShowImageGallery(taskId,item.Html,dialog,"每日进展 · "+item.Date);}
+                catch(Exception error){if(!dialog.IsDisposed)heading.Text="进展查看失败："+error.Message;}
+            };
             layout.Controls.Add(table,0,1);dialog.Controls.Add(layout);
             if(verify)dialog.Shown+=delegate{if(rows.Count<3 || !rows.SequenceEqual(rows.OrderByDescending(item=>item.Date)) || table.Rows.Count!=rows.Count || !Convert.ToString(table.Rows[0].Cells[0].Value).StartsWith(rows[0].Date+"："))throw new Exception("All-progress history is missing, unordered, or not formatted as date: progress");using(var bitmap=new Bitmap(dialog.Width,dialog.Height)){dialog.DrawToBitmap(bitmap,new Rectangle(Point.Empty,dialog.Size));bitmap.Save(Path.Combine(data,"floating-progress-history-test.png"));}dialog.Close();};
             dialog.ShowDialog(owner);
         }
-        await Task.FromResult(0);
+        return Task.FromResult(0);
     }
     async Task ShowReferenceSnapshot(ProgressReference reference,Form owner,bool verify=false) {
         using(var dialog=DpiDialog(new Form {Text="引用快照 · "+reference.Date,Size=new Size(520,410),MinimumSize=new Size(390,280),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
