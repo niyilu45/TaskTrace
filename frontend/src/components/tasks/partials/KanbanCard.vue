@@ -76,9 +76,9 @@
 			</span>
 
 			<ProgressBar
-				v-if="task.percentDone > 0"
+				v-if="task.done || task.percentDone > 0"
 				class="task-progress"
-				:value="task.percentDone * 100"
+				:value="task.done ? 100 : Math.round(task.percentDone * 100)"
 			/>
 			<div class="footer">
 				<Labels :labels="task.labels" />

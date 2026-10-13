@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -160,8 +160,7 @@ internal sealed partial class FloatingWindow {
             await ShowPriority();
         };
         tasks.SetSimpleImageLinks(true);
-        try { var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));prioritySort.Checked=Convert.ToBoolean(prefs["priority"]); } catch { }
-        prioritySort.CheckedChanged += async delegate {SaveSortPreference();if(!rendering) await Reload();};
+        InitializeCompletion();
         InitializePriorityFilter();
         var menu=new ContextMenuStrip();
         var selectionSummary=menu.Items.Add("已选中 1 项");selectionSummary.Enabled=false;
@@ -170,6 +169,7 @@ internal sealed partial class FloatingWindow {
         var batchPriority=CreateBatchPriorityMenu();menu.Items.Add(batchPriority);
         var setAppearance=CreateAppearanceMenuItem();menu.Items.Add(setAppearance);
         var completion=CreateCompletionMenu();menu.Items.Add(completion);
+        var progressMenu=CreateProgressMenu();menu.Items.Add(progressMenu);
         var setStatus=menu.Items.Add("设置任务状态…",null,async delegate{await ShowTaskStatus();});
         var setReminder=menu.Items.Add("设置提醒…",null,delegate{ShowReminderForSelected();});
         var images=menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
@@ -179,7 +179,7 @@ internal sealed partial class FloatingWindow {
             e.Cancel=busy;var selection=SelectedActionNodes();int count=selection.Count;bool single=count==1;var node=single?selection[0]:null;
             selectionSummary.Visible=count>1;selectionSummary.Text="已选中 "+count+" 项";
             setPriority.Visible=count<=1;setPriority.Enabled=single;batchPriority.Visible=count>1;
-            RefreshAppearanceMenu(setAppearance);completion.Enabled=count>0;completion.Text=count>1?"批量设置完成状态":"设置完成状态";
+            RefreshAppearanceMenu(setAppearance);progressMenu.Enabled=count>0;completion.Enabled=count>0;completion.Text=count>1?"批量设置完成状态":"设置完成状态";
             setStatus.Visible=setReminder.Visible=images.Visible=outstanding.Visible=toRoot.Visible=count<=1;
             setStatus.Enabled=single&&node.Tag is long;setReminder.Enabled=images.Enabled=outstanding.Enabled=single;
             toRoot.Enabled=single&&node.Tag is long&&taskParents.ContainsKey((long)node.Tag);
@@ -214,7 +214,7 @@ internal sealed partial class FloatingWindow {
             int zone;var plan=ResolveDropPlan(source,target,point.Y,out zone);ClearDropMark();if(plan!=null)await ExecuteDrop(plan);
         };
     }
-    void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked}));}catch{}}
+    void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked,sort=completionSort.ToArray(),showCompletion=showCompletion.Checked}));}catch{}}
     void ClearDropMark(){bool hadMark=tasks.Dropping || tasks.DropNode!=null;tasks.Dropping=false;tasks.DropNode=null;dropHover=null;if(hadMark)tasks.Invalidate();taskSurface.ClearDropMark();progressTip.Hide(tasks);progressTip.Hide(taskSurface);}
     long SelectedTaskId(){var node=tasks.SelectedNode;if(node==null)return 0;if(node.Tag is long)return (long)node.Tag;var leaf=node.Tag as OutstandingLeaf;return leaf==null?0:leaf.TaskId;}
     static int DropZone(TreeNode source,TreeNode target,int y){
@@ -292,7 +292,7 @@ internal sealed partial class FloatingWindow {
     void NumberTasks(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all){for(int index=0;index<roots.Count;index++)NumberTask(roots[index],(index+1).ToString(),all,new List<string>());}
     void NumberTask(TreeNode node,string number,Dictionary<long,Dictionary<string,object>> all,List<string> ancestors){
         long id=(long)node.Tag;int priority=PriorityNumber(all[id]);string title=(string)all[id]["title"];
-        string current=number+". "+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+title;
+        string current=number+". "+CompletionPrefix(TaskManualCompletion(all[id]),node.Checked)+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+title;
         var taskNode=node as TaskNode;if(taskNode!=null)taskNode.CurrentTextLength=current.Length;
         node.Text=current+(singleLine.Checked && ancestors.Count>0?TaskTreeView.SingleLineSeparator+String.Join(TaskTreeView.SingleLineSeparator,ancestors):"");
         var nextAncestors=new List<string>{title};nextAncestors.AddRange(ancestors);

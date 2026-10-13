@@ -114,6 +114,8 @@ func taskTraceRecordOutstandingActivity(s *xorm.Session, actor *user.User, taskI
 			}
 		case taskTraceTeamCanonicalHTML(old.content, nil) != taskTraceTeamCanonicalHTML(item.content, nil):
 			action = "修改"
+		case taskTraceOutstandingCompletionValue(taskTraceOutstandingItemAttribute(old, "data-progress")) != taskTraceOutstandingCompletionValue(taskTraceOutstandingItemAttribute(item, "data-progress")):
+			action = "修改完成度"
 		case taskTraceOutstandingItemAttribute(old, "data-priority") != taskTraceOutstandingItemAttribute(item, "data-priority"):
 			action, local = "修改优先级 · ", true
 		}

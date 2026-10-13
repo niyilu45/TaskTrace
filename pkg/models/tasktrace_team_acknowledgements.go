@@ -40,7 +40,7 @@ func taskTraceTeamAcknowledgeSnapshots(snapshots []TaskTraceTeamSnapshot, manife
 		snapshot := original
 		snapshot.Base = taskTraceTeamCopyBase(original.Base)
 		for _, task := range original.Tasks {
-			fields := []string{"title", "description", "status"}
+			fields := []string{"title", "description", "status", "percent_done"}
 			ids := map[string]bool{}
 			for _, body := range []string{task.Outstanding, original.Base[task.NodeID].Outstanding, manifest.Base[task.NodeID].Outstanding} {
 				items, _ := taskTraceTeamOutstandingItems(body)

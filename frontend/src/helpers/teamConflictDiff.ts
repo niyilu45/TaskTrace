@@ -1,10 +1,11 @@
 import type {TaskTraceTeamConflict} from '@/client/generated'
+import {manualCompletion} from './tasktraceCompletion'
 import {attachmentImageKey} from './tasktraceImages'
 
 export type ConflictDetail = {key: string, label: string, text: string, images?: string, comparison: string}
 export function conflictFieldLabel(field = '') {
 	if (field.startsWith('outstanding:')) return '遗留事项'
-	return ({title: '任务名', description: '任务描述', done: '完成状态', status: '任务状态', outstanding: '遗留事项清单'} as Record<string, string>)[field] || '内容'
+	return ({percent_done: '填写完成度', title: '任务名', description: '任务描述', done: '完成状态', status: '任务状态', outstanding: '遗留事项清单'} as Record<string, string>)[field] || '内容'
 }
 const statusLabels: Record<string, string> = {todo: '待办', 'to-do': '待办', doing: '进行中', done: '已完成', hold: '暂停'}
 
@@ -26,6 +27,7 @@ function richDetail(key: string, label: string, html: string): ConflictDetail {
 function plain(key: string, label: string, text: string): ConflictDetail { return {key, label, text, comparison: text} }
 
 export function conflictDetails(field = '', value = ''): ConflictDetail[] {
+	if (field === 'percent_done') return [plain('completion', '填写完成度', `${manualCompletion(Number(value) * 100)}%`)]
 	if (field === 'done') return [plain('done', '完成状态', value === 'true' ? '已完成' : '未完成')]
 	if (field === 'status') return [plain('status', '任务状态', statusLabels[value] || value || '未设置')]
 	if (field === 'description') return [richDetail('content', '描述', value)]
@@ -40,6 +42,7 @@ export function conflictDetails(field = '', value = ''): ConflictDetail[] {
 		note?.remove()
 		doc.querySelectorAll('[data-tasktrace-outstanding-state]').forEach(node => node.remove())
 		const details = [plain('presence', '条目', '保留遗留事项'), richDetail('content', '内容', doc.body.innerHTML), plain('done', '完成状态', done ? '已完成' : '未完成'), richDetail('note', '备注', noteHtml)]
+		details.push(plain('completion', '填写完成度', `${manualCompletion(state?.getAttribute('data-progress'))}%`))
 		details.push(plain('reminder', '提醒时间', reminder ? (Number.isNaN(Date.parse(reminder)) ? reminder : new Date(reminder).toLocaleString()) : '未设置'))
 		return details
 	}

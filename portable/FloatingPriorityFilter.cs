@@ -67,13 +67,8 @@ internal sealed partial class FloatingWindow {
             menu.Items.Add(choice);
         }
         menu.Items.Add(new ToolStripSeparator());
-        var sort=new ToolStripMenuItem("按优先级排序") {Name="priority-filter-sort",CheckOnClick=true,Checked=prioritySort.Checked};
-        sort.Click+=delegate {
-            bool previousRendering=rendering;rendering=true;
-            try {prioritySort.Checked=sort.Checked;SaveSortPreference();}
-            finally {rendering=previousRendering;}
-            UpdatePriorityFilterControls();QueuePriorityFilterReload();
-        };
+        var sort=new ToolStripMenuItem("排序方式…") {Name="priority-filter-sort"};
+        sort.Click+=delegate {menu.Close(ToolStripDropDownCloseReason.CloseCalled);ShowCompletionSort();};
         menu.Items.Add(sort);
         // Keep mouse and keyboard multi-selection in one menu interaction.
         menu.Closing+=delegate(object sender,ToolStripDropDownClosingEventArgs e) {if(e.CloseReason==ToolStripDropDownCloseReason.ItemClicked)e.Cancel=true;};
@@ -93,7 +88,7 @@ internal sealed partial class FloatingWindow {
             foreach(ToolStripItem item in menu.Items) {
                 var choice=item as ToolStripMenuItem;if(choice==null)continue;
                 if(choice.Tag is int)choice.Checked=visiblePriorities.Contains((int)choice.Tag);
-                else if(choice.Name=="priority-filter-sort")choice.Checked=prioritySort.Checked;
+                else if(choice.Name=="priority-filter-sort")choice.Checked=false;
                 else if(choice.Name=="priority-filter-all")choice.Enabled=visiblePriorities.Count!=10;
                 else if(choice.Name=="priority-filter-none")choice.Enabled=visiblePriorities.Count!=0;
             }

@@ -1,3 +1,4 @@
+import {manualCompletion, effectiveCompletion} from './tasktraceCompletion'
 import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {taskCommentsList, taskCommentsCreate, taskCommentsUpdate, taskCommentsDelete, type TaskComment} from '@/client/generated'
 import {sortProgressNotes} from './progressNotes'
@@ -12,6 +13,7 @@ export type OutstandingItem = {
 	note?: string
 	done?: boolean
 	priority?: number
+	completion?: number
 	completedAt?: string
 	reminderAt?: string
 }
@@ -50,7 +52,7 @@ function attribute(value: string) {
 	return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-export function sharedOutstanding(history: TaskComment[]) {
+export function sharedOutstanding(history: TaskComment[]): {id: number | undefined, items: OutstandingItem[]} {
 	const record = [...history].sort((a, b) => (b.id || 0) - (a.id || 0)).find(note => isOutstandingComment(note.comment || ''))
 	if (record) {
 		const doc = new DOMParser().parseFromString(record.comment || '', 'text/html')
@@ -65,6 +67,7 @@ export function sharedOutstanding(history: TaskComment[]) {
 					...content,
 					done: li.getAttribute('data-done') === 'true',
 					priority: priority(li.getAttribute('data-priority')),
+					completion: manualCompletion(li.getAttribute('data-progress')),
 					completedAt: li.getAttribute('data-completed-at') || undefined,
 					reminderAt: li.getAttribute('data-reminder') || undefined,
 				}
@@ -83,7 +86,7 @@ export function sharedOutstanding(history: TaskComment[]) {
 
 export function outstandingHtml(history: TaskComment[]) {
 	const items = sharedOutstanding(history).items.filter(item => !item.done)
-	return items.length ? `<ol>${items.map(item => `<li><span>[P${item.priority ?? TASKTRACE_DEFAULT_PRIORITY}]</span> ${item.html}</li>`).join('')}</ol>` : ''
+	return items.length ? `<ol>${items.map(item => `<li><span>[P${item.priority ?? TASKTRACE_DEFAULT_PRIORITY}] · ${effectiveCompletion(item.completion, item.done)}%</span> ${item.html}</li>`).join('')}</ol>` : ''
 }
 
 export async function readTaskHistory(taskId: number) {
@@ -107,7 +110,7 @@ export async function changeOutstanding(taskId: number, change: (items: Outstand
 	const comment = `<h3 ${outstandingTypeAttribute}="${outstandingType}">${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
 		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
-		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY))}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
+		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY))}" data-progress="${manualCompletion(item.completion)}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
 	}).join('')}</ul>`
 	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}, headers})
 	else await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers})

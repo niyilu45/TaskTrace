@@ -101,6 +101,7 @@ type TaskTraceTeamTask struct {
 	Assignees   []string                  `json:"assignees,omitempty"`
 	Done        bool                      `json:"done"`
 	Status      TaskStatus                `json:"status"`
+	PercentDone *float64                  `json:"percent_done,omitempty"`
 	Outstanding string                    `json:"outstanding,omitempty"`
 	Comments    []TaskTraceTeamComment    `json:"comments"`
 	Attachments []TaskTraceTeamAttachment `json:"attachments,omitempty"`
@@ -120,11 +121,13 @@ type TaskTraceTeamSnapshot struct {
 }
 
 type TaskTraceTeamBase struct {
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Done        bool       `json:"done"`
-	Status      TaskStatus `json:"status"`
-	Outstanding string     `json:"outstanding"`
+	Title           string     `json:"title"`
+	Description     string     `json:"description"`
+	Done            bool       `json:"done"`
+	Status          TaskStatus `json:"status"`
+	PercentDone     float64    `json:"percent_done,omitempty"`
+	CompletionKnown bool       `json:"completion_known,omitempty"`
+	Outstanding     string     `json:"outstanding"`
 }
 
 type TaskTraceTeamConflictOption struct {
@@ -559,7 +562,7 @@ func taskTraceTeamReadLinkedManifest(link taskTraceTeamLink, override string) (s
 	var lastErr error
 	for _, repository := range candidates {
 		manifest = TaskTraceTeamManifest{}
-		err := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(repository, link.ShareID), "manifest.json"), &manifest)
+		err := taskTraceTeamReadManifest(filepath.Join(taskTraceTeamShareDir(repository, link.ShareID), "manifest.json"), &manifest)
 		if err == nil {
 			return repository, manifest, nil
 		}
@@ -737,7 +740,7 @@ func taskTraceTeamOutstandingItems(body string) (map[string]string, []string) {
 // peers that copied only inner HTML; the normal list always uses LI attributes.
 func taskTraceTeamOutstandingStateAttributes(node *html.Node) string {
 	var state strings.Builder
-	for _, key := range []string{"data-done", "data-completed-at", "data-reminder"} {
+	for _, key := range []string{"data-done", "data-completed-at", "data-reminder", "data-progress"} {
 		value := taskTraceAttribute(node, key)
 		if value == "" || (key == "data-done" && value != "true") {
 			continue
@@ -997,7 +1000,7 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		}
 	}
 	var manifest TaskTraceTeamManifest
-	manifestAvailable := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest) == nil
+	manifestAvailable := taskTraceTeamReadManifest(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest) == nil
 	acks := map[string]string{}
 	for key, value := range binding.ResolutionAcks {
 		acks[key] = value
@@ -1047,7 +1050,7 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 				assignees = taskTraceTeamPermissionAssignees(permissions)
 			}
 		}
-		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Owner: owner, Assignees: assignees, Done: task.Done, Status: task.Status, Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
+		shared := TaskTraceTeamTask{NodeID: node, ParentNode: parentNode, Title: task.Title, Description: task.Description, Owner: owner, Assignees: assignees, Done: task.Done, Status: task.Status, PercentDone: taskTraceCompletionPointer(task.PercentDone), Updated: task.Updated, Comments: []TaskTraceTeamComment{}, Attachments: attachments}
 		var outstandingID int64
 		for _, comment := range comments {
 			// Personal priority changes are local history, never team content.
@@ -1179,11 +1182,13 @@ func taskTraceTeamBaseFromSnapshot(snapshot TaskTraceTeamSnapshot) map[string]Ta
 	base := map[string]TaskTraceTeamBase{}
 	for _, task := range snapshot.Tasks {
 		base[task.NodeID] = TaskTraceTeamBase{
-			Title:       task.Title,
-			Description: taskTraceTeamCanonicalHTML(task.Description, task.Attachments),
-			Done:        task.Done,
-			Status:      task.Status,
-			Outstanding: taskTraceTeamCanonicalHTML(taskTraceTeamStripOutstandingPriorities(task.Outstanding), task.Attachments),
+			Title:           task.Title,
+			Description:     taskTraceTeamCanonicalHTML(task.Description, task.Attachments),
+			Done:            task.Done,
+			Status:          task.Status,
+			PercentDone:     taskTraceCompletionValue(task.PercentDone),
+			CompletionKnown: task.PercentDone != nil,
+			Outstanding:     taskTraceTeamCanonicalHTML(taskTraceTeamStripOutstandingPriorities(task.Outstanding), task.Attachments),
 		}
 	}
 	return base
@@ -1442,6 +1447,11 @@ func taskTraceTeamFieldValue(task TaskTraceTeamTask, field string) string {
 		return items[strings.TrimPrefix(field, "outstanding:")]
 	}
 	switch field {
+	case "percent_done":
+		if task.PercentDone == nil {
+			return ""
+		}
+		return taskTraceCompletionString(*task.PercentDone)
 	case "title":
 		return task.Title
 	case "description":
@@ -1466,6 +1476,8 @@ func taskTraceTeamBaseValue(base TaskTraceTeamBase, field string) string {
 		return items[strings.TrimPrefix(field, "outstanding:")]
 	}
 	switch field {
+	case "percent_done":
+		return taskTraceCompletionString(base.PercentDone)
 	case "title":
 		return base.Title
 	case "description":
@@ -1497,6 +1509,9 @@ func taskTraceTeamSetBaseValue(base *TaskTraceTeamBase, field, value string) {
 		return
 	}
 	switch field {
+	case "percent_done":
+		base.PercentDone, _ = strconv.ParseFloat(value, 64)
+		base.CompletionKnown = true
 	case "title":
 		base.Title = value
 	case "description":
@@ -1591,6 +1606,11 @@ func taskTraceTeamCanonicalHTML(value string, attachments []TaskTraceTeamAttachm
 }
 
 func taskTraceTeamCanonicalFieldValue(task TaskTraceTeamTask, field, value string) string {
+	if strings.HasPrefix(field, "outstanding:") {
+		// Absent metadata in old clients is equivalent to the default zero. Keep
+		// explicit zero in canonical values so resetting a nonzero value survives.
+		value = taskTraceRetainOutstandingCompletion(value, `<span data-tasktrace-outstanding-state="true" hidden data-progress="0"></span>`)
+	}
 	if field == "description" || strings.HasPrefix(field, "outstanding:") {
 		return taskTraceTeamCanonicalHTML(value, task.Attachments)
 	}
@@ -1635,7 +1655,13 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 		if !ok {
 			continue
 		}
+		if field == "percent_done" && task.PercentDone == nil {
+			continue
+		} // Legacy peers cannot clear manual completion.
 		value := taskTraceTeamFieldValue(task, field)
+		if strings.HasPrefix(field, "outstanding:") {
+			value = taskTraceRetainOutstandingCompletion(value, base)
+		}
 		canonical := taskTraceTeamCanonicalFieldValue(task, field, value)
 		// An edit already equal to the shared value is not a competing change.
 		if canonical == baseValue {
@@ -1644,6 +1670,9 @@ func taskTraceTeamFindField(snapshots []TaskTraceTeamSnapshot, node, field strin
 		snapshotBaseCanonical := baseValue
 		if snapshotBase, exists := snapshot.Base[node]; exists {
 			snapshotBaseValue := taskTraceTeamBaseValue(snapshotBase, field)
+			if strings.HasPrefix(field, "outstanding:") {
+				snapshotBaseValue = taskTraceRetainOutstandingCompletion(snapshotBaseValue, base)
+			}
 			snapshotBaseCanonical = taskTraceTeamCanonicalFieldValue(task, field, snapshotBaseValue)
 		}
 		if canonical != snapshotBaseCanonical {
@@ -1730,6 +1759,9 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 		}
 	}
 	switch record.Field {
+	case "percent_done":
+		base.PercentDone, _ = strconv.ParseFloat(value, 64)
+		base.CompletionKnown = true
 	case "title":
 		base.Title = value
 	case "description":
@@ -1803,6 +1835,8 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 	}
 	binding.Base[record.NodeID] = base
 	switch record.Field {
+	case "percent_done":
+		stored.PercentDone = base.PercentDone
 	case "title":
 		stored.Title = base.Title
 	case "description":
@@ -1810,7 +1844,7 @@ func taskTraceTeamApplyResolution(s *xorm.Session, a web.Auth, binding *TaskTrac
 	case "done", "status":
 		stored.Done, stored.Status = base.Done, base.Status
 	}
-	return taskTraceTeamApplyTaskFields(s, a, taskID, stored.Title, stored.Description, stored.Done, stored.Status)
+	return taskTraceTeamApplyTaskFields(s, a, taskID, stored.Title, stored.Description, stored.Done, stored.Status, stored.PercentDone)
 }
 
 func taskTraceTeamApplyPendingResolutions(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, records map[string]taskTraceTeamResolutionRecord) error {
@@ -1835,7 +1869,7 @@ func taskTraceTeamApplyPendingResolutions(s *xorm.Session, a web.Auth, binding *
 	return nil
 }
 
-func taskTraceTeamApplyTaskFields(s *xorm.Session, a web.Auth, taskID int64, title, description string, done bool, status TaskStatus) error {
+func taskTraceTeamApplyTaskFields(s *xorm.Session, a web.Auth, taskID int64, title, description string, done bool, status TaskStatus, percentDone ...float64) error {
 	stored, err := GetTaskByIDSimple(s, taskID)
 	if err != nil {
 		return err
@@ -1844,7 +1878,12 @@ func taskTraceTeamApplyTaskFields(s *xorm.Session, a web.Auth, taskID int64, tit
 	stored.Description = description
 	stored.Done = done
 	stored.Status = status
-	return stored.updateSingleTask(s, a, []string{"title", "description", "done", "status"})
+	fields := []string{"title", "description", "done", "status"}
+	if len(percentDone) > 0 {
+		stored.PercentDone = percentDone[0]
+		fields = append(fields, "percent_done")
+	}
+	return stored.updateSingleTask(s, a, fields)
 }
 
 func taskTraceTeamDeleteSyncedComment(s *xorm.Session, a web.Auth, comment *TaskComment) error {
@@ -2138,7 +2177,7 @@ func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskT
 		return err
 	}
 	for _, shared := range plan {
-		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, Priority: 7}
+		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, PercentDone: taskTraceCompletionValue(shared.PercentDone), Priority: 7}
 		if err := task.Create(s, a); err != nil {
 			return err
 		}
@@ -2234,7 +2273,7 @@ func taskTraceTeamAllAttachments(rows []struct {
 func taskTraceTeamValidateBinding(binding *TaskTraceTeamBinding, actor string) error {
 	var manifest TaskTraceTeamManifest
 	path := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
-	if err := taskTraceTeamReadJSON(path, &manifest); err != nil {
+	if err := taskTraceTeamReadManifest(path, &manifest); err != nil {
 		return fmt.Errorf("open team repository: %w", err)
 	}
 	if manifest.ShareID != binding.ShareID || manifest.TokenHash != taskTraceTeamTokenHash(binding.Secret) {
@@ -2297,7 +2336,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	taskTraceTeamRememberOutstandingPriorities(binding, local)
 	var manifest TaskTraceTeamManifest
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
-	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+	if err := taskTraceTeamReadManifest(manifestPath, &manifest); err != nil {
 		return err
 	}
 	manifestBaseChanged := false
@@ -2318,7 +2357,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if changed, permissionErr := taskTraceTeamReconcileManifestPermissions(s, binding, &manifest, local, actor); permissionErr != nil {
 		return permissionErr
 	} else if changed {
-		if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+		if err := taskTraceTeamWriteManifest(manifestPath, &manifest); err != nil {
 			return err
 		}
 	}
@@ -2384,8 +2423,19 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if err != nil {
 			return err
 		}
+		if !base.CompletionKnown {
+			previous := binding.Base[node]
+			if previous.CompletionKnown {
+				base.PercentDone = previous.PercentDone
+			} else {
+				base.PercentDone = stored.PercentDone
+			}
+		}
+		base.Outstanding = taskTraceRetainOutstandingListCompletion(base.Outstanding, binding.Base[node].Outstanding)
 		title, description, status := base.Title, base.Description, base.Status
-		fields := []string{"title", "description", "status"}
+		percentDone := base.PercentDone
+		completionConflict := false
+		fields := []string{"title", "description", "status", "percent_done"}
 		outstandingItems, outstandingOrder := taskTraceTeamOutstandingItems(base.Outstanding)
 		localOutstandingConflicts := map[string]string{}
 		outstandingIDs := map[string]bool{}
@@ -2407,7 +2457,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		for id := range outstandingIDs {
 			fields = append(fields, "outstanding:"+id)
 		}
-		sort.Strings(fields[3:])
+		sort.Strings(fields[4:])
 		for _, field := range fields {
 			key := node + ":" + field
 			required := ""
@@ -2416,6 +2466,14 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 			value, options, conflict := taskTraceTeamFindMergeField(snapshots, &manifest, node, field, taskTraceTeamBaseValue(base, field), required, localTask)
 			if conflict {
+				if field == "percent_done" {
+					completionConflict = true
+					percentDone = stored.PercentDone
+					if unresolvedBases[node] == nil {
+						unresolvedBases[node] = map[string]string{}
+					}
+					unresolvedBases[node][field] = taskTraceTeamBaseValue(local.Base[node], field)
+				}
 				if !strings.HasPrefix(field, "outstanding:") || taskTraceTeamCan(&manifest, node, strings.TrimPrefix(field, "outstanding:"), actor, false) {
 					conflicts = append(conflicts, TaskTraceTeamConflict{ID: taskTraceTeamConflictID(binding.ShareID, node, field, options), ShareID: binding.ShareID, NodeID: node, TaskID: taskID, TaskTitle: stored.Title, Field: field, Base: taskTraceTeamBaseValue(base, field), Options: options})
 				}
@@ -2433,6 +2491,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 				manifestBaseChanged = true
 			}
 			switch field {
+			case "percent_done":
+				percentDone, _ = strconv.ParseFloat(value, 64)
 			case "title":
 				title = value
 			case "description":
@@ -2491,8 +2551,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			}
 		}
 		done := status == TaskStatusDone
-		if stored.Title != title || stored.Description != description || stored.Done != done || stored.Status != status {
-			if err := taskTraceTeamApplyTaskFields(s, a, taskID, title, description, done, status); err != nil {
+		if stored.Title != title || stored.Description != description || stored.Done != done || stored.Status != status || stored.PercentDone != percentDone {
+			if err := taskTraceTeamApplyTaskFields(s, a, taskID, title, description, done, status, percentDone); err != nil {
 				return err
 			}
 		}
@@ -2517,7 +2577,11 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		if err := taskTraceTeamMergeComments(s, a, binding, node, actor, taskID, comments); err != nil {
 			return err
 		}
-		merged := TaskTraceTeamBase{Title: title, Description: canonicalDescription, Done: done, Status: status, Outstanding: canonicalOutstanding}
+		mergedPercentDone := percentDone
+		if completionConflict {
+			mergedPercentDone = base.PercentDone
+		}
+		merged := TaskTraceTeamBase{Title: title, Description: canonicalDescription, Done: done, Status: status, PercentDone: mergedPercentDone, CompletionKnown: true, Outstanding: canonicalOutstanding}
 		if previous, exists := manifest.Base[node]; !exists || previous != merged {
 			manifestBaseChanged = true
 		}
@@ -2536,7 +2600,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if manifestBaseChanged {
 		manifest.Base = taskTraceTeamCopyBase(mergedBase)
 		manifest.Updated = time.Now().UTC()
-		if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+		if err := taskTraceTeamWriteManifest(manifestPath, &manifest); err != nil {
 			return err
 		}
 	}
@@ -2619,7 +2683,7 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 	defer release()
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
 	var manifest TaskTraceTeamManifest
-	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+	if err := taskTraceTeamReadManifest(manifestPath, &manifest); err != nil {
 		return nil, err
 	}
 	for _, permissions := range manifest.Permissions {
@@ -2634,7 +2698,7 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 		manifest.Permissions[key] = taskTraceTeamNormalizePermissions(members, taskTraceTeamPermissionOwner(permissions, manifest.Owner), taskTraceTeamPermissionAssignees(permissions), permissions)
 	}
 	manifest.Updated = time.Now().UTC()
-	if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+	if err := taskTraceTeamWriteManifest(manifestPath, &manifest); err != nil {
 		return nil, err
 	}
 	binding.Members = members
@@ -2711,7 +2775,7 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if _, err := taskTraceTeamReconcileManifestPermissions(s, &binding, &manifest, snapshot, u.Username); err != nil {
 		return nil, err
 	}
-	if err := taskTraceTeamWriteJSON(filepath.Join(taskTraceTeamShareDir(root, shareID), "manifest.json"), &manifest); err != nil {
+	if err := taskTraceTeamWriteManifest(filepath.Join(taskTraceTeamShareDir(root, shareID), "manifest.json"), &manifest); err != nil {
 		return nil, err
 	}
 	if err := taskTraceTeamWriteSnapshot(&binding, snapshot); err != nil {
@@ -3177,7 +3241,7 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 	}
 	for _, binding := range state.Bindings {
 		manifest := TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
-		if manifestErr := taskTraceTeamReadJSON(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest); manifestErr != nil {
+		if manifestErr := taskTraceTeamReadManifest(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest); manifestErr != nil {
 			manifest = TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
 		}
 		manifest.Members = taskTraceTeamNormalizeMembers(manifest.Members, manifest.Owner)

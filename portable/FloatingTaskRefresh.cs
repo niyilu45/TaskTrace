@@ -14,7 +14,7 @@ internal sealed partial class FloatingWindow {
     string TaskViewContext() {
         var selected=projects.SelectedItem as Project;
         return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,singleLine.Checked,
-            prioritySort.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
+            prioritySort.Checked,completionSort.ToArray(),showCompletion.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
     }
     static string OutstandingCompletionKey(long taskId,string itemId) {return taskId+":"+itemId;}
     void RememberTaskCompletion(long id,bool done) {
@@ -90,7 +90,7 @@ internal sealed partial class FloatingWindow {
             var leaf=node.Tag as OutstandingLeaf;
             var task=node as TaskNode;
             return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,task==null?0:task.ReminderCount,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
-                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt};
+                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Completion,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt};
         }).ToArray();
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
@@ -103,10 +103,7 @@ internal sealed partial class FloatingWindow {
         foreach(var node in roots){var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();SortTaskHierarchy(children,all,byPriority);node.Nodes.Clear();node.Nodes.AddRange(children.ToArray());}
     }
     List<TreeNode> PrepareSingleLineNodes(List<TreeNode> nodes,Dictionary<long,Dictionary<string,object>> all) {
-        var ordered=nodes.OrderBy(node=>node.Checked).ThenBy(node=>{
-            var leaf=node.Tag as OutstandingLeaf;
-            return leaf==null?PriorityNumber(all[(long)node.Tag]):leaf.Priority;
-        }).ToList();
+        var ordered=OrderCompletionNodes(nodes,all);
         RenumberSingleLineNodes(ordered);return ordered;
     }
     List<TreeNode> FlattenTaskNodes(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all,Dictionary<long,long> parents,Dictionary<long,SharedList> sharedLists) {
@@ -188,7 +185,7 @@ internal sealed partial class FloatingWindow {
         var order=project==null?new TaskOrderState():await FetchTaskOrder(project.Id,all);
         if(!TaskLoadCurrent(version,context,background))return false;
         Func<long,double> position=delegate(long id){double value;return order.Positions.TryGetValue(id,out value)&&value>0?value:Double.MaxValue;};
-        ordered=prioritySort.Checked?ordered.OrderBy(id=>PriorityNumber(all[id])).ThenBy(position).ThenBy(id=>id).ToList():ordered.OrderBy(position).ThenBy(id=>id).ToList();
+        ordered=ordered.OrderBy(position).ThenBy(id=>id).ToList();
         var parents=new Dictionary<long,long>();
         foreach(long id in ordered) {
             object relationsValue,parentValue;
@@ -235,7 +232,7 @@ internal sealed partial class FloatingWindow {
             if(!nodes.ContainsKey(id))continue;
             if(parents.ContainsKey(id) && nodes.ContainsKey(parents[id]))nodes[parents[id]].Nodes.Add(nodes[id]);else roots.Add(nodes[id]);
         }
-        SortTaskHierarchy(roots,all,prioritySort.Checked);
+        SortCompletionHierarchy(roots,all);
         ApplyLocalAppearance(nodes,parents);
         NumberTasks(roots,all);
         int groupCount=roots.Count;

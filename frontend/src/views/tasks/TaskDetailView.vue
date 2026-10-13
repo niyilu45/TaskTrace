@@ -194,8 +194,9 @@
 								</div>
 								<PercentDoneSelect
 									:ref="e => setFieldRef('percentDone', e)"
-									v-model="task.percentDone"
-									:disabled="!canWrite"
+									:model-value="task.percentDone"
+									:disabled="!canWrite || savingCompletion"
+									:done="task.done"
 									@update:modelValue="setPercentDone"
 								/>
 							</div>
@@ -687,7 +688,7 @@
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {isProgressImageAttachment} from '@/helpers/progressEditorImages'
-import {undoAffectedTaskIds, undoBlockReason} from '@/helpers/tasktraceUndo'
+import {undoAffectedTaskIds, undoBlockReason, undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {ref, reactive, shallowReactive, computed, watch, nextTick, onMounted, useTemplateRef} from 'vue'
 import {useRouter, useRoute, type RouteLocation, onBeforeRouteLeave} from 'vue-router'
 import {useI18n} from 'vue-i18n'
@@ -752,7 +753,8 @@ import {useConfigStore} from '@/stores/config'
 import {useTitle} from '@/composables/useTitle'
 import {useTaskDetailShortcuts} from '@/composables/useTaskDetailShortcuts'
 
-import {success} from '@/message'
+import {success, error} from '@/message'
+import {patchTasksRead} from '@/client/generated'
 import type {Action as MessageAction} from '@/message'
 
 const props = defineProps<{
@@ -1061,7 +1063,7 @@ const activeFields: { [type in FieldType]: boolean } = reactive({
 	endDate: false,
 	labels: false,
 	moveProject: false,
-	percentDone: false,
+	percentDone: true,
 	priority: false,
 	relatedTasks: false,
 	reminders: false,
@@ -1082,7 +1084,7 @@ function setActiveFields() {
 	activeFields.dueDate = task.value.dueDate !== null
 	activeFields.endDate = task.value.endDate !== null
 	activeFields.labels = task.value.labels.length > 0
-	activeFields.percentDone = task.value.percentDone > 0
+	activeFields.percentDone = true
 	activeFields.priority = task.value.priority !== PRIORITIES.UNSET
 	activeFields.relatedTasks = Object.keys(task.value.relatedTasks).length > 0
 	activeFields.reminders = task.value.reminders.length > 0
@@ -1267,13 +1269,23 @@ async function setPriority(priority: Priority) {
 	return saveTask(newTask)
 }
 
+const savingCompletion = ref(false)
 async function setPercentDone(percentDone: number) {
-	const newTask: ITask = {
-		...task.value,
-		percentDone,
+	if (!canWrite.value || savingCompletion.value) return
+	const id = task.value.id
+	savingCompletion.value = true
+	try {
+		const result = await patchTasksRead({path: {task: id}, body: [{op: 'replace', path: '/percent_done', value: percentDone}], headers: undoGroupHeaders()})
+		if (task.value.id !== id) return
+		task.value.percentDone = result.data.percent_done ?? percentDone
+		taskStore.lastUpdatedTask = new TaskModel(task.value)
+		kanbanStore.ensureTaskIsInCorrectBucket(task.value)
+		success({message: t('task.detail.updateSuccess')})
+	} catch (cause) {
+		error(cause)
+	} finally {
+		savingCompletion.value = false
 	}
-
-	return saveTask(newTask)
 }
 
 async function removeRepeatAfter() {

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -62,9 +62,9 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public string LocalColorKey="",EffectiveColorKey=""; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, CurrentTextLength; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
     sealed class PendingItem {
-        public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number; public bool Done; public int Priority=7;
+        public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number, Completion; public bool Done; public int Priority=7;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -156,10 +156,10 @@ internal sealed partial class FloatingWindow : Form {
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
-        foreach(Control control in new Control[] { full, pin, settingsButton, simple }) control.Margin = new Padding(0, 0, 6, 6);
+        foreach(Control control in new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions }) control.Margin = new Padding(0, 0, 6, 6);
         newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
         newTaskButton.Click+=delegate {ShowNewTaskEditor();};
-        toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple });
+        toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions });
         tasks.ShowNodeToolTips = false;
         tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
@@ -340,7 +340,7 @@ internal sealed partial class FloatingWindow : Form {
                 var reminder=Regex.Match(attrs,"\\bdata-reminder\\s*=\\s*\"(?<value>[^\"]+)\"",RegexOptions.IgnoreCase);
                 int value=defaultPriority;if(priority.Success)Int32.TryParse(priority.Groups["value"].Value,out value);
                 string content=match.Body;var note=OutstandingNotePattern.Match(content);
-                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,ReminderAt=reminder.Success?WebUtility.HtmlDecode(reminder.Groups["value"].Value):null,Priority=Math.Max(0,Math.Min(9,value))});
+                list.Items.Add(new PendingItem {Id=WebUtility.HtmlDecode(id.Groups["value"].Value),Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",Done=done.Success && String.Equals(done.Groups["value"].Value,"true",StringComparison.OrdinalIgnoreCase),CompletedAt=completedAt.Success?WebUtility.HtmlDecode(completedAt.Groups["value"].Value):null,ReminderAt=reminder.Success?WebUtility.HtmlDecode(reminder.Groups["value"].Value):null,Completion=ManualCompletion(ReferenceAttribute("<li "+attrs+">","data-progress")),Priority=Math.Max(0,Math.Min(9,value))});
             }
         } else {
             var latest = DailyHistory(notes).FirstOrDefault();
@@ -353,7 +353,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
+        string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }

@@ -304,7 +304,7 @@
 										:date="t.endDate"
 									/>
 									<td v-if="activeColumns.percentDone">
-										{{ t.percentDone * 100 }}%
+										{{ t.done ? 100 : Math.round(t.percentDone * 100) }}%
 									</td>
 									<DateTableCell
 										v-if="activeColumns.doneAt"

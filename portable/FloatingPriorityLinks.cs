@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -12,7 +12,7 @@ internal sealed partial class TaskTreeView {
     internal Action<TreeNode> PriorityClicked;
     internal bool SingleLinePaths;
     internal const string SingleLineSeparator=" / ";
-    static readonly Regex PriorityPrefix=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+)(?<priority>\[P[0-9]\])(?=\s|$)");
+    static readonly Regex PriorityPrefix=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+(?:[0-9]{1,3}%\s+)?)(?<priority>\[P[0-9]\])(?=\s|$)");
     TreeNode pressedPriorityNode;
     bool swallowPriorityUp;
     Font boldNodeFont, strikeNodeFont, boldStrikeNodeFont;

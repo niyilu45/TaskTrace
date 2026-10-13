@@ -40,7 +40,7 @@
 				v-if="showCollaboration !== false"
 				:task-id="task.id"
 			/>
-			<small>{{ taskStatusLabel(task.status, task.done) }}<template v-if="depth > 1"> · 下级子任务</template></small>
+			<small>{{ taskStatusLabel(task.status, task.done) }} · {{ effectiveCompletion((task.percent_done || 0) * 100, task.done) }}%<template v-if="depth > 1"> · 下级子任务</template></small>
 		</th>
 		<td class="description-cell">
 			<ReadonlyRichText
@@ -78,7 +78,7 @@
 						@keydown.enter.prevent="$emit('edit', task.id)"
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
-						<span>[P{{ entry.item.priority ?? 7 }}]</span>
+						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
 				</ol>
@@ -111,7 +111,7 @@
 						@keydown.enter.prevent="$emit('edit', task.id)"
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
-						<span>[P{{ entry.item.priority ?? 7 }}]</span>
+						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</li>
 				</ol>
@@ -172,6 +172,7 @@
 </template>
 
 <script setup lang="ts">
+import {effectiveCompletion} from '@/helpers/tasktraceCompletion'
 import {ref, computed, onBeforeUnmount, watch, inject} from 'vue'
 import equal from 'fast-deep-equal'
 import {useIntersectionObserver} from '@vueuse/core'

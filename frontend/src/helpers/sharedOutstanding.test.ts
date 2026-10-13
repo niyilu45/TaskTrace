@@ -23,7 +23,7 @@ describe('shared outstanding', () => {
 	})
 	it('recognizes the stable type marker when an editor rewrites the heading', () => {
 		const marked = {id: 4, comment: '<h3 data-tasktrace-comment-type="outstanding">已改写标题</h3><ul><li data-id="a"><p>事项</p><aside data-tasktrace-outstanding-note="true" hidden><p>备注</p></aside></li></ul>'}
-		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 7, completedAt: undefined, reminderAt: undefined}])
+		expect(sharedOutstanding([marked]).items).toEqual([{id: 'a', html: '<p>事项</p>', note: '<p>备注</p>', done: false, priority: 7, completion: 0, completedAt: undefined, reminderAt: undefined}])
 	})
 
 	it('uses the shared list regardless of progress dates and retains empty lists', () => {
@@ -38,10 +38,10 @@ describe('shared outstanding', () => {
 		const shared = {id: 2, comment: '<h3>TaskTrace 遗留事项清单</h3><ul><li data-id="a" data-done="false" data-priority="4">one</li><li data-id="b" data-done="true" data-priority="2" data-completed-at="2026-09-18T08:00:00.000Z">two</li></ul>'}
 		const result = sharedOutstanding([shared]).items
 		expect(result).toEqual([
-			{id: 'a', html: 'one', done: false, priority: 4, completedAt: undefined, reminderAt: undefined},
-			{id: 'b', html: 'two', done: true, priority: 2, completedAt: '2026-09-18T08:00:00.000Z', reminderAt: undefined},
+			{id: 'a', html: 'one', done: false, priority: 4, completion: 0, completedAt: undefined, reminderAt: undefined},
+			{id: 'b', html: 'two', done: true, priority: 2, completion: 0, completedAt: '2026-09-18T08:00:00.000Z', reminderAt: undefined},
 		])
-		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P4]</span> one</li></ol>')
+		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P4] · 0%</span> one</li></ol>')
 	})
 
 	it('imports the latest legacy list as individual unfinished items', () => {
@@ -56,7 +56,7 @@ describe('shared outstanding', () => {
 		expect(item.html).toBe('<p>事项正文</p>')
 		expect(item.note).toContain('内部备注')
 		expect(item.note).toContain('attachments/8')
-		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P7]</span> <p>事项正文</p></li></ol>')
+		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P7] · 0%</span> <p>事项正文</p></li></ol>')
 	})
 
 	it('uses the configured product default when older collaborative markup has no priority', () => {

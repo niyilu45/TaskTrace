@@ -206,7 +206,7 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 		}
 		var manifest TaskTraceTeamManifest
 		manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
-		if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+		if err := taskTraceTeamReadManifest(manifestPath, &manifest); err != nil {
 			// A collaboration task must not silently fall back to ordinary project
 			// write access when teamData is temporarily unavailable.
 			return false, nil
@@ -360,11 +360,17 @@ func taskTraceTeamFilterSnapshotsPermissions(snapshots []TaskTraceTeamSnapshot, 
 				task.Description = base.Description
 				task.Done = base.Done
 				task.Status = base.Status
+				task.PercentDone = nil
+				if base.CompletionKnown {
+					task.PercentDone = taskTraceCompletionPointer(base.PercentDone)
+				}
 				task.Comments = nil
 				acknowledged.Title = base.Title
 				acknowledged.Description = base.Description
 				acknowledged.Done = base.Done
 				acknowledged.Status = base.Status
+				acknowledged.PercentDone = base.PercentDone
+				acknowledged.CompletionKnown = base.CompletionKnown
 			}
 			items, order := taskTraceTeamOutstandingItems(task.Outstanding)
 			baseItems, baseOrder := taskTraceTeamOutstandingItems(base.Outstanding)
@@ -674,7 +680,7 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 	defer release()
 	var manifest TaskTraceTeamManifest
 	manifestPath := filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json")
-	if err := taskTraceTeamReadJSON(manifestPath, &manifest); err != nil {
+	if err := taskTraceTeamReadManifest(manifestPath, &manifest); err != nil {
 		return nil, err
 	}
 	key := taskTraceTeamPermissionKey(nodeID, request.OutstandingID)
@@ -775,7 +781,7 @@ func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request Task
 		}
 	}
 	manifest.Updated = time.Now().UTC()
-	if err := taskTraceTeamWriteJSON(manifestPath, &manifest); err != nil {
+	if err := taskTraceTeamWriteManifest(manifestPath, &manifest); err != nil {
 		return nil, err
 	}
 	binding.Members = manifest.Members

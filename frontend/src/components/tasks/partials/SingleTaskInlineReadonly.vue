@@ -90,12 +90,12 @@
 		<ChecklistSummary :task="task" />
 
 		<progress
-			v-if="task.percentDone > 0"
+			v-if="task.done || task.percentDone > 0"
 			class="progress is-small"
-			:value="task.percentDone * 100"
+			:value="task.done ? 100 : Math.round(task.percentDone * 100)"
 			max="100"
 		>
-			{{ task.percentDone * 100 }}%
+			{{ task.done ? 100 : Math.round(task.percentDone * 100) }}%
 		</progress>
 	</div>
 </template>

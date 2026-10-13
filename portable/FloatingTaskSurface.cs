@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -20,7 +20,7 @@ internal sealed partial class TaskTreeSurface : Panel {
         internal int Level;
         internal Color SourceColor;
     }
-    static readonly Regex Parts=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+)(?<priority>\[P[0-9]\])(?:\s+)?(?<title>.*)$");
+    static readonly Regex Parts=new Regex(@"^(?<prefix>[0-9]+(?:\.[0-9]+)*\.\s+(?:[0-9]{1,3}%\s+)?)(?<priority>\[P[0-9]\])(?:\s+)?(?<title>.*)$");
     readonly List<Row> rows=new List<Row>();
     TaskTreeView model;
     bool rebuildQueued;

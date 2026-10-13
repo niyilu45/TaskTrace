@@ -37,11 +37,26 @@
 						@change="toggleDone(entry.item, eventChecked($event))"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</span>
+						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }} · {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
 				<div class="outstanding-actions">
+					<label>填写完成度
+						<select
+							:value="manualCompletion(entry.item.completion)"
+							:disabled="blocked"
+							:aria-label="`第 ${entry.number} 条遗留事项的填写完成度`"
+							title="勾选完成时显示 100%，取消勾选后恢复填写值"
+							@change="setCompletion(entry.item, Number(($event.target as HTMLSelectElement).value))"
+						>
+							<option
+								v-for="value in COMPLETION_OPTIONS"
+								:key="value"
+								:value="value"
+							>{{ value }}%</option>
+						</select>
+					</label>
 					<button
 						type="button"
 						class="button is-small"
@@ -90,11 +105,26 @@
 						@change="toggleDone(entry.item, false)"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</span>
+						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }} · {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
 				<div class="outstanding-actions">
+					<label>填写完成度
+						<select
+							:value="manualCompletion(entry.item.completion)"
+							:disabled="blocked"
+							:aria-label="`第 ${entry.number} 条遗留事项的填写完成度`"
+							title="勾选完成时显示 100%，取消勾选后恢复填写值"
+							@change="setCompletion(entry.item, Number(($event.target as HTMLSelectElement).value))"
+						>
+							<option
+								v-for="value in COMPLETION_OPTIONS"
+								:key="value"
+								:value="value"
+							>{{ value }}%</option>
+						</select>
+					</label>
 					<button
 						type="button"
 						class="button is-small"
@@ -279,6 +309,7 @@
 </template>
 
 <script setup lang="ts">
+import {COMPLETION_OPTIONS, effectiveCompletion, manualCompletion} from '@/helpers/tasktraceCompletion'
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
@@ -590,6 +621,25 @@ function delayCompletedItem(id: string) {
 		pending.delete(id)
 		pendingCompletionIds.value = pending
 	}, 5000))
+}
+
+async function setCompletion(item: OutstandingItem, value: number) {
+	if (blocked.value || manualCompletion(item.completion) === value) return
+	const taskId = props.taskId
+	busy.value = true
+	error.value = ''
+	try {
+		const result = await changeOutstanding(taskId, existing => {
+			if (!existing.some(candidate => candidate.id === item.id)) throw new Error('Outstanding item no longer exists')
+			return existing.map(candidate => candidate.id === item.id ? {...candidate, completion: manualCompletion(value)} : candidate)
+		})
+		if (taskId !== props.taskId || !mounted) return
+		items.value = result
+		message.value = item.done ? '填写完成度已保存；当前已勾选完成，显示为 100%。' : '完成度已保存。'
+		emit('saved')
+	} catch {
+		if (taskId === props.taskId && mounted) error.value = '完成度保存失败，请重试。'
+	} finally { busy.value = false }
 }
 
 async function toggleDone(item: OutstandingItem, done: boolean) {
