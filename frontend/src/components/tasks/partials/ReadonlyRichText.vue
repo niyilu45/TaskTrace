@@ -2,6 +2,7 @@
 	<div
 		class="readonly-rich-text"
 		@click="handleContentClick"
+		@dblclick="handleContentClick"
 		v-html="rendered"
 	/>
 	<ImageLightbox
@@ -26,7 +27,12 @@ const lightboxAlt = ref('')
 
 function handleContentClick(event: MouseEvent) {
 	const target = event.target
-	if (!(target instanceof HTMLImageElement) || !target.src.startsWith('blob:')) return
+	if (!(target instanceof HTMLImageElement)) return
+	// A picture can sit inside an editable task row or link. Consume its gesture
+	// even when it failed to load, so previewing never opens the surrounding editor.
+	event.stopPropagation()
+	event.preventDefault()
+	if (!target.src.startsWith('blob:')) return
 	lightboxSrc.value = target.src
 	lightboxAlt.value = target.alt || '每日进展图片'
 }
