@@ -485,3 +485,9 @@
 - Go 回归通过：`mage test:filter '^Test(TaskTraceTeam|TaskTraceOutstanding|TaskComment)'`。新增用例验证重开数据库会话及读取持久化协作状态后连续三轮同步保留遗留事项和备注，不产生重复清单，并覆盖只读/独立写权限和旧快照。
 - 网页遗留事项组件和解析测试通过：`pnpm vitest run src/helpers/sharedOutstanding.test.ts src/components/tasks/partials/SharedOutstanding.test.ts`，25 项。
 - 所有测试使用隔离临时数据，未覆盖用户的现有配置和任务数据。此修复防止后续丢失，不会自动还原已经被旧版本删除的数据。
+
+## 2026-10-14 install 悬浮窗源码漏编
+
+- 安装和发布共用的 `Build-Local.ps1` 改为自动收集 `portable/Floating*.cs`，避免新增功能未加入手工清单导致 `ExportMarkdown`、`ProgressHistoryBrowserBridge`、`FloatingClipboard` 不存在。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File portable/Test-PortableNativeBuild.ps1` 直接执行安装脚本的原生编译段，在隔离且包含空格、方括号的目录中生成启动器、悬浮窗和更新器，并检查新增功能确实编入程序集。旧编译清单可复现用户报告的全部缺失符号，修复后检查通过。
+- 已在隔离目录完整执行 `dist/Install-TaskTrace-Engine.ps1 -InstallDirectory ...`（包含前端、Go 服务端、全部原生程序和安全复制包），安装成功；输出只含程序文件，未写入现有个人配置或任务数据。
