@@ -3,7 +3,7 @@
 		class="overview-drag-help"
 		role="status"
 	>
-		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖到同一项目的另一任务上，可移为其子任务；拖到项目标题上，可移为顶层任务。' }}
+		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖到同一项目的另一任务上，可移为其子任务；拖到项目名下方的放置区，可移为顶层任务。' }}
 	</p>
 	<section
 		v-for="project in groups"
@@ -38,6 +38,17 @@
 			</h3>
 			<span>{{ project.count }} 项</span>
 		</header>
+		<div
+			v-if="canWrite(project.projectId)"
+			class="overview-project-root-drop"
+			:class="{'is-drop-target': rootDropProject === project.projectId}"
+			@dragenter.prevent.stop="overProject($event, project.projectId)"
+			@dragover.prevent.stop="overProject($event, project.projectId)"
+			@dragleave.stop="leaveProject($event)"
+			@drop.prevent.stop="dropAtRoot(project.projectId)"
+		>
+			拖到这里，放在“{{ projectTitle(project.projectId) }}”下作为顶层任务
+		</div>
 		<ul
 			v-if="!collapsedProjects.has(project.projectId)"
 			class="overview-task-list"
@@ -194,10 +205,23 @@ function visibleRows(rows: ReturnType<typeof groupOverviewTasks>[number]['rows']
 	font-size: .875rem;
 	color: var(--text);
 }
-.overview-project-heading.is-drop-target {
+.overview-project-heading.is-drop-target,
+.overview-project-root-drop.is-drop-target {
 	outline: 2px solid var(--primary);
 	outline-offset: 2px;
 	background: var(--grey-100);
+}
+.overview-project-root-drop {
+	display: flex;
+	align-items: center;
+	min-block-size: 2.5rem;
+	margin-block: .5rem;
+	padding: .5rem .75rem;
+	border: 1px dashed var(--grey-300);
+	border-radius: .25rem;
+	color: var(--text);
+	font-size: .875rem;
+	overflow-wrap: anywhere;
 }
 .overview-project {
 	padding: .75rem;
