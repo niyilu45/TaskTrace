@@ -3,7 +3,7 @@
 		class="overview-drag-help"
 		role="status"
 	>
-		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖动，可用滚轮滚动页面；放到另一任务下成为子任务，放到同一项目的虚线框成为顶层任务。' }}
+		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖动，可用滚轮滚动页面；放到另一任务下成为子任务，放到项目的虚线框成为顶层任务。' }}
 	</p>
 	<section
 		v-for="project in groups"
@@ -117,7 +117,19 @@ import {error, getErrorText, success} from '@/message'
 const props = defineProps<{tasks: ITask[], ancestors: ITask[], loading?: boolean}>()
 const emit = defineEmits<{taskUpdated: [task: ITask], taskMoved: []}>()
 const projectStore = useProjectStore()
-const groups = computed(() => groupOverviewTasks(props.tasks, props.ancestors))
+const groups = computed(() => {
+	const groups = groupOverviewTasks(props.tasks, props.ancestors)
+	// Append empty/filtered destination projects without shifting existing rows.
+	if (draggedTask.value) {
+		const shown = new Set(groups.map(group => group.projectId))
+		for (const project of Object.values(projectStore.projects)) {
+			if (project.id > 0 && !shown.has(project.id) && canWrite(project.id)) {
+				groups.push({projectId: project.id, rows: [], count: 0})
+			}
+		}
+	}
+	return groups
+})
 const collapsedProjects = ref(new Set<number>())
 const collapsedTasks = ref(new Set<number>())
 const projectTitle = (id: number) => projectStore.projects[id]?.title || `项目 #${id}`
@@ -162,10 +174,7 @@ function updateDropTarget(x: number, y: number) {
 	const projectElement = element?.closest('[data-overview-project]')
 	if (!source || !projectElement) return
 	const projectId = Number(projectElement.getAttribute('data-overview-project'))
-	if (source.projectId !== projectId) {
-		dragHint.value = '请拖到同一项目中的任务或项目名下方的虚线框。'
-		return
-	}
+
 	if (!canWrite(projectId)) { dragHint.value = '没有此项目的编辑权限。'; return }
 	if (element?.closest('.overview-project-root-drop, .overview-project-heading')) {
 		rootDropProject.value = projectId
@@ -188,16 +197,13 @@ async function moveTask(projectId: number, parentId: number) {
 	const source = draggedTask.value
 	rootDropProject.value = null
 	if (!source || saving.value || props.loading) return
-	if (source.projectId !== projectId) {
-		error({message: '请拖到同一项目中的任务或项目标题上。'})
-		return
-	}
+
 	if (parentId && taskSubtreeIds(source.id, [...props.tasks, ...props.ancestors]).has(parentId)) {
 		error({message: '不能将任务移到自身或自己的子任务下。'})
 		return
 	}
 	const parents = source.relatedTasks?.parenttask || []
-	if ((!parentId && !parents.length) || (parents.length === 1 && parents[0].id === parentId)) return
+	if (source.projectId === projectId && ((!parentId && !parents.length) || (parents.length === 1 && parents[0].id === parentId))) return
 	const project = projectStore.projects[projectId]
 	const view = project?.views.find(view => view.viewKind === 'list') || project?.views[0]
 	if (!view) {
@@ -208,7 +214,7 @@ async function moveTask(projectId: number, parentId: number) {
 	try {
 		await tasksTasktraceMove({
 			path: {task: source.id},
-			body: {parent_id: parentId, before_task_id: 0, project_view_id: view.id},
+			body: {project_id: projectId, parent_id: parentId, before_task_id: 0, project_view_id: view.id},
 			throwOnError: true,
 		})
 		if (parentId) collapsedTasks.value.delete(parentId)

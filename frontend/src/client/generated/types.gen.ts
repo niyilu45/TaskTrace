@@ -2922,7 +2922,7 @@ export type TaskTraceMove = {
      */
     before_task_id?: number;
     /**
-     * New parent in the same project; zero makes the task a root task.
+     * New parent in the destination project; zero makes the task a root task.
      */
     parent_id?: number;
     /**
@@ -2930,7 +2930,11 @@ export type TaskTraceMove = {
      */
     readonly position?: number;
     /**
-     * Existing view of the task's project in which to save manual order. Its filters are ignored.
+     * Destination project. Zero keeps the current project. All descendants move with the task.
+     */
+    project_id?: number;
+    /**
+     * Existing view of the destination project in which to save manual order. Its filters are ignored.
      */
     project_view_id?: number;
     /**
@@ -5561,11 +5565,15 @@ export type TaskTraceMoveWritable = {
      */
     before_task_id?: number;
     /**
-     * New parent in the same project; zero makes the task a root task.
+     * New parent in the destination project; zero makes the task a root task.
      */
     parent_id?: number;
     /**
-     * Existing view of the task's project in which to save manual order. Its filters are ignored.
+     * Destination project. Zero keeps the current project. All descendants move with the task.
+     */
+    project_id?: number;
+    /**
+     * Existing view of the destination project in which to save manual order. Its filters are ignored.
      */
     project_view_id?: number;
 };

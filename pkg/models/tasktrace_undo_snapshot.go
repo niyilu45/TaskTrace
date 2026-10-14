@@ -250,6 +250,11 @@ func captureTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any)
 		snap.TaskID = object.TaskID
 		snap.ViewID = object.ProjectViewID
 		snap.ProjectID = object.task.ProjectID
+		if object.ProjectID != object.task.ProjectID {
+			// Match the existing cross-project Task.Update barrier: restoring only
+			// relations and positions would leave the subtree in the wrong project.
+			snap.Barrier = "跨项目移动暂不支持撤销，请在概览中将任务拖回原项目。" //nolint:gosmopolitan // TaskTrace displays localized operation messages in its Chinese UI.
+		}
 	case *TaskTraceOutstandingMove:
 		if method != "create" {
 			return nil, false, nil

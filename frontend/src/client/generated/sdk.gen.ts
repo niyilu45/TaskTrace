@@ -2928,7 +2928,7 @@ export const tasksTasktraceMarkdown = <ThrowOnError extends boolean = true>(opti
 /**
  * Move and reorder a task
  *
- * Atomically changes a task's parent within its project and its manual order in an existing project view. Requires write access to the task and all old/new parents. Cycles, depths greater than five, and invalid sibling anchors are rejected without changing data. View filters do not affect manual ordering.
+ * Atomically moves a task and all descendants to a destination project, changes its parent and manual order. Omit project_id to stay in the current project. Requires write access to the destination project, every moved task and all old/new parents. Cycles, depths greater than five, and invalid sibling anchors are rejected without changing data. View filters do not affect manual ordering.
  */
 export const tasksTasktraceMove = <ThrowOnError extends boolean = true>(options: Options<TasksTasktraceMoveData, ThrowOnError>): RequestResult<TasksTasktraceMoveResponses, TasksTasktraceMoveErrors, ThrowOnError> => (options.client ?? client).post<TasksTasktraceMoveResponses, TasksTasktraceMoveErrors, ThrowOnError>({
     security: [{

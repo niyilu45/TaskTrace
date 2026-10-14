@@ -30,12 +30,14 @@ import (
 // TaskTraceMove changes a task's parent and manual position in one transaction.
 type TaskTraceMove struct {
 	TaskID          int64   `json:"task_id" readOnly:"true" doc:"Task being moved, taken from the URL."`
-	ParentID        int64   `json:"parent_id" minimum:"0" doc:"New parent in the same project; zero makes the task a root task."`
+	ProjectID       int64   `json:"project_id,omitempty" minimum:"0" doc:"Destination project. Zero keeps the current project. All descendants move with the task."`
+	ParentID        int64   `json:"parent_id" minimum:"0" doc:"New parent in the destination project; zero makes the task a root task."`
 	BeforeTaskID    int64   `json:"before_task_id" minimum:"0" doc:"Insert before this sibling; zero appends to the new parent's children."`
-	ProjectViewID   int64   `json:"project_view_id" minimum:"1" doc:"Existing view of the task's project in which to save manual order. Its filters are ignored."`
+	ProjectViewID   int64   `json:"project_view_id" minimum:"1" doc:"Existing view of the destination project in which to save manual order. Its filters are ignored."`
 	Position        float64 `json:"position" readOnly:"true" doc:"The persisted position after the move."`
 	task            Task
 	parents         []*TaskRelation
+	subtree         []*Task
 	web.CRUDable    `json:"-" xorm:"-"`
 	web.Permissions `json:"-" xorm:"-"`
 }
@@ -54,7 +56,9 @@ func (e ErrTaskTraceMoveInvalid) HTTPError() web.HTTPError {
 }
 
 func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
-	source := &Task{ID: m.TaskID}
+	m.subtree = nil
+	m.parents = nil
+	source := &Task{ID: m.TaskID, ProjectID: m.ProjectID}
 	can, err := source.CanUpdate(s, a)
 	if err != nil || !can {
 		return can, err
@@ -63,20 +67,48 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Lock every project view in a stable order so moves from different views serialize.
-	if _, err = lockProjectViewsForPositionUpdate(s, m.task.ProjectID); err != nil {
+	if m.ProjectID < 0 || m.ParentID < 0 || m.BeforeTaskID < 0 {
+		return false, ErrTaskTraceMoveInvalid{"Task and project identifiers cannot be negative."}
+	}
+	if m.ProjectID == 0 {
+		m.ProjectID = m.task.ProjectID
+	}
+	projects := []int64{m.task.ProjectID, m.ProjectID}
+	if m.ProjectID != m.task.ProjectID {
+		// Lock task rows before views, matching ordinary task updates. Authorize
+		// every descendant, including completed and UI-filtered tasks.
+		ids, _, err := taskTraceTeamSubtree(s, m.TaskID)
+		if err != nil {
+			return false, err
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		for _, id := range ids {
+			task, err := GetTaskSimple(lockingSession(s), &Task{ID: id})
+			if err != nil {
+				return false, err
+			}
+			if id == m.TaskID && task.ProjectID != m.task.ProjectID {
+				return false, ErrTaskTraceMoveInvalid{"The task was moved elsewhere. Refresh and try again."}
+			}
+			can, err := (&Task{ID: id, ProjectID: m.ProjectID}).CanUpdate(s, a)
+			if err != nil || !can {
+				return can, err
+			}
+			m.subtree = append(m.subtree, &task)
+			projects = append(projects, task.ProjectID)
+		}
+	}
+	// Serialize source and destination views in a stable order.
+	if _, err = lockProjectViewsForPositionUpdate(s, projects...); err != nil {
 		return false, err
 	}
-	view, err := GetProjectViewByIDAndProject(s, m.ProjectViewID, m.task.ProjectID)
+	view, err := GetProjectViewByIDAndProject(s, m.ProjectViewID, m.ProjectID)
 	if err != nil {
 		return false, err
 	}
 	can, _, err = view.CanRead(s, a)
 	if err != nil || !can {
 		return can, err
-	}
-	if m.ParentID < 0 || m.BeforeTaskID < 0 {
-		return false, ErrTaskTraceMoveInvalid{"Task identifiers cannot be negative."}
 	}
 	if m.ParentID != 0 {
 		parent := &Task{ID: m.ParentID}
@@ -88,8 +120,8 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if parentTask.ProjectID != m.task.ProjectID {
-			return false, ErrTaskTraceMoveInvalid{"The new parent must belong to the same project."}
+		if parentTask.ProjectID != m.ProjectID {
+			return false, ErrTaskTraceMoveInvalid{"The new parent must belong to the destination project."}
 		}
 	}
 	err = s.Where("task_id = ? AND relation_kind = ?", m.TaskID, RelationKindParenttask).Find(&m.parents)
@@ -114,8 +146,13 @@ func (m *TaskTraceMove) sameParent() bool {
 // global view order. Renumbering avoids floating-point collisions after many drags.
 func (m *TaskTraceMove) orderedTasks(s *xorm.Session) ([]*Task, error) {
 	var tasks []*Task
-	if err := s.Where("project_id = ?", m.task.ProjectID).Find(&tasks); err != nil {
+	if err := s.Where("project_id = ?", m.ProjectID).Find(&tasks); err != nil {
 		return nil, err
+	}
+	for _, task := range m.subtree {
+		if task.ProjectID != m.ProjectID {
+			tasks = append(tasks, task)
+		}
 	}
 	var positions []*TaskPosition
 	if err := s.Where("project_view_id = ?", m.ProjectViewID).Find(&positions); err != nil {
@@ -126,8 +163,10 @@ func (m *TaskTraceMove) orderedTasks(s *xorm.Session) ([]*Task, error) {
 		pos[p.TaskID] = p.Position
 	}
 	ids := make(map[int64]bool, len(tasks))
+	taskIDs := make([]int64, 0, len(tasks))
 	for _, t := range tasks {
 		ids[t.ID] = true
+		taskIDs = append(taskIDs, t.ID)
 		if _, ok := pos[t.ID]; !ok {
 			pos[t.ID] = calculateDefaultPosition(t.Index, 0)
 		}
@@ -140,7 +179,7 @@ func (m *TaskTraceMove) orderedTasks(s *xorm.Session) ([]*Task, error) {
 	})
 	// Match the tree's deterministic parent choice for legacy multi-parent tasks.
 	var relations []*TaskRelation
-	if err := s.Where("relation_kind = ?", RelationKindParenttask).In("task_id", builder.Select("id").From("tasks").Where(builder.Eq{"project_id": m.task.ProjectID})).Find(&relations); err != nil {
+	if err := s.Where("relation_kind = ?", RelationKindParenttask).In("task_id", taskIDs).Find(&relations); err != nil {
 		return nil, err
 	}
 	parents := make(map[int64]int64)
@@ -187,7 +226,7 @@ func (m *TaskTraceMove) Create(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 	// Reject a concurrently deleted view rather than creating orphan positions.
-	if _, err := GetProjectViewByIDAndProject(s, m.ProjectViewID, m.task.ProjectID); err != nil {
+	if _, err := GetProjectViewByIDAndProject(s, m.ProjectViewID, m.ProjectID); err != nil {
 		return err
 	}
 	if m.ParentID == m.TaskID {
@@ -212,6 +251,11 @@ func (m *TaskTraceMove) Create(s *xorm.Session, a web.Auth) error {
 	ordered, err := m.orderedTasks(s)
 	if err != nil {
 		return err
+	}
+	if len(m.subtree) > 0 {
+		if err := m.moveSubtreeToProject(s, a); err != nil {
+			return err
+		}
 	}
 	if !m.sameParent() {
 		for _, r := range m.parents {
@@ -241,6 +285,81 @@ func (m *TaskTraceMove) Create(s *xorm.Session, a web.Auth) error {
 		return err
 	}
 	events.DispatchOnCommit(s, &TaskPositionsRecalculatedEvent{NewTaskPositions: positions})
+	return nil
+}
+
+// moveSubtreeToProject only updates placement columns. A normal Task.Update
+// also rewrites reminders and assignees, which a structural move must preserve.
+func (m *TaskTraceMove) moveSubtreeToProject(s *xorm.Session, a web.Auth) error {
+	ids, _, err := taskTraceTeamSubtree(s, m.TaskID)
+	if err != nil {
+		return err
+	}
+	known := map[int64]bool{}
+	for _, task := range m.subtree {
+		known[task.ID] = true
+	}
+	if len(ids) != len(known) {
+		return ErrTaskTraceMoveInvalid{"The subtree changed during the move. Refresh and try again."}
+	}
+	for _, id := range ids {
+		if !known[id] {
+			return ErrTaskTraceMoveInvalid{"The subtree changed during the move. Refresh and try again."}
+		}
+	}
+	moving := []*Task{}
+	projects := map[int64]bool{m.ProjectID: true}
+	for _, task := range m.subtree {
+		if task.ProjectID == m.ProjectID {
+			continue
+		}
+		projects[task.ProjectID] = true
+		if err := retainTaskIndexAlias(s, task); err != nil {
+			return err
+		}
+		task.ProjectID = m.ProjectID
+		task.Index = 0
+		moving = append(moving, task)
+	}
+	if err := setNewTaskIndexes(s, m.ProjectID, moving); err != nil {
+		return err
+	}
+	for _, task := range moving {
+		if _, err := s.ID(task.ID).Cols("project_id", "index").Update(task); err != nil {
+			return err
+		}
+		if _, err := s.Where("task_id = ?", task.ID).Delete(&TaskBucket{}); err != nil {
+			return err
+		}
+		if _, err := s.Where("task_id = ?", task.ID).Delete(&TaskPosition{}); err != nil {
+			return err
+		}
+		if task.ID == m.TaskID {
+			m.task = *task
+		}
+		events.DispatchOnCommit(s, &TaskUpdatedEvent{Task: task, Doer: doerFromAuth(s, a)})
+	}
+	views, err := lockProjectViewsForPositionUpdate(s, m.ProjectID)
+	if err != nil {
+		return err
+	}
+	positions, buckets, err := setTasksInBucketInViews(s, views, moving, a, true, nil)
+	if err != nil {
+		return err
+	}
+	if err := bulkInsertTaskPositions(s, positions, false); err != nil {
+		return err
+	}
+	for _, bucket := range buckets {
+		if _, err := s.Insert(bucket); err != nil {
+			return err
+		}
+	}
+	for projectID := range projects {
+		if err := updateProjectLastUpdated(s, &Project{ID: projectID}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -1492,21 +1492,7 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 
 	// If the task is being moved between projects, make sure to move the bucket + index as well
 	if t.ProjectID != 0 && ot.ProjectID != t.ProjectID {
-		// Another task may already hold this retired address; the latest holder wins.
-		alias := &TaskIndexAlias{ProjectID: ot.ProjectID, Index: ot.Index}
-		has, err := s.Get(alias)
-		if err != nil {
-			return err
-		}
-		switch {
-		case !has:
-			_, err = s.Insert(&TaskIndexAlias{ProjectID: ot.ProjectID, Index: ot.Index, TaskID: ot.ID})
-		case alias.TaskID != ot.ID:
-			_, err = s.Where("project_id = ? AND `index` = ?", ot.ProjectID, ot.Index).
-				Cols("task_id").
-				Update(&TaskIndexAlias{TaskID: ot.ID})
-		}
-		if err != nil {
+		if err := retainTaskIndexAlias(s, &ot); err != nil {
 			return err
 		}
 
@@ -1770,6 +1756,29 @@ func (t *Task) updateSingleTask(s *xorm.Session, a web.Auth, fields []string) (e
 	})
 
 	return updateProjectLastUpdated(s, &Project{ID: t.ProjectID})
+}
+
+// retainTaskIndexAlias keeps old task URLs working after a project move.
+func retainTaskIndexAlias(s *xorm.Session, ot *Task) error {
+	// Another task may already hold this retired address; the latest holder wins.
+	alias := &TaskIndexAlias{ProjectID: ot.ProjectID, Index: ot.Index}
+	has, err := s.Get(alias)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !has:
+		_, err = s.Insert(&TaskIndexAlias{ProjectID: ot.ProjectID, Index: ot.Index, TaskID: ot.ID})
+	case alias.TaskID != ot.ID:
+		_, err = s.Where("project_id = ? AND `index` = ?", ot.ProjectID, ot.Index).
+			Cols("task_id").
+			Update(&TaskIndexAlias{TaskID: ot.ID})
+	}
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // updateTasks updates multiple tasks with the same payload.

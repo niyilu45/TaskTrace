@@ -33,7 +33,7 @@ func RegisterTaskTraceMoveRoutes(api huma.API) {
 	Register(api, huma.Operation{
 		OperationID: "tasks-tasktrace-move",
 		Summary:     "Move and reorder a task",
-		Description: "Atomically changes a task's parent within its project and its manual order in an existing project view. Requires write access to the task and all old/new parents. Cycles, depths greater than five, and invalid sibling anchors are rejected without changing data. View filters do not affect manual ordering.",
+		Description: "Atomically moves a task and all descendants to a destination project, changes its parent and manual order. Omit project_id to stay in the current project. Requires write access to the destination project, every moved task and all old/new parents. Cycles, depths greater than five, and invalid sibling anchors are rejected without changing data. View filters do not affect manual ordering.",
 		Method:      http.MethodPost,
 		Path:        "/tasks/{task}/move",
 		Tags:        []string{"tasks"},
