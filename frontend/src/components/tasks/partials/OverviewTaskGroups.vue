@@ -3,7 +3,7 @@
 		class="overview-drag-help"
 		role="status"
 	>
-		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖到同一项目的另一任务上，可移为其子任务；拖到项目名下方的放置区，可移为顶层任务。' }}
+		{{ saving ? '正在保存任务所属关系…' : '按住任务名拖动，可用滚轮滚动页面；放到另一任务下成为子任务，放到同一项目的虚线框成为顶层任务。' }}
 	</p>
 	<section
 		v-for="project in groups"
@@ -15,9 +15,6 @@
 		<header
 			class="overview-project-heading"
 			:class="{'is-drop-target': rootDropProject === project.projectId}"
-			@dragover.prevent="overProject($event, project.projectId)"
-			@dragleave="leaveProject($event)"
-			@drop.prevent="dropAtRoot(project.projectId)"
 		>
 			<button
 				type="button"
@@ -42,10 +39,6 @@
 			v-if="canWrite(project.projectId)"
 			class="overview-project-root-drop"
 			:class="{'is-drop-target': rootDropProject === project.projectId}"
-			@dragenter.prevent.stop="overProject($event, project.projectId)"
-			@dragover.prevent.stop="overProject($event, project.projectId)"
-			@dragleave.stop="leaveProject($event)"
-			@drop.prevent.stop="dropAtRoot(project.projectId)"
 		>
 			拖到这里，放在“{{ projectTitle(project.projectId) }}”下作为顶层任务
 		</div>
@@ -57,7 +50,7 @@
 				v-for="row in visibleRows(project.rows)"
 				:key="row.task.id"
 				class="overview-task-row"
-				:class="{'is-context': row.context}"
+				:class="{'is-context': row.context, 'is-task-drop-target': taskDropTarget === row.task.id, 'is-drag-source': draggedTask?.id === row.task.id}"
 				:data-overview-task="row.task.id"
 				:data-depth="row.depth"
 				:style="{'--task-depth': Math.min(row.depth, 6)}"
@@ -87,20 +80,31 @@
 						:title="row.context ? '为显示匹配的下级任务而保留的上级任务' : undefined"
 						:can-mark-as-done="canWrite(row.task.projectId)"
 						:can-drag="canWrite(row.task.projectId) && !saving && !loading"
-						task-drop-mode="parent"
-						@taskDragStart="startDrag"
-						@taskDragEnd="endDrag"
-						@taskDrop="dropOnTask"
+						:pointer-drag="true"
+						@taskPointerDown="({task, event}) => beginPointerDrag(task, event)"
 						@taskUpdated="emit('taskUpdated', $event)"
 					/>
 				</div>
 			</li>
 		</ul>
 	</section>
+	<Teleport to="body">
+		<div
+			v-if="draggedTask"
+			class="overview-drag-preview"
+			:style="{left: `${Math.max(8, Math.min(dragPosition.x + 16, viewportWidth - 300))}px`, top: `${dragPosition.y + 20}px`}"
+			role="status"
+		>
+			<strong>{{ draggedTask.title }}</strong>
+			<span>{{ dragHint }}</span>
+		</div>
+	</Teleport>
 </template>
 
 <script setup lang="ts">
 import {computed, ref} from 'vue'
+import {useWindowSize} from '@vueuse/core'
+import {useOverviewPointerDrag} from '@/composables/useOverviewPointerDrag'
 import Icon from '@/components/misc/Icon'
 import SingleTaskInProject from './SingleTaskInProject.vue'
 import {useProjectStore} from '@/stores/projects'
@@ -120,34 +124,65 @@ const projectTitle = (id: number) => projectStore.projects[id]?.title || `项目
 const draggedTask = ref<ITask | null>(null)
 const rootDropProject = ref<number | null>(null)
 const saving = ref(false)
+const taskDropTarget = ref<number | null>(null)
+const dragHint = ref('')
+let destination: {projectId: number, parentId: number} | null = null
+let draggedSubtree = new Set<number>()
+const {width: viewportWidth} = useWindowSize()
 const canWrite = (id: number) => !projectStore.projects[id]?.isArchived
 	&& (projectStore.projects[id]?.maxPermission ?? 0) > PERMISSIONS.READ
 
-function startDrag({task, event}: {task: ITask, event: DragEvent}) {
-	if (saving.value || props.loading || !canWrite(task.projectId)) {
-		event.preventDefault()
-		return
-	}
-	draggedTask.value = task
-}
+const {begin: beginPointerDrag, position: dragPosition} = useOverviewPointerDrag<ITask>({
+	canStart: task => !saving.value && !props.loading && canWrite(task.projectId),
+	start: task => {
+		draggedTask.value = task
+		draggedSubtree = taskSubtreeIds(task.id, [...props.tasks, ...props.ancestors])
+	},
+	move: updateDropTarget,
+	drop: () => {
+		if (destination) void moveTask(destination.projectId, destination.parentId)
+		else if (dragHint.value) error({message: dragHint.value})
+	},
+	end: endDrag,
+})
 function endDrag() {
 	draggedTask.value = null
 	rootDropProject.value = null
+	taskDropTarget.value = null
+	destination = null
+	draggedSubtree.clear()
 }
-function overProject(event: DragEvent, projectId: number) {
-	const allowed = draggedTask.value?.projectId === projectId && canWrite(projectId) && !saving.value
-	rootDropProject.value = allowed ? projectId : null
-	if (event.dataTransfer) event.dataTransfer.dropEffect = allowed ? 'move' : 'none'
-}
-function leaveProject(event: DragEvent) {
-	if (event.relatedTarget instanceof Node && (event.currentTarget as HTMLElement).contains(event.relatedTarget)) return
+function updateDropTarget(x: number, y: number) {
 	rootDropProject.value = null
-}
-async function dropAtRoot(projectId: number) {
-	await moveTask(projectId, 0)
-}
-async function dropOnTask({task}: {task: ITask}) {
-	await moveTask(task.projectId, task.id)
+	taskDropTarget.value = null
+	destination = null
+	dragHint.value = '拖到任务或项目名下方的虚线框；按住鼠标可用滚轮滚动，Esc 取消。'
+	const source = draggedTask.value
+	const element = document.elementFromPoint(x, y)
+	const projectElement = element?.closest('[data-overview-project]')
+	if (!source || !projectElement) return
+	const projectId = Number(projectElement.getAttribute('data-overview-project'))
+	if (source.projectId !== projectId) {
+		dragHint.value = '请拖到同一项目中的任务或项目名下方的虚线框。'
+		return
+	}
+	if (!canWrite(projectId)) { dragHint.value = '没有此项目的编辑权限。'; return }
+	if (element?.closest('.overview-project-root-drop, .overview-project-heading')) {
+		rootDropProject.value = projectId
+		destination = {projectId, parentId: 0}
+		dragHint.value = `松开放到“${projectTitle(projectId)}”下，作为顶层任务。`
+		return
+	}
+	const row = element?.closest('[data-overview-task]')
+	if (!row) return
+	const parentId = Number(row.getAttribute('data-overview-task'))
+	if (draggedSubtree.has(parentId)) {
+		dragHint.value = '不能将任务移到自身或自己的子任务下。'
+		return
+	}
+	taskDropTarget.value = parentId
+	destination = {projectId, parentId}
+	dragHint.value = '松开后成为此任务的子任务。'
 }
 async function moveTask(projectId: number, parentId: number) {
 	const source = draggedTask.value
@@ -199,6 +234,34 @@ function visibleRows(rows: ReturnType<typeof groupOverviewTasks>[number]['rows']
 </script>
 
 <style scoped lang="scss">
+:global(html.overview-task-dragging),
+:global(html.overview-task-dragging *) {
+	cursor: grabbing !important;
+	user-select: none !important;
+}
+.overview-drag-preview {
+	position: fixed;
+	z-index: 10000;
+	pointer-events: none;
+	display: flex;
+	flex-direction: column;
+	gap: .25rem;
+	max-inline-size: min(280px, 90vw);
+	padding: .5rem .75rem;
+	border: 1px solid var(--grey-300);
+	border-radius: .25rem;
+	background: var(--white);
+	color: var(--text);
+	font-size: .875rem;
+	overflow-wrap: anywhere;
+}
+.overview-task-row.is-task-drop-target .overview-task-content {
+	outline: 2px solid var(--primary);
+	background: var(--grey-100);
+}
+.overview-task-row.is-drag-source {
+	opacity: .65;
+}
 .overview-drag-help {
 	margin: 0;
 	padding: .75rem;

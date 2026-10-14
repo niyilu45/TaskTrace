@@ -104,9 +104,11 @@
 					<TaskGlanceTooltip :task="task">
 						<RouterLink
 							:to="taskDetailRoute"
-							:draggable="canDrag"
+							:draggable="canDrag && !pointerDrag"
+							:class="{'pointer-draggable': canDrag && pointerDrag}"
 							class="task-link"
 							title="单击编辑；按住并拖动可改变层级"
+							@pointerdown="startTaskPointerDrag"
 							@dragstart.stop="startTaskDrag"
 							@dragend.stop="finishTaskDrag"
 						>
@@ -237,7 +239,9 @@
 			:can-mark-as-done="canMarkAsDone"
 			:all-tasks="allTasks"
 			:can-drag="canDrag"
+			:pointer-drag="pointerDrag"
 			class="subtask-nested"
+			@taskPointerDown="emit('taskPointerDown', $event)"
 			@taskUpdated="emit('taskUpdated', $event)"
 			@taskDragStart="emit('taskDragStart', $event)"
 			@taskDragEnd="emit('taskDragEnd', $event)"
@@ -302,6 +306,7 @@ const props = withDefaults(defineProps<{
 	canMarkAsDone?: boolean,
 	allTasks?: ITask[],
 	canDrag?: boolean,
+	pointerDrag?: boolean,
 	taskDropMode?: 'tree' | 'parent',
 }>(), {
 	isArchived: false,
@@ -310,12 +315,14 @@ const props = withDefaults(defineProps<{
 	canMarkAsDone: true,
 	allTasks: () => [],
 	canDrag: false,
+	pointerDrag: false,
 	taskDropMode: 'tree',
 })
 
 const emit = defineEmits<{
 	'taskUpdated': [task: ITask],
 	'taskDragStart': [payload: TaskDragEvent],
+	'taskPointerDown': [payload: {task: ITask, event: PointerEvent}],
 	'taskDragEnd': [payload: TaskDragEvent],
 	'taskDrop': [payload: TaskDropEvent],
 }>()
@@ -492,8 +499,12 @@ function changeStatus(event: Event) {
 
 const dropZone = ref<TaskDropZone | null>(null)
 
+function startTaskPointerDrag(event: PointerEvent) {
+	if (props.canDrag && props.pointerDrag) emit('taskPointerDown', {task: task.value, event})
+}
+
 function startTaskDrag(event: DragEvent) {
-	if (!props.canDrag) {
+	if (!props.canDrag || props.pointerDrag) {
 		event.preventDefault()
 		return
 	}
@@ -756,7 +767,7 @@ defineExpose({
 	padding: .1rem 1.45rem .1rem .35rem;
 }
 
-.task-link[draggable='true'] {
+.task-link[draggable='true'], .task-link.pointer-draggable {
 	cursor: grab;
 	user-select: none;
 
