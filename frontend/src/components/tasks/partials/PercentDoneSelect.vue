@@ -1,23 +1,26 @@
 <template>
-	<div>
-		<span v-if="done">当前完成度：100%（已勾选完成） · </span>
-		<label>填写完成度
-			<span class="select">
-				<select
-					v-model.number="percentDone"
-					aria-label="填写完成度，勾选完成不会清除填写值"
-					:disabled="disabled || undefined"
+	<div class="percent-done-select">
+		<span class="select has-defaults">
+			<select
+				v-model.number="percentDone"
+				aria-label="填写完成度，勾选完成不会清除填写值"
+				:disabled="disabled || undefined"
+			>
+				<option
+					v-for="option in PERCENT_OPTIONS"
+					:key="option"
+					:value="option"
 				>
-					<option
-						v-for="option in PERCENT_OPTIONS"
-						:key="option"
-						:value="option"
-					>
-						{{ option * 100 }}%
-					</option>
-				</select>
-			</span>
-		</label>
+					{{ option * 100 }}%
+				</option>
+			</select>
+		</span>
+		<p
+			v-if="done"
+			class="help"
+		>
+			当前完成度：100%（已勾选完成），保留填写值 {{ Math.round(percentDone * 100) }}%。
+		</p>
 	</div>
 </template>
 

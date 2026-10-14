@@ -79,28 +79,76 @@
 					:class="{'is-two-thirds': canWrite}"
 					class="column detail-content"
 				>
-					<div class="columns details">
-						<div class="column task-status-field">
+					<div class="details task-core-fields">
+						<div class="task-core-field task-status-field">
 							<div class="detail-title">
 								<Icon icon="tasks" />
 								任务状态
 							</div>
-							<select
-								v-model="task.status"
-								class="input task-status-select"
-								:disabled="!canWrite || taskService.loading"
-								aria-label="任务状态"
-								@change="setTaskStatus"
-							>
-								<option
-									v-for="option in TASK_STATUS_OPTIONS"
-									:key="option.value"
-									:value="option.value"
+							<div class="select has-defaults">
+								<select
+									v-model="task.status"
+									class="task-status-select"
+									:disabled="!canWrite || taskService.loading"
+									aria-label="任务状态"
+									@change="setTaskStatus"
 								>
-									{{ option.label }}
-								</option>
-							</select>
+									<option
+										v-for="option in TASK_STATUS_OPTIONS"
+										:key="option.value"
+										:value="option.value"
+									>
+										{{ option.label }}
+									</option>
+								</select>
+							</div>
 						</div>
+						<CustomTransition
+							name="flash-background"
+							appear
+						>
+							<div
+								v-if="activeFields.priority"
+								class="task-core-field task-priority-field"
+							>
+								<!-- Priority -->
+								<div class="detail-title">
+									<Icon icon="exclamation-circle" />
+									{{ $t('task.attributes.priority') }}
+								</div>
+								<PrioritySelect
+									:ref="e => setFieldRef('priority', e)"
+									v-model="task.priority"
+									class="has-defaults"
+									:disabled="!canWrite"
+									@update:modelValue="setPriority"
+								/>
+							</div>
+						</CustomTransition>
+						<CustomTransition
+							name="flash-background"
+							appear
+						>
+							<div
+								v-if="activeFields.percentDone"
+								class="task-core-field task-completion-field"
+							>
+								<!-- Progress -->
+								<div class="detail-title">
+									<Icon icon="percent" />
+									{{ $t('task.attributes.percentDone') }}
+								</div>
+								<PercentDoneSelect
+									:ref="e => setFieldRef('percentDone', e)"
+									:model-value="task.percentDone"
+									:disabled="!canWrite || savingCompletion"
+									:done="task.done"
+									@update:modelValue="setPercentDone"
+								/>
+							</div>
+						</CustomTransition>
+					</div>
+					<div class="columns details">
 						<div
 							v-if="activeFields.assignees"
 							class="column assignees"
@@ -123,27 +171,6 @@
 								class="mbs-2"
 							/>
 						</div>
-						<CustomTransition
-							name="flash-background"
-							appear
-						>
-							<div
-								v-if="activeFields.priority"
-								class="column"
-							>
-								<!-- Priority -->
-								<div class="detail-title">
-									<Icon icon="exclamation-circle" />
-									{{ $t('task.attributes.priority') }}
-								</div>
-								<PrioritySelect
-									:ref="e => setFieldRef('priority', e)"
-									v-model="task.priority"
-									:disabled="!canWrite"
-									@update:modelValue="setPriority"
-								/>
-							</div>
-						</CustomTransition>
 						<CustomTransition
 							name="flash-background"
 							appear
@@ -177,28 +204,6 @@
 										</span>
 									</BaseButton>
 								</div>
-							</div>
-						</CustomTransition>
-						<CustomTransition
-							name="flash-background"
-							appear
-						>
-							<div
-								v-if="activeFields.percentDone"
-								class="column"
-							>
-								<!-- Progress -->
-								<div class="detail-title">
-									<Icon icon="percent" />
-									{{ $t('task.attributes.percentDone') }}
-								</div>
-								<PercentDoneSelect
-									:ref="e => setFieldRef('percentDone', e)"
-									:model-value="task.percentDone"
-									:disabled="!canWrite || savingCompletion"
-									:done="task.done"
-									@update:modelValue="setPercentDone"
-								/>
 							</div>
 						</CustomTransition>
 						<CustomTransition
@@ -1434,6 +1439,28 @@ h2 .button {
 		break-after: always; // New syntax
 	}
 
+}
+
+// Keep the three related controls aligned, regardless of optional task fields.
+.task-core-fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+	align-items: start;
+	gap: .75rem 1rem;
+
+	.task-core-field {
+		min-inline-size: 0;
+	}
+
+	.detail-title {
+		margin-block-end: .375rem;
+	}
+
+	:deep(.select),
+	:deep(select) {
+		inline-size: 100%;
+		block-size: 2.5rem;
+	}
 }
 
 .details.labels-list,
