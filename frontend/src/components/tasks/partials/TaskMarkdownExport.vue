@@ -1,5 +1,6 @@
 <template>
 	<XButton
+		class="task-markdown-export-trigger"
 		variant="secondary"
 		icon="download"
 		@click="open = true"

@@ -1530,7 +1530,8 @@ h2 .button {
 		align-self: flex-start;
 	}
 
-	.button {
+	.button,
+	:deep(.task-markdown-export-trigger) {
 		inline-size: 100%;
 		margin-block-end: .5rem;
 		justify-content: left;
@@ -1592,7 +1593,7 @@ h2 .button {
 	font-size: .75rem;
 	font-weight: 700;
 	margin: .5rem 0;
-	display: inline-block;
+	display: block;
 }
 
 .scroll-to-comments-button {
