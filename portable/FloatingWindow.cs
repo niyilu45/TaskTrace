@@ -32,7 +32,7 @@ internal sealed partial class FloatingWindow : Form {
     readonly Label status = new Label { Dock = DockStyle.Fill, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
     readonly CheckBox showCompleted = new CheckBox { Text = "显示已完成", AutoSize = true, Dock = DockStyle.Fill };
     readonly CheckBox singleLine = new CheckBox { Text = "单行显示", AutoSize = true, Dock = DockStyle.Fill, AccessibleName = "任务单行显示" };
-    readonly CheckBox pin = new CheckBox { Text = "置顶", Checked = true, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
+    readonly CheckBox pin = new CheckBox { Text = "置顶", Checked = true, AutoSize = true };
     readonly TableLayoutPanel content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, Padding = new Padding(12, 0, 12, 10) };
     readonly Timer timer = new Timer { Interval = 1000 };
     readonly NotifyIcon tray = new NotifyIcon { Text = "TaskTrace · 悬浮事项", Visible = false };
@@ -143,7 +143,11 @@ internal sealed partial class FloatingWindow : Form {
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
-        foreach(Control control in new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions }) control.Margin = new Padding(0, 0, 6, 6);
+        foreach(Control control in new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions }) {
+            control.Margin = new Padding(0, 0, 6, 6);
+            // FlowLayoutPanel centers each control vertically within its wrapped row.
+            control.Anchor = AnchorStyles.Left;
+        }
         newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
         newTaskButton.Click+=delegate {ShowNewTaskEditor();};
         toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions });

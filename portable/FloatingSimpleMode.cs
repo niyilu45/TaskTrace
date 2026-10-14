@@ -353,7 +353,10 @@ internal sealed partial class FloatingWindow {
             Action assertToolbar=delegate {
                 PerformLayout();toolbar.PerformLayout();
                 var controls=toolbar.Controls.Cast<Control>().Where(control=>control.Visible).ToArray();
-                if(!controls.Select(control=>control.Text).SequenceEqual(new[]{"完整界面","置顶","设置","简洁模式"}) || controls.Select(control=>control.Top).Distinct().Count()!=1)throw new Exception("Full toolbar is not a single compact row");
+                if(!controls.Select(control=>control.Text).SequenceEqual(new[]{"完整界面","置顶","设置","简洁模式","显示完成度","排序方式"}))throw new Exception("Full toolbar controls are missing");
+                foreach(var first in controls)foreach(var second in controls)
+                    if(first.Top<second.Bottom && second.Top<first.Bottom && Math.Abs((first.Top+first.Bottom)-(second.Top+second.Bottom))>2)
+                        throw new Exception("Full toolbar controls are not vertically centered within their row");
                 foreach(var control in controls)if(control.Left<toolbar.Padding.Left || control.Right+control.Margin.Right>toolbar.ClientSize.Width-toolbar.Padding.Right || control.Bottom+control.Margin.Bottom>toolbar.ClientSize.Height-toolbar.Padding.Bottom)throw new Exception("A full toolbar action was clipped: "+control.Text);
                 int bottom=controls.Max(control=>control.Bottom+control.Margin.Bottom)+toolbar.Padding.Bottom;
                 if(Math.Abs(toolbar.Height-bottom)>1)throw new Exception("Full toolbar retained empty rows: height="+toolbar.Height+", used="+bottom);
@@ -374,7 +377,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(false);assertToolbar();
             if(tasks.SelectedNode!=normalLeaf || normalLeaf.Parent!=child || !child.IsExpanded || tasks.TopNode!=top || taskLoadVersion!=loads || simpleOutstandingVersion!=reads || TaskViewContext()!=context)throw new Exception("Mode switching refreshed data or lost shared tree state");
             if(Bounds!=fullArea || !fullAddOutstanding.Visible)throw new Exception("Mode switching lost full bounds or actions: expected="+fullArea+" actual="+Bounds+" action="+fullAddOutstanding.Visible+" screen="+Screen.FromRectangle(Bounds).WorkingArea);
-            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; task-tree expand/collapse; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts with one compact toolbar row and no clipped actions; removed toolbar actions absent; mode switches retained.");
+            File.WriteAllText(Path.Combine(data,"floating-full-actions-test.txt"),"PASS: exactly four bottom actions for progress, new item, new task and new outstanding; task-tree expand/collapse; direct outstanding targets; shared node identity, selection, scroll and expansion across layout-only switches without new reads; busy/empty selection guards; compact/wide layouts with centered wrapped toolbar rows and no clipped actions; removed toolbar actions absent; mode switches retained.");
             File.WriteAllText(Path.Combine(data,"floating-simple-outstanding-actions-test.txt"),"PASS: simple mode exposes full and minimize buttons; task-tree expand/collapse and direct outstanding items remain usable; full and minimize remain available while busy; narrow footer fits; focus preserves viewport.");
         } finally {
             addOutstandingRequested=callback;rendering=true;if(collapsed)ToggleFold();SetSimpleMode(false);tasks.Nodes.Clear();tasks.Nodes.AddRange(originalNodes);
