@@ -44,18 +44,10 @@
 							<TeamMemberIdentity :username="member" />
 						</span>
 					</div>
-					<p
-						v-if="binding.last_sync"
-						class="has-text-grey"
-					>
-						最近成功同步：{{ formatDisplayDate(binding.last_sync) }}
-					</p>
-					<p
-						v-if="binding.last_error"
-						class="notification is-warning is-light"
-					>
-						同步未完成：{{ binding.last_error }}。本地保存的内容仍保留，请根据错误检查后重试。
-					</p>
+					<TeamSyncDetails
+						:binding="binding"
+						:related-bindings="teamStore.status.bindings"
+					/>
 					<XButton
 						variant="secondary"
 						:loading="syncing"
@@ -304,7 +296,7 @@ import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import TeamPermissionEditor from '@/components/tasks/partials/TeamPermissionEditor.vue'
 import type {TaskTraceTeamMemberCandidate} from '@/client/generated'
-import {formatDisplayDate} from '@/helpers/time/formatDate'
+import TeamSyncDetails from './TeamSyncDetails.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {error, getErrorText, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
@@ -490,8 +482,15 @@ async function syncNow() {
 async function openPermissions() {
 	if (openingPermissions.value) return
 	openingPermissions.value = true
+	const taskId = props.taskId
+	const shareId = binding.value?.share_id
 	try {
-		await teamStore.sync()
+		const result = await teamStore.sync()
+		if (props.taskId !== taskId) return
+		if (!result.bindings?.some(item => item.share_id === shareId)) {
+			error({message: '没有找到该任务的协作关系，请检查任务链接。'})
+			return
+		}
 		showPermissions.value = true
 	} catch (cause) {
 		error(cause)

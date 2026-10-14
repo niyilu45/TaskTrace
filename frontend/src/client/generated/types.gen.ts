@@ -3020,6 +3020,10 @@ export type TaskTraceTeamBindingStatus = {
      * Task and outstanding-item permissions visible to the current user.
      */
     readonly permission_targets?: Array<TaskTraceTeamPermissionTarget> | null;
+    /**
+     * The actual directory used by this installation for this collaboration binding, not its public link alias.
+     */
+    readonly repository?: string;
     root_task_id?: number;
     /**
      * The local title of the shared task root.

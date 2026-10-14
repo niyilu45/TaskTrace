@@ -216,6 +216,7 @@ type TaskTraceTeamResolveRequest struct {
 }
 
 type TaskTraceTeamBindingStatus struct {
+	Repository           string                          `json:"repository" readOnly:"true" doc:"The actual directory used by this installation for this collaboration binding, not its public link alias."`
 	ShareID              string                          `json:"share_id"`
 	Owner                string                          `json:"owner"`
 	Members              []string                        `json:"members"`
@@ -3297,7 +3298,8 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 		}
 		conflicts := taskTraceTeamConflictPreviews(&binding)
 		row := TaskTraceTeamBindingStatus{
-			ShareID: binding.ShareID, Owner: binding.Owner, Members: manifest.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle,
+			Repository: binding.Repository,
+			ShareID:    binding.ShareID, Owner: binding.Owner, Members: manifest.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle,
 			TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(manifest.Members),
 			Notify: binding.Notify, CanManagePermissions: canManagePermissions,
 			PermissionTargets: permissionTargets,

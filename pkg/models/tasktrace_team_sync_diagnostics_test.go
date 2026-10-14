@@ -48,6 +48,8 @@ func TestTaskTraceTeamSyncAccountAliases(t *testing.T) {
 				status, err := TaskTraceTeamSync(sync, actor)
 				require.NoError(t, err)
 				require.Empty(t, status.Bindings[0].LastError)
+				require.Equal(t, repository, status.Bindings[0].Repository)
+				require.Equal(t, binding.ShareID, status.Bindings[0].ShareID)
 				require.NoError(t, sync.Commit())
 				require.NoError(t, sync.Close())
 			}

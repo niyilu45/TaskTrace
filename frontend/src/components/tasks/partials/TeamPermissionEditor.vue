@@ -24,6 +24,12 @@
 					@click="$emit('close')"
 				/>
 			</header>
+			<div class="permission-card__sync">
+				<TeamSyncDetails
+					:related-bindings="teamStore.status.bindings"
+					:binding="binding"
+				/>
+			</div>
 
 			<div
 				v-if="targets.length"
@@ -167,6 +173,7 @@ import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 
 import XButton from '@/components/input/Button.vue'
 import TeamMemberIdentity from './TeamMemberIdentity.vue'
+import TeamSyncDetails from './TeamSyncDetails.vue'
 import type {
 	TaskTraceTeamBindingStatus,
 	TaskTraceTeamPermissionTarget,
@@ -375,6 +382,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', closeOnEscape))
 	justify-content: flex-end;
 	border-block-start: 1px solid var(--grey-200);
 	border-block-end: 0;
+}
+
+.permission-card__sync {
+	flex-shrink: 0;
+	max-block-size: 40vh;
+	overflow: auto;
+	padding: .75rem 1.25rem;
 }
 
 .permission-card__body {
