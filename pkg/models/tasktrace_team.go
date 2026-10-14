@@ -2330,11 +2330,12 @@ func taskTraceTeamPruneMissingTaskMappings(s *xorm.Session, binding *TaskTraceTe
 	return nil
 }
 
-func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, actor string) error {
+//nolint:gocyclo // Existing field merge; reconnection only supplies its previously observed snapshot.
+func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, actor string, previousOverride ...*TaskTraceTeamSnapshot) error {
 	if err := taskTraceTeamValidateBinding(binding, actor); err != nil {
 		return fmt.Errorf("validate team membership: %w", err)
 	}
-	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID)
+	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID, previousOverride...)
 	if err != nil {
 		return err
 	}
@@ -2862,8 +2863,8 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	if err != nil {
 		return nil, err
 	}
-	if taskTraceTeamFindBinding(&state, link.ShareID) != nil {
-		return nil, errors.New("this team task has already been imported")
+	if existing := taskTraceTeamFindBinding(&state, link.ShareID); existing != nil {
+		return taskTraceTeamReconnectBinding(s, a, &state, existing, repository, link, manifest, u.Username)
 	}
 	binding := TaskTraceTeamBinding{ShareID: link.ShareID, Repository: repository, Secret: link.Secret, Owner: manifest.Owner, Members: manifest.Members, ProjectID: request.ProjectID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
 	snapshots, err := taskTraceTeamReadSnapshots(&binding)

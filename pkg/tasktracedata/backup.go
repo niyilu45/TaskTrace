@@ -280,6 +280,9 @@ func runBackup(now time.Time) (TaskTraceBackupRunResult, error) {
 	if err = copyDirectoryFiltered(teamDataRoot(), filepath.Join(staging, "teamData"), nil); err != nil {
 		return TaskTraceBackupRunResult{}, fmt.Errorf("copy team data: %w", err)
 	}
+	if err = backupBoundLocalTeamShares(filepath.Join(staging, "data"), filepath.Join(staging, "teamData"), backupRoot); err != nil {
+		return TaskTraceBackupRunResult{}, fmt.Errorf("copy active collaboration data: %w", err)
+	}
 	digest, err := directoryDigest(staging)
 	if err != nil {
 		return TaskTraceBackupRunResult{}, fmt.Errorf("calculate backup digest: %w", err)

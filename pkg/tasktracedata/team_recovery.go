@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func countTeamShares(root string) (int, error) {
@@ -57,8 +58,10 @@ func rawString(raw json.RawMessage) string {
 	return value
 }
 
-// Only relocate bindings whose matching, authenticated repository was copied.
-// Unrelated remote repositories and all opaque sync state remain untouched.
+// Preserve live collaboration endpoints when restoring personal data. A backup
+// copy is not a replacement network repository: other members still use the
+// original endpoint. Only relocate unavailable local repositories whose copied
+// manifest matches the original binding.
 func rebaseImportedTeamBindings(data, team, destination string) error {
 	path := filepath.Join(data, "team-sync.json")
 	state, err := readRecoveryJSON(path)
@@ -94,6 +97,13 @@ func rebaseImportedTeamBindings(data, team, destination string) error {
 		if rawString(manifest["share_id"]) != id || secret == "" || rawString(manifest["token_hash"]) != hex.EncodeToString(digest[:]) {
 			return fmt.Errorf("team task %s does not match the selected personal collaboration data", id)
 		}
+		keep, keepErr := keepRecoveryTeamRepository(binding)
+		if keepErr != nil {
+			return keepErr
+		}
+		if keep {
+			continue
+		}
 		binding["repository"] = destinationJSON
 		delete(binding, "last_error")
 		changed = true
@@ -110,4 +120,76 @@ func rebaseImportedTeamBindings(data, team, destination string) error {
 		return err
 	}
 	return writeFileAtomic(path, content, 0o600)
+}
+
+// Network connections remain network connections even while disconnected. Do
+// not probe UNC paths during recovery (Windows can block for a long timeout).
+func keepRecoveryTeamRepository(binding map[string]json.RawMessage) (bool, error) {
+	repository := strings.TrimSpace(rawString(binding["repository"]))
+	if strings.HasPrefix(repository, `\\`) || strings.HasPrefix(repository, "//") {
+		return true, nil
+	}
+	if repository == "" {
+		return false, nil
+	}
+	id := rawString(binding["share_id"])
+	manifest, err := readRecoveryJSON(filepath.Join(repository, "tasks", id, "manifest.json"))
+	if err != nil {
+		return false, fmt.Errorf("check original collaboration repository %s: %w", repository, err)
+	}
+	if manifest == nil {
+		return false, nil
+	}
+	digest := sha256.Sum256([]byte(rawString(binding["secret"])))
+	if rawString(manifest["share_id"]) != id || rawString(manifest["token_hash"]) != hex.EncodeToString(digest[:]) {
+		return false, fmt.Errorf("original collaboration repository for %s has changed identity; restore must not create a separate collaboration", id)
+	}
+	return true, nil
+}
+
+// A restored personal dataset can intentionally keep a live local repository
+// outside the new default imports directory. Back up that binding's actual
+// data instead of the stale copy which happens to live under the default root.
+func backupBoundLocalTeamShares(data, team, backupDirectory string) error {
+	state, err := readRecoveryJSON(filepath.Join(data, "team-sync.json"))
+	if err != nil || state == nil {
+		return err
+	}
+	var bindings []map[string]json.RawMessage
+	if len(state["bindings"]) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(state["bindings"], &bindings); err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		repository, id := rawString(binding["repository"]), rawString(binding["share_id"])
+		if repository == "" || strings.HasPrefix(repository, `\\`) || strings.HasPrefix(repository, "//") || samePath(repository, teamDataRoot()) {
+			continue
+		}
+		if id == "" || !filepath.IsLocal(id) || filepath.Base(id) != id || id == "." {
+			continue
+		}
+		live, err := keepRecoveryTeamRepository(binding)
+		if err != nil {
+			return err
+		}
+		if !live {
+			continue
+		}
+		source := filepath.Join(repository, "tasks", id)
+		if pathContains(source, backupDirectory) {
+			return fmt.Errorf("backup directory cannot be inside active collaboration data %s", source)
+		}
+		target := filepath.Join(team, "tasks", id)
+		// target is a validated single share ID inside this backup's staging
+		// directory; never remove anything from the user's live repositories.
+		if err := os.RemoveAll(target); err != nil {
+			return err
+		}
+		if err := copyDirectoryFiltered(source, target, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -47,7 +47,7 @@ type taskTraceTeamSyncJournal struct {
 	Previous   *TaskTraceTeamSnapshot `json:"previous,omitempty"`
 }
 
-func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, actor, device string) (*TaskTraceTeamSyncCheckpoint, *TaskTraceTeamSnapshot, error) {
+func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, actor, device string, previousOverride ...*TaskTraceTeamSnapshot) (*TaskTraceTeamSyncCheckpoint, *TaskTraceTeamSnapshot, error) {
 	if !s.IsInTx() {
 		return nil, nil, errors.New("team synchronization requires a database transaction")
 	}
@@ -79,7 +79,12 @@ func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, acto
 	} else if !os.IsNotExist(err) {
 		return nil, nil, err
 	}
-	if !recovered && (binding.LastSnapshotHash != "" || !binding.LastSync.IsZero()) {
+	if !recovered && len(previousOverride) > 0 {
+		// Reconnecting to a copied repository must compare against the local
+		// history actually observed at the old endpoint, not a different copy's
+		// snapshot that may contain comments this installation has never seen.
+		previous = previousOverride[0]
+	} else if !recovered && (binding.LastSnapshotHash != "" || !binding.LastSync.IsZero()) {
 		var stored TaskTraceTeamSnapshot
 		if err := taskTraceTeamReadJSON(taskTraceTeamSnapshotPath(binding, actor, device), &stored); err == nil {
 			previous = &stored

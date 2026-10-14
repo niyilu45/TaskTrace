@@ -213,7 +213,7 @@
 						placeholder="粘贴以 tasktrace-team:// 开头的链接"
 					/>
 					<p class="help">
-						链接只会导入共享任务及其子任务，不会导入对方的父任务或其他事项。
+						链接只会导入共享任务及其子任务。相同协作标识的任务已存在时，会更新同步地址并合并本地修改，保留原来的任务位置。
 					</p>
 				</div>
 				<div class="field">
@@ -228,7 +228,7 @@
 						placeholder="\\\\10.143.58.8\\teamData"
 					>
 					<p class="help">
-						正常情况下无需填写。如果链接里的电脑名无法访问，可填写资源管理器中能打开的完整 teamData 地址。
+						正常情况下无需填写。如果链接里的电脑名无法访问，可填写所属人提供的完整共享地址；若包含 imports 子目录，需一并保留。
 					</p>
 				</div>
 				<div class="field">
@@ -471,7 +471,7 @@ async function importTask() {
 	}
 	try {
 		await teamStore.importLink(link.value.trim(), targetProject.value.id, repositoryOverride.value)
-		success({message: '团队任务已导入，后续修改会自动同步。'})
+		success({message: '协作连接已同步。新任务已导入；已有任务保留原位置。'})
 		closeImport()
 	} catch (cause) {
 		error(cause)

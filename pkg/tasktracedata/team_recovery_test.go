@@ -171,3 +171,74 @@ func TestBackupRestoresTeamRepositoryAndBindingsTogether(t *testing.T) {
 	require.Equal(t, result.TeamDataDirectory, rawString(bindings[0]["repository"]))
 	require.FileExists(t, filepath.Join(result.TeamDataDirectory, "tasks/shared-task/attachments/image"))
 }
+
+func TestDataRecoveryPreservesLiveAndNetworkConnections(t *testing.T) {
+	for _, network := range []bool{false, true} {
+		name := "live-local"
+		if network {
+			name = "disconnected-network"
+		}
+		t.Run(name, func(t *testing.T) {
+			recoveryEnvironment(t)
+			data, team, live := t.TempDir(), t.TempDir(), t.TempDir()
+			createRecoveryDatabase(t, data, 2)
+			createRecoveryTeam(t, data, team)
+			originalManifest := requireFile(t, filepath.Join(team, "tasks/shared-task/manifest.json"))
+			liveManifest := filepath.Join(live, "tasks/shared-task/manifest.json")
+			require.NoError(t, os.MkdirAll(filepath.Dir(liveManifest), 0o700))
+			require.NoError(t, os.WriteFile(liveManifest, originalManifest, 0o600))
+			repository := live
+			if network {
+				repository = `\\unavailable-server\teamData`
+			}
+			state, err := readRecoveryJSON(filepath.Join(data, "team-sync.json"))
+			require.NoError(t, err)
+			var bindings []map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(state["bindings"], &bindings))
+			bindings[0]["repository"], err = json.Marshal(repository)
+			require.NoError(t, err)
+			state["bindings"], err = json.Marshal(bindings)
+			require.NoError(t, err)
+			before, err := json.Marshal(state)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(data, "team-sync.json"), before, 0o600))
+			result, err := Import(TaskTraceDataImportRequest{DataDirectory: data, TeamDataDirectory: team})
+			require.NoError(t, err)
+			// Personal data is restored, but the established collaboration endpoint
+			// and every opaque sync field remain byte-for-byte unchanged.
+			require.Equal(t, before, requireFile(t, filepath.Join(result.DataDirectory, "team-sync.json")))
+			require.Equal(t, originalManifest, requireFile(t, liveManifest))
+			require.FileExists(t, filepath.Join(result.TeamDataDirectory, "tasks/shared-task/attachments/image"))
+		})
+	}
+}
+
+func TestBackupIncludesPreservedLocalRepository(t *testing.T) {
+	recoveryEnvironment(t)
+	original := t.TempDir()
+	createRecoveryTeam(t, dataRoot(), original)
+	state, err := readRecoveryJSON(filepath.Join(dataRoot(), "team-sync.json"))
+	require.NoError(t, err)
+	var bindings []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(state["bindings"], &bindings))
+	bindings[0]["repository"], err = json.Marshal(original)
+	require.NoError(t, err)
+	state["bindings"], err = json.Marshal(bindings)
+	require.NoError(t, err)
+	content, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dataRoot(), "team-sync.json"), content, 0o600))
+	first, err := runBackup(time.Now())
+	require.NoError(t, err)
+	require.Equal(t, "image-bytes", string(requireFile(t, filepath.Join(first.Directory, "teamData/tasks/shared-task/attachments/image"))))
+	updated := filepath.Join(original, "tasks/shared-task/attachments/new-image")
+	require.NoError(t, os.WriteFile(updated, []byte("latest live image"), 0o600))
+	second, err := runBackup(time.Now().Add(time.Second))
+	require.NoError(t, err)
+	require.False(t, second.Skipped)
+	require.Equal(t, "latest live image", string(requireFile(t, filepath.Join(second.Directory, "teamData/tasks/shared-task/attachments/new-image"))))
+	// Reject recursive backup targets even when they are in a retained repository.
+	staging := t.TempDir()
+	require.ErrorContains(t, backupBoundLocalTeamShares(dataRoot(), staging, filepath.Join(original, "tasks/shared-task/backups")), "cannot be inside")
+	require.FileExists(t, updated)
+}
