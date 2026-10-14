@@ -194,6 +194,24 @@ internal sealed partial class FloatingWindow {
         Console.WriteLine("PASS branch menu: partial/Ctrl+A selections, nested/overlapping tasks, filtered scope, local preference reload, full/simple parity, selection retention, leaf/empty/flat disabled states; no API writes.");
     }
 
+    internal async Task TestStateMenu(SelectionApi api) {
+        api.Tasks[51]=new Dictionary<string,object>{{"id",51},{"title","State task"},{"done",false},{"status","to-do"},{"percent_done",0.4}};
+        var task=SelectionTask(51,"State task");tasks.Nodes.Clear();tasks.Nodes.Add(task);taskSurface.Rebuild(false);taskSurface.SelectItem(task,Keys.None,MouseButtons.Left);
+        taskCache[51]=api.Tasks[51];using(var menu=CreateStateMenu()) {
+            RefreshStateMenu(menu);Check(menu.DropDownItems.Count==4,"State menu must have four direct actions");
+            foreach(string state in displayStates) {
+                var result=await SaveSelectedStates(new List<TreeNode>{task},null,null,state);
+                Check(result.Failures.Count==0&&TaskStatusValue(api.Tasks[51])==state&&Convert.ToBoolean(api.Tasks[51]["done"])==(state=="done"),"State action did not persist "+state);
+                Check(Convert.ToDouble(api.Tasks[51]["percent_done"])==0.4,"State action erased manual completion");
+                RefreshStateMenu(menu);Check(menu.DropDownItems.OfType<ToolStripMenuItem>().Single(item=>item.Checked).Tag.ToString()==state,"Menu checkmark does not reflect saved state");
+                int before=api.Writes.Count;await SaveSelectedStates(new List<TreeNode>{task},null,null,state);Check(api.Writes.Count==before,"Repeated status creates duplicate writes");
+            }
+            var leaf=SelectionLeaf(51,"x","Outstanding");tasks.Nodes.Add(leaf);taskSurface.Rebuild(false);taskSurface.SelectItem(leaf,Keys.Control,MouseButtons.Left);
+            RefreshStateMenu(menu);Check(menu.Text=="批量设置状态"&&menu.DropDownItems.OfType<ToolStripMenuItem>().Where(item=>item.Enabled).Select(item=>item.Tag.ToString()).SequenceEqual(new[]{"to-do","done"}),"Mixed selection offers unsupported outstanding statuses");
+        }
+        Check(!tasks.ContextMenuStrip.Items.OfType<ToolStripMenuItem>().Any(item=>item.Text.Contains("设置任务状态")||item.Text.Contains("设置完成状态")),"Duplicate modal status menu remains");
+        Console.WriteLine("PASS direct four-state menu, saved checkmarks, batch compatibility, no-op writes, preserved manual completion and no duplicate status action.");
+    }
     internal async Task TestBatchWrites(SelectionApi api) {
         for(long id=1;id<=3;id++)api.Tasks[id]=new Dictionary<string,object>{{"id",id},{"title","Task "+id},{"done",false},{"priority",3},{"description","Keep description"}};
         string list="<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul><li data-id=\"a\" data-priority=\"7\">Alpha<img src=\"/image/a\"><aside data-tasktrace-outstanding-note=\"true\" hidden>Keep note</aside></li><li data-id=\"b\" data-priority=\"7\">Beta</li><li data-id=\"keep\" data-priority=\"4\" data-reminder=\"2030-01-01T12:00:00Z\">Do not change</li></ul>";
@@ -220,7 +238,7 @@ internal static class FloatingMultiSelectionTests {
             using(var api=new SelectionApi())using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
                 int result=0;window.ShowInTaskbar=false;window.Opacity=0;
                 window.Shown+=async delegate {
-                    try{window.TestSelectionAndColors();window.TestBranchMenu(api);window.TestTaskDragRedirect(api);await window.TestBatchWrites(api);}
+                    try{window.TestSelectionAndColors();window.TestBranchMenu(api);window.TestTaskDragRedirect(api);await window.TestBatchWrites(api);await window.TestStateMenu(api);}
                     catch(Exception error){Console.Error.WriteLine(error);result=1;}finally{window.Close();}
                 };
                 Application.Run(window);if(result!=0)return result;

@@ -73,7 +73,7 @@ test('overview reparents a subtree and restores it to the project root without m
 	await expect(row(2)).toHaveAttribute('data-depth', '0')
 	expect(await parents(2)).toEqual([])
 	await page.unroute('**/api/v2/tasks/2/move')
-	await page.getByRole('combobox', {name: '任务显示范围'}).selectOption('all')
+	await page.getByRole('group', {name: '任务显示范围'}).getByRole('checkbox', {name: '全选', exact: true}).check()
 	await expect(row(1)).toHaveAttribute('data-depth', '0')
 	await expect(row(4)).toHaveAttribute('data-depth', '1')
 	await page.screenshot({path: testInfo.outputPath('overview-drag-desktop.png'), fullPage: true})

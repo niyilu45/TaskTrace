@@ -1,3 +1,5 @@
+import {legacyTaskStatusSelection, taskMatchesStatuses} from './taskStatusFilter'
+import type {TaskStatus} from '@/types/ITaskStatus'
 import type {Task, TaskTraceTeamBindingStatus} from '@/client/generated'
 export type ProgressTask = Task & {id: number}
 export type ProgressRow = {task: ProgressTask, depth: number}
@@ -69,16 +71,17 @@ export async function queueProgressRead<T>(read: () => Promise<T>): Promise<T> {
 }
 
 // Keep the ancestor chain when filtering, then hide only collapsed descendants.
-export function visibleProgressRows(rows: ProgressRow[], scope: string, search: string, collapsed: Set<number>, eligibleTaskIds: ReadonlySet<number> | null = null) {
+export function visibleProgressRows(rows: ProgressRow[], scope: string | readonly TaskStatus[], search: string, collapsed: Set<number>, eligibleTaskIds: ReadonlySet<number> | null = null) {
 	const included = new Set<number>()
 	const ancestors: number[] = []
 	const query = search.trim().toLocaleLowerCase()
+	const statuses = typeof scope === 'string' ? legacyTaskStatusSelection(scope) : scope
 	for (const row of rows) {
 		ancestors.length = row.depth
 		ancestors[row.depth] = row.task.id
 		if ((eligibleTaskIds === null || eligibleTaskIds.has(row.task.id)) &&
 			(!query || row.task.title?.toLocaleLowerCase().includes(query)) &&
-			(scope === 'all' || (scope === 'done' ? row.task.done : !row.task.done))) {
+			taskMatchesStatuses(row.task, statuses)) {
 			ancestors.forEach(id => included.add(id))
 		}
 	}

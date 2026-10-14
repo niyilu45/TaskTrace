@@ -6,18 +6,11 @@
 		<h2 class="mbe-2 title">
 			{{ pageTitle }}
 		</h2>
-		<label class="completion-filter mbe-3">
-			任务显示范围
-			<select
-				v-model="completionScope"
-				class="input"
-				aria-label="任务显示范围"
-			>
-				<option value="pending">未完成</option>
-				<option value="all">全部（含已完成）</option>
-				<option value="done">已完成</option>
-			</select>
-		</label>
+		<TaskStatusFilter
+			v-model="selectedStatuses"
+			label="任务显示范围"
+			class="mbe-3"
+		/>
 		<Message
 			v-if="filteredLabels.length > 0"
 			class="label-filter-info mbe-2"
@@ -114,6 +107,9 @@
 </template>
 
 <script setup lang="ts">
+import TaskStatusFilter from '@/components/tasks/partials/TaskStatusFilter.vue'
+import {useTaskStatusFilter} from '@/composables/useTaskStatusFilter'
+import {taskStatusFilterExpression} from '@/helpers/taskStatusFilter'
 import {computed, ref, watch, watchEffect, onBeforeUnmount} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {useI18n} from 'vue-i18n'
@@ -157,12 +153,8 @@ const emit = defineEmits<{
 	'tasksLoaded': true,
 	'clearLabelFilter': void,
 }>()
-const completionScope = ref<'pending' | 'all' | 'done'>('pending')
-try {
-	const stored = localStorage.getItem('tasktrace-completion-scope')
-	if (stored === 'all' || stored === 'done') completionScope.value = stored
-} catch { /* Keep the default if browser storage is unavailable. */ }
-watch(completionScope, value => { try { localStorage.setItem('tasktrace-completion-scope', value) } catch { /* Current selection still applies. */ } })
+const selectedStatuses = useTaskStatusFilter('tasktrace:overview-statuses', () => localStorage.getItem('tasktrace-completion-scope') || 'pending')
+const legacyPendingScope = computed(() => taskStatusFilterExpression(selectedStatuses.value) === 'done = false')
 const authStore = useAuthStore()
 const taskStore = useTaskStore()
 const projectStore = useProjectStore()
@@ -194,7 +186,7 @@ const filteredLabels = computed(() => {
 })
 
 const savedFilterIgnored = computed(() => {
-	return (filteredLabels.value.length > 0 || completionScope.value !== 'pending')
+	return (filteredLabels.value.length > 0 || !legacyPendingScope.value)
 		&& filterIdUsedOnOverview.value
 		&& typeof projectStore.projects[filterIdUsedOnOverview.value] !== 'undefined'
 })
@@ -273,7 +265,7 @@ async function loadPendingTasks(from: Date|string, to: Date|string, filterId: nu
 	const params: TaskFilterParams = {
 		sort_by: ['due_date', 'id'],
 		order_by: ['asc', 'desc'],
-		filter: completionScope.value === 'pending' ? 'done = false' : completionScope.value === 'done' ? 'done = true' : '',
+		filter: taskStatusFilterExpression(selectedStatuses.value),
 		filter_include_nulls: props.showNulls,
 		filter_timezone: authStore.settings.timezone,
 		s: '',
@@ -299,7 +291,7 @@ async function loadPendingTasks(from: Date|string, to: Date|string, filterId: nu
 	}
 
 	let projectId = null
-	if (completionScope.value === 'pending' && showAll.value && filterId && typeof projectStore.projects[filterId] !== 'undefined'
+	if (legacyPendingScope.value && showAll.value && filterId && typeof projectStore.projects[filterId] !== 'undefined'
 		&& (!props.labelIds || props.labelIds.length === 0)) {
 		projectId = filterId
 	}
@@ -340,7 +332,7 @@ function updateTasks() {
 }
 // Keep sidebar setting changes from reloading tasks.
 watch(
-	[() => props.dateFrom, () => props.dateTo, filterIdUsedOnOverview, () => props.showOverdue, () => props.showNulls, completionScope, () => props.labelIds],
+	[() => props.dateFrom, () => props.dateTo, filterIdUsedOnOverview, () => props.showOverdue, () => props.showNulls, selectedStatuses, () => props.labelIds],
 	([from, to, filterId]) => loadPendingTasks(from, to, filterId),
 	{immediate: true},
 )
@@ -348,13 +340,6 @@ watchEffect(() => setTitle(pageTitle.value))
 </script>
 
 <style lang="scss" scoped>
-.completion-filter {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: .75rem;
-    select { max-inline-size: 13rem; }
-}
 .tasks {
 	list-style: none;
 	margin: 0;

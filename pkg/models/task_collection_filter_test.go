@@ -530,3 +530,18 @@ func TestZeroDateFilterBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskTraceStatusFilter(t *testing.T) {
+	for _, status := range []string{"to-do", "doing", "done", "hold"} {
+		t.Run(status, func(t *testing.T) {
+			filters, err := getTaskFiltersFromFilterString("status = '"+status+"'", "UTC")
+			require.NoError(t, err)
+			require.Len(t, filters, 1)
+			assert.Equal(t, "status", filters[0].field)
+			assert.Equal(t, status, filters[0].value)
+		})
+	}
+	_, err := getTaskFiltersFromFilterString("((done = false && status != 'doing' && status != 'hold') || (done = true)) && project_id = 1", "UTC")
+	require.NoError(t, err)
+	require.Error(t, validateTaskField("not_a_task_field"))
+}

@@ -16,10 +16,7 @@
 				placeholder="按名称查找分区"
 				aria-label="查找项目事项"
 			></label>
-			<label>显示 <select
-				v-model="scope"
-				class="input"
-			><option value="all">全部事项</option><option value="pending">未完成</option><option value="done">已完成</option></select></label>
+			<TaskStatusFilter v-model="selectedStatuses" />
 			<div
 				ref="peopleFilter"
 				class="people-filter"
@@ -332,6 +329,8 @@
 </template>
 
 <script setup lang="ts">
+import TaskStatusFilter from '@/components/tasks/partials/TaskStatusFilter.vue'
+import {useTaskStatusFilter} from '@/composables/useTaskStatusFilter'
 import {ref, computed, watch, onBeforeUnmount, nextTick, provide} from 'vue'
 import equal from 'fast-deep-equal'
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
@@ -437,7 +436,7 @@ const tasks = ref<ProgressTask[]>([])
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
-const scope = ref('all')
+const selectedStatuses = useTaskStatusFilter('tasktrace:progress-statuses', () => 'all')
 const activityRange = ref('all')
 const customActivityDays = ref(7)
 const activityDaysInput = ref('7')
@@ -530,7 +529,7 @@ const grouped = computed(() => groupProgressTasks(tasks.value))
 const collapsed = useStorage<number[]>('tasktrace:overview-collapsed', [])
 const collapsedIds = computed(() => new Set(collapsed.value))
 const searchExpanded = ref(new Set<number>())
-const hierarchyFilterActive = computed(() => !!search.value.trim() || scope.value !== 'all' || recentProgressDays.value > 0 || personFilterActive.value)
+const hierarchyFilterActive = computed(() => !!search.value.trim() || selectedStatuses.value.length !== 4 || recentProgressDays.value > 0 || personFilterActive.value)
 function isExpanded(id: number) {
 	return hierarchyFilterActive.value ? !searchExpanded.value.has(id) : !collapsedIds.value.has(id)
 }
@@ -544,14 +543,14 @@ function toggle(id: number) {
 	collapsed.value = collapsedIds.value.has(id) ? collapsed.value.filter(value => value !== id) : [...collapsed.value, id]
 }
 const groups = computed(() => grouped.value.map(group => {
-	const matching = visibleProgressRows(group.rows, scope.value, search.value, new Set(), eligibleTaskIds.value)
+	const matching = visibleProgressRows(group.rows, selectedStatuses.value, search.value, new Set(), eligibleTaskIds.value)
 	const visible = visibleProgressRows(matching, 'all', '', hierarchyFilterActive.value ? searchExpanded.value : collapsedIds.value)
 	return {...group, matching, visibleRows: visible.filter(row => row.depth > 0)}
 }).filter(group => group.matching.length))
 const parents = computed(() => new Set(groups.value.flatMap(group => group.matching.filter((row, i, rows) => rows[i + 1]?.depth > row.depth).map(row => row.task.id))))
-watch([search, scope, recentProgressDays, selectedPersonKeys], () => { searchExpanded.value = new Set() })
+watch([search, selectedStatuses, recentProgressDays, selectedPersonKeys], () => { searchExpanded.value = new Set() })
 const visibleGroups = computed(() => groups.value.slice((page.value - 1) * 20, page.value * 20))
-watch([search, scope, recentProgressDays, selectedPersonKeys], () => { page.value = 1 })
+watch([search, selectedStatuses, recentProgressDays, selectedPersonKeys], () => { page.value = 1 })
 
 async function loadProgressActivity(sourceTasks = tasks.value, changedTaskIds?: ReadonlySet<number>) {
 	if (recentProgressDays.value <= 0) return

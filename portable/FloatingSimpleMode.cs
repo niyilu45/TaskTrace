@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -198,7 +198,7 @@ internal sealed partial class FloatingWindow {
             else if(projects.SelectedItem==null)simpleEmpty.Text="暂无项目。";
             else if(search.Text.Trim().Length>0)simpleEmpty.Text="搜索无匹配事项。";
             else if(PriorityFilterActive)simpleEmpty.Text=PriorityFilterEmptyMessage;
-            else if(!showCompleted.Checked)simpleEmpty.Text="暂无未完成事项。";
+            else if(SelectedDisplayStatuses().Length<4)simpleEmpty.Text="暂无符合显示选项的事项。";
             else simpleEmpty.Text="当前项目暂无事项。";
             simpleEmpty.BringToFront();
         }
@@ -270,7 +270,7 @@ internal sealed partial class FloatingWindow {
             SetSimpleMode(true);treeRestoreFull.PerformClick();if(simpleMode)throw new Exception("Simple context menu failed to restore full mode");
             SetSimpleMode(true);HideToTray();trayRestoreFull.PerformClick();if(simpleMode || !Visible || ShowInTaskbar)throw new Exception("Tray recovery failed for hidden simple mode");
             search.Text="";showCompleted.Checked=false;SetSimpleMode(true);UpdateSimpleModeState();
-            if(!simpleEmpty.Text.Contains("未完成"))throw new Exception("Completed-only filter has no empty-state explanation");
+            if(!simpleEmpty.Text.Contains("显示选项"))throw new Exception("Completed-only filter has no empty-state explanation");
             showCompleted.Checked=true;UpdateSimpleModeState();if(!simpleEmpty.Text.Contains("暂无事项"))throw new Exception("Empty project has no explanation");
             var sourceProject=projects.SelectedItem as Project;if(sourceProject!=null){SaveBounds();var saved=ReadObject(File.ReadAllText(Path.Combine(data,"floating-window.json")));if(Convert.ToInt64(saved["projectId"])!=sourceProject.Id)throw new Exception("Selected project was not persisted");}
             SetSimpleMode(false);

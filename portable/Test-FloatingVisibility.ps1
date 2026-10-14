@@ -107,6 +107,38 @@ internal sealed partial class FloatingWindow {
             throw new Exception("An attribute-looking phrase in a normal comment became a shared list.");
         Console.WriteLine("PASS: new synchronized children are visible, manual collapse survives; legacy lists, nested bullets, images, memo, metadata and ordinary heading mentions work in full/simple/tree/flat modes.");
     }
+    internal async Task TestStatusFilters(VisibilityApi api) {
+        visiblePriorities.Clear();visiblePriorities.UnionWith(Enumerable.Range(0,10));search.Text="";completedHideDelayMinutes=0;
+        api.Tasks[0]["status"]="hold";api.Tasks[1]["status"]="doing";api.Tasks[2]["status"]="to-do";
+        api.Tasks[3]["status"]="done";api.Tasks[3]["done"]=true;api.Tasks[4]["status"]="hold";api.Tasks[5]["status"]="doing";
+        for(int mask=0;mask<16;mask++) {
+            var selected=displayStates.Where((state,index)=>(mask&(1<<index))!=0).ToArray();SetDisplayStatuses(selected);
+            foreach(bool simple in new[]{false,true}) {
+                simpleMode=simple;await ReadVisibility();
+                Func<long,bool> exists=id=>tasks.Nodes.Find(id.ToString(),true).Any();
+                if(exists(4)!=selected.Contains("done")||exists(5)!=selected.Contains("hold")||exists(6)!=selected.Contains("doing"))
+                    throw new Exception("Independent task status filters failed for mask "+mask);
+                if(HasVisibleLeaf("child-leaf")!=selected.Contains("to-do"))throw new Exception("Outstanding status filter disagrees with task filter.");
+                if(selected.Contains("to-do")&&(!exists(1)||!exists(2)||!exists(3)))throw new Exception("Matched child lost its ancestors.");
+                if(mask==0&&tasks.Nodes.Count!=0)throw new Exception("Explicit empty status filter still shows items.");
+            }
+        }
+        simpleMode=false;SetDisplayStatuses(new[]{"doing"});await ReadVisibility();
+        completedHideDelayMinutes=5;RememberTaskCompletion(6,true);api.Tasks[5]["done"]=true;api.Tasks[5]["status"]="done";
+        await ReadVisibility();if(!tasks.Nodes.Find("6",true).Any())throw new Exception("Newly completed doing task lost its hide delay.");
+        SetDisplayStatuses(new string[0]);await ReadVisibility();if(tasks.Nodes.Count!=0)throw new Exception("Completion grace overrides explicit empty selection.");
+        SetDisplayStatuses(new[]{"hold","doing"});SaveBounds();SetDisplayStatuses(displayStates);LoadBounds();
+        if(!SelectedDisplayStatuses().SequenceEqual(new[]{"doing","hold"}))throw new Exception("Status preferences did not survive reload.");
+        SetDisplayStatuses(new string[0]);SaveBounds();SetDisplayStatuses(displayStates);LoadBounds();
+        if(SelectedDisplayStatuses().Length!=0)throw new Exception("Empty saved selection was reset to defaults.");
+        InitializeDisplayStatusFilter();RefreshDisplayStatusMenu();
+        var all=displayStatusMenu.Items.OfType<ToolStripMenuItem>().First();if(all.CheckState!=CheckState.Unchecked)throw new Exception("All checkbox is not empty.");
+        SetDisplayStatuses(new[]{"to-do"});if(all.CheckState!=CheckState.Indeterminate)throw new Exception("All checkbox does not reflect a partial selection.");
+        SetDisplayStatuses(displayStates);if(all.CheckState!=CheckState.Checked)throw new Exception("All checkbox did not reflect all four states.");
+        api.Tasks[3]["done"]=false;api.Tasks[5]["done"]=false;
+        foreach(var task in api.Tasks)task.Remove("status");completedHideDelayMinutes=0;recentlyCompletedTasks.Clear();recentlyCompletedTaskStates.Clear();
+        Console.WriteLine("PASS all 16 status selections, full/simple parity, ancestor retention, outstanding states, done grace, local preference reload and all/partial/none checkbox states.");
+    }
     internal async Task TestVisibility(VisibilityApi api) {
         await ReadVisibility();
         if(SimpleTaskNodes(tasks.Nodes).Count()!=210 || api.TaskPages!=3 || !HasVisibleLeaf("child-leaf"))throw new Exception("Task/comment pagination dropped entries.");
@@ -158,7 +190,7 @@ internal static class FloatingVisibilityTests {
     [STAThread] static int Main(){
         Application.EnableVisualStyles();var api=new VisibilityApi();int result=0;
         using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
+            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
             Application.Run(app);
         }
         return result;

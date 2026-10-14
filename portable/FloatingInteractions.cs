@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -172,9 +172,8 @@ internal sealed partial class FloatingWindow {
         var setPriority=menu.Items.Add("设置优先级…",null,async delegate{await ShowPriority();});
         var batchPriority=CreateBatchPriorityMenu();menu.Items.Add(batchPriority);
         var setAppearance=CreateAppearanceMenuItem();menu.Items.Add(setAppearance);
-        var completion=CreateCompletionMenu();menu.Items.Add(completion);
+        var completion=CreateStateMenu();menu.Items.Add(completion);
         var progressMenu=CreateProgressMenu();menu.Items.Add(progressMenu);
-        var setStatus=menu.Items.Add("设置任务状态…",null,async delegate{await ShowTaskStatus();});
         var setReminder=menu.Items.Add("设置提醒…",null,delegate{ShowReminderForSelected();});
         var images=menu.Items.Add("查看图片…",null,async delegate{await ShowSelectedImages();});
         var outstanding=menu.Items.Add("管理遗留事项…",null,delegate {long id=SelectedTaskId();if(id>0)ShowOutstanding(id);});
@@ -184,9 +183,9 @@ internal sealed partial class FloatingWindow {
             selectionSummary.Visible=count>1;selectionSummary.Text="已选中 "+count+" 项";
             expandSelected.Enabled=collapseSelected.Enabled=CanSetSelectedBranchesExpanded();
             setPriority.Visible=count<=1;setPriority.Enabled=single;batchPriority.Visible=count>1;
-            RefreshAppearanceMenu(setAppearance);progressMenu.Enabled=count>0;completion.Enabled=count>0;completion.Text=count>1?"批量设置完成状态":"设置完成状态";
-            setStatus.Visible=setReminder.Visible=images.Visible=outstanding.Visible=toRoot.Visible=count<=1;
-            setStatus.Enabled=single&&node.Tag is long;setReminder.Enabled=images.Enabled=outstanding.Enabled=single;
+            RefreshAppearanceMenu(setAppearance);progressMenu.Enabled=count>0;RefreshStateMenu(completion);
+            setReminder.Visible=images.Visible=outstanding.Visible=toRoot.Visible=count<=1;
+            setReminder.Enabled=images.Enabled=outstanding.Enabled=single;
             toRoot.Enabled=single&&node.Tag is long&&taskParents.ContainsKey((long)node.Tag);
         };
         InitializeUndo(menu);
@@ -356,26 +355,6 @@ internal sealed partial class FloatingWindow {
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
             if(saved){await LoadTasks();tasks.RestoreNativeScroll(viewport);}
-        }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
-    }
-
-    async Task ShowTaskStatus(){
-        if(busy || closing)return;var selected=tasks.SelectedNode;
-        if(selected==null || !(selected.Tag is long)){status.Text="请先选中一个任务。";return;}
-        long id=(long)selected.Tag;SetBusy(true);timer.Stop();
-        try {
-            var current=await Api("GET","/tasks/"+id,null);string currentStatus=TaskStatusValue(current);
-            string[] values={"to-do","doing","done","hold"};string[] labels={"待办（to-do）","进行中（doing）","已完成（done）","暂停（hold）"};
-            using(var dialog=DpiDialog(new Form{Text="任务状态 · "+(string)current["title"],Size=new Size(360,205),MinimumSize=new Size(360,205),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})){
-                var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
-                layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-                var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="任务状态"};choice.Items.AddRange(labels);choice.SelectedIndex=Math.Max(0,Array.IndexOf(values,currentStatus));
-                var save=new Button{Text="保存状态",AutoSize=true};bool writing=false;
-                layout.Controls.Add(new Label{Text="选择任务当前所处的状态",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="任务状态说明"});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
-                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{await Api("PATCH","/tasks/"+id,new{status=values[choice.SelectedIndex]});writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"任务状态未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
-                dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
-            }
-            await LoadTasks();
         }catch(Exception e){Error(e);}finally{SetBusy(false);timer.Start();}
     }
 

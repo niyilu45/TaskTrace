@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -178,9 +178,10 @@ internal sealed partial class FloatingWindow : Form {
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
-        projectRow.Controls.Add(projects, 0, 0); projectRow.Controls.Add(showCompleted, 1, 0); projectRow.Controls.Add(singleLine, 2, 0);
+        projectRow.Controls.Add(projects, 0, 0); projectRow.Controls.Add(displayStatusButton, 1, 0); projectRow.Controls.Add(singleLine, 2, 0);
         content.Controls.Add(projectRow, 0, 0);
-        showCompleted.CheckedChanged += async delegate { if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
+        InitializeDisplayStatusFilter();
+        showCompleted.CheckedChanged += async delegate { RefreshDisplayStatusMenu(); if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
         singleLine.CheckedChanged += async delegate { ApplyTaskTreeLayout(); if(!rendering) { SaveBounds(); await Reload(); } };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
         InitializePriorityChoice(entryPriority, defaultPriority);
@@ -1200,6 +1201,7 @@ internal sealed partial class FloatingWindow : Form {
             var saved = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
             if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
+            if(saved.ContainsKey("displayStatuses") && saved["displayStatuses"] is IEnumerable) SetDisplayStatuses(((IEnumerable)saved["displayStatuses"]).Cast<object>().Select(Convert.ToString));
             if(saved.ContainsKey("singleLine")) singleLine.Checked = Convert.ToBoolean(saved["singleLine"]);
             if(saved.ContainsKey("edgeHide")) edgeHideEnabled = Convert.ToBoolean(saved["edgeHide"]);
             var bounds = new Rectangle(Convert.ToInt32(saved["x"]), Convert.ToInt32(saved["y"]), Math.Max(350, Convert.ToInt32(saved["width"])), Math.Max(300, Convert.ToInt32(saved["height"])));
@@ -1209,7 +1211,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, displayStatuses = SelectedDisplayStatuses(), singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {

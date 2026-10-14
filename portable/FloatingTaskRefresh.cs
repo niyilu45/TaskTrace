@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -13,13 +13,16 @@ internal sealed partial class FloatingWindow {
 
     string TaskViewContext() {
         var selected=projects.SelectedItem as Project;
-        return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,showCompleted.Checked,singleLine.Checked,
+        return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,SelectedDisplayStatuses(),singleLine.Checked,
             prioritySort.Checked,completionSort.ToArray(),showCompletion.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
     }
     static string OutstandingCompletionKey(long taskId,string itemId) {return taskId+":"+itemId;}
     void RememberTaskCompletion(long id,bool done) {
-        if(done && completedHideDelayMinutes>0)recentlyCompletedTasks[id]=DateTime.UtcNow;
-        else recentlyCompletedTasks.Remove(id);
+        if(done && completedHideDelayMinutes>0) {
+            recentlyCompletedTasks[id]=DateTime.UtcNow;
+            Dictionary<string,object> previous;string state=taskCache.TryGetValue(id,out previous)?TaskStatusValue(previous):"to-do";
+            recentlyCompletedTaskStates[id]=state=="done"?"to-do":state;
+        } else {recentlyCompletedTasks.Remove(id);recentlyCompletedTaskStates.Remove(id);}
     }
     void RememberOutstandingCompletion(long taskId,string itemId,bool done) {
         string key=OutstandingCompletionKey(taskId,itemId);
@@ -34,18 +37,19 @@ internal sealed partial class FloatingWindow {
         return true;
     }
     bool HideCompletedTask(long id,bool done,ref DateTime nextRefreshUtc) {
-        if(!done){recentlyCompletedTasks.Remove(id);return false;}
+        if(!done){recentlyCompletedTasks.Remove(id);recentlyCompletedTaskStates.Remove(id);return false;}
         if(showCompleted.Checked)return false;
         DateTime completed;
-        if(recentlyCompletedTasks.TryGetValue(id,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
-        recentlyCompletedTasks.Remove(id);return true;
+        string previous;recentlyCompletedTaskStates.TryGetValue(id,out previous);
+        if(MatchesDisplayState(previous??"to-do") && recentlyCompletedTasks.TryGetValue(id,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
+        recentlyCompletedTasks.Remove(id);recentlyCompletedTaskStates.Remove(id);return true;
     }
     bool HideCompletedOutstanding(long taskId,PendingItem item,ref DateTime nextRefreshUtc) {
         string key=OutstandingCompletionKey(taskId,item.Id);
-        if(!item.Done){recentlyCompletedOutstanding.Remove(key);return false;}
+        if(!item.Done){recentlyCompletedOutstanding.Remove(key);return !MatchesDisplayState("to-do");}
         if(showCompleted.Checked)return false;
         DateTime completed;
-        if(recentlyCompletedOutstanding.TryGetValue(key,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
+        if(MatchesDisplayState("to-do") && recentlyCompletedOutstanding.TryGetValue(key,out completed) && KeepRecentlyCompleted(completed,ref nextRefreshUtc))return false;
         recentlyCompletedOutstanding.Remove(key);return true;
     }
     SharedList FilterCompletedOutstanding(long taskId,SharedList source,ref DateTime nextRefreshUtc) {
@@ -212,7 +216,8 @@ internal sealed partial class FloatingWindow {
         var sharedLists=new Dictionary<long,SharedList>();
         foreach(long id in ordered) {
             bool titleMatch=query.Length==0 || Convert.ToString(all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)>=0;
-            bool taskMatch=!HideCompletedTask(id,Convert.ToBoolean(all[id]["done"]),ref nextCompletionRefreshUtc) && titleMatch && MatchesPriority(all[id]);
+            bool doneMatch=Convert.ToBoolean(all[id]["done"]);
+            bool taskMatch=!HideCompletedTask(id,doneMatch,ref nextCompletionRefreshUtc) && (doneMatch || MatchesDisplayState(TaskStatusValue(all[id]))) && titleMatch && MatchesPriority(all[id]);
             if(taskMatch)matchingTasks.Add(id);
             SharedList saved;
             if(!reminderSharedLists.TryGetValue(id,out saved))saved=new SharedList();
@@ -286,7 +291,7 @@ internal sealed partial class FloatingWindow {
             }finally{tasks.EndUpdate();rendering=false;}
         }
         int previousTotal=total;total=groupCount;
-        string nextStatus=project==null?"请先在完整界面建立项目。":matches.Count==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可清空搜索或显示已完成。"):
+        string nextStatus=project==null?"请先在完整界面建立项目。":matches.Count==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可调整搜索或显示选项。"):
             matches.Count+" 项 · "+total+" 个任务组";
         if(!background || treeChanged || projectChanged || previousTotal!=total || status.Text!=nextStatus) {
             if(!background || treeChanged || projectChanged)status.ForeColor=ForeColor;

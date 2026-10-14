@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -117,8 +117,9 @@ internal sealed partial class FloatingWindow {
     }
     // Read one current outstanding list per owner, then change only the selected IDs.
     // A failed owner/task does not discard successful writes for other selected items.
-    async Task<BatchEditResult> SaveSelectedStates(List<TreeNode> selected,bool? done,int? priority) {
+    async Task<BatchEditResult> SaveSelectedStates(List<TreeNode> selected,bool? done,int? priority,string taskStatus=null) {
         var result=new BatchEditResult();
+        if(taskStatus!=null)done=taskStatus=="done";
         using(BeginUndoGroup()) {
             foreach(var node in selected.Where(item=>item.Tag is long)) {
                 long id=(long)node.Tag;
@@ -127,6 +128,7 @@ internal sealed partial class FloatingWindow {
                     bool wasDone=Convert.ToBoolean(current["done"]);
                     var patch=new Dictionary<string,object>();
                     if(done.HasValue&&wasDone!=done.Value)patch["done"]=done.Value;
+                    if(taskStatus!=null&&TaskStatusValue(current)!=taskStatus)patch["status"]=taskStatus;
                     if(priority.HasValue&&PriorityNumber(current)!=priority.Value)patch["priority"]=ApiPriority(priority.Value);
                     if(patch.Count==0){result.Unchanged++;continue;}
                     await Api("PATCH","/tasks/"+id,patch);
@@ -141,6 +143,7 @@ internal sealed partial class FloatingWindow {
                     var shared=ReadShared(await ReadHistory(owner.Key));
                     pending.Clear();
                     foreach(var node in owner) {
+                        if(taskStatus!=null&&taskStatus!="to-do"&&taskStatus!="done"){result.Failures.Add(node.Text+"：遗留事项支持待办和已完成状态。");continue;}
                         var leaf=(OutstandingLeaf)node.Tag;var item=shared.Items.FirstOrDefault(value=>value.Id==leaf.Id);
                         if(item==null){result.Failures.Add(node.Text+"：已被移动或移除，请刷新后重试。");continue;}
                         bool changeDone=done.HasValue&&item.Done!=done.Value,changePriority=priority.HasValue&&item.Priority!=priority.Value;
@@ -160,12 +163,12 @@ internal sealed partial class FloatingWindow {
         }
         return result;
     }
-    async Task ApplySelectedStates(bool? done,int? priority) {
+    async Task ApplySelectedStates(bool? done,int? priority,string taskStatus=null) {
         if(busy||closing)return;var selected=SelectedActionNodes();if(selected.Count==0)return;
-        SetBusy(true);timer.Stop();
+        var viewport=tasks.NativeScrollPosition();SetBusy(true);timer.Stop();
         try {
-            var result=await SaveSelectedStates(selected,done,priority);
-            if(result.Saved>0)await LoadTasks();
+            var result=await SaveSelectedStates(selected,done,priority,taskStatus);
+            if(result.Saved>0)await LoadTasks();tasks.RestoreNativeScroll(viewport);
             string message="已保存 "+result.Saved+" 项"+(result.Unchanged>0?"，另有 "+result.Unchanged+" 项无需修改":"")+"。";
             status.Text=message;
             if(result.Failures.Count>0)MessageBox.Show(this,message+"\r\n以下条目未保存：\r\n"+String.Join("\r\n",result.Failures),"批量修改结果",MessageBoxButtons.OK,MessageBoxIcon.Warning);
@@ -176,10 +179,13 @@ internal sealed partial class FloatingWindow {
         for(int value=0;value<=9;value++){int priority=value;menu.DropDownItems.Add(PriorityChoiceText(value),null,async delegate{await ApplySelectedStates(null,priority);});}
         return menu;
     }
-    ToolStripMenuItem CreateCompletionMenu() {
-        var menu=new ToolStripMenuItem("设置完成状态");
-        menu.DropDownItems.Add("标记完成",null,async delegate{await ApplySelectedStates(true,null);});
-        menu.DropDownItems.Add("恢复未完成",null,async delegate{await ApplySelectedStates(false,null);});
+    ToolStripMenuItem CreateStateMenu() {
+        var menu=new ToolStripMenuItem("设置状态");
+        foreach(string value in displayStates) {
+            string state=value;var item=new ToolStripMenuItem(TaskStatusText(state)){Tag=state};
+            item.Click+=async delegate {await ApplySelectedStates(null,null,state);};menu.DropDownItems.Add(item);
+        }
+        menu.DropDownOpening+=delegate {RefreshStateMenu(menu);};
         return menu;
     }
 }

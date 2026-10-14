@@ -114,6 +114,7 @@ export function useTaskList(
 	sortByDefault: SortBy = SORT_BY_DEFAULT,
 	expandGetter: ComputedGetter<ExpandTaskFilterParam> = () => 'subtasks',
 	includeCompletedGetter?: ComputedGetter<boolean>,
+	statusFilterGetter?: ComputedGetter<string>,
 ) {
 	
 	const projectId = computed(() => projectIdGetter())
@@ -201,6 +202,8 @@ export function useTaskList(
 
 	const allParams = computed(() => {
 		const loadParams = {...params.value}
+		const statusFilter = statusFilterGetter?.()
+		if (statusFilter) loadParams.filter = loadParams.filter ? `(${loadParams.filter}) && (${statusFilter})` : statusFilter
 
 		// Relevance ranking only engages when no sort is sent, so omit the default
 		// sort while searching and let an explicit user sort still take precedence.
@@ -241,7 +244,7 @@ export function useTaskList(
 		]
 	})
 
-	watch(includeCompleted, () => { page.value = 1 })
+	watch([includeCompleted, () => statusFilterGetter?.()], () => { page.value = 1 })
 
 	const taskCollectionService = shallowReactive(new TaskCollectionService())
 	const projectLoading = ref(false)

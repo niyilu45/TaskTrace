@@ -7,14 +7,10 @@
 	>
 		<template #header>
 			<div class="filter-container">
-				<label v-if="projectId > 0">
-					<input
-						v-model="showCompleted"
-						type="checkbox"
-						aria-label="显示已完成任务"
-					>
-					显示已完成任务
-				</label>
+				<TaskStatusFilter
+					v-if="projectId > 0"
+					v-model="selectedStatuses"
+				/>
 				<SortPopup
 					v-model="sortByParam"
 				/>
@@ -94,7 +90,9 @@
 
 <script setup lang="ts">
 import {ref, computed, nextTick, onMounted, onBeforeUnmount, watch, toRef} from 'vue'
-import {useStorage} from '@vueuse/core'
+import TaskStatusFilter from '@/components/tasks/partials/TaskStatusFilter.vue'
+import {useTaskStatusFilter} from '@/composables/useTaskStatusFilter'
+import {taskStatusFilterExpression} from '@/helpers/taskStatusFilter'
 
 import ProjectWrapper from '@/components/project/ProjectWrapper.vue'
 import ButtonLink from '@/components/misc/ButtonLink.vue'
@@ -130,7 +128,8 @@ const projectId = toRef(props, 'projectId')
 
 defineOptions({name: 'List'})
 
-const showCompleted = useStorage('tasktrace:edit-show-completed', false)
+const selectedStatuses = useTaskStatusFilter('tasktrace:edit-statuses', () => localStorage.getItem('tasktrace:edit-show-completed') === 'true' ? 'all' : 'pending')
+const showCompleted = computed(() => selectedStatuses.value.includes('done'))
 const ctaVisible = ref(false)
 
 const {
@@ -149,6 +148,7 @@ const {
 		? ['comment_count', 'is_unread']
 		: ['subtasks', 'comment_count', 'is_unread'],
 	() => showCompleted.value,
+	() => projectId.value > 0 ? taskStatusFilterExpression(selectedStatuses.value) : '',
 )
 
 // Saved filter composable for accessing filter data
@@ -366,10 +366,21 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+:deep(.switch-view-container) {
+	flex-wrap: wrap;
+}
+
 .filter-container {
 	display: flex;
-	align-items: center;
+	align-items: end;
+	flex-wrap: wrap;
+	flex: 1 0 100%;
+	inline-size: 100%;
 	gap: .5rem;
+
+	.task-status-filter {
+		flex: 1 1 20rem;
+	}
 
 	:deep(.popup) {
 		max-inline-size: 300px;
