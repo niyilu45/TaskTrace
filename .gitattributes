@@ -1,0 +1,2 @@
+# Preserve Windows batch bytes in GitHub source ZIPs, not just local checkouts.
+/dist/Install-TaskTrace.cmd -text whitespace=cr-at-eol

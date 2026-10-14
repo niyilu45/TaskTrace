@@ -491,3 +491,9 @@
 - 安装和发布共用的 `Build-Local.ps1` 改为自动收集 `portable/Floating*.cs`，避免新增功能未加入手工清单导致 `ExportMarkdown`、`ProgressHistoryBrowserBridge`、`FloatingClipboard` 不存在。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File portable/Test-PortableNativeBuild.ps1` 直接执行安装脚本的原生编译段，在隔离且包含空格、方括号的目录中生成启动器、悬浮窗和更新器，并检查新增功能确实编入程序集。旧编译清单可复现用户报告的全部缺失符号，修复后检查通过。
 - 已在隔离目录完整执行 `dist/Install-TaskTrace-Engine.ps1 -InstallDirectory ...`（包含前端、Go 服务端、全部原生程序和安全复制包），安装成功；输出只含程序文件，未写入现有个人配置或任务数据。
+
+## 2026-10-14 源码 ZIP 的 install 命令解析
+
+- 原安装入口在工作区是 CRLF，提交后被自动规范化为 LF；从源码 ZIP 解压后，CMD 会把命令拆成 `kTrace`、`onPolicy` 等片段。隔离执行已复现同样的“不是内部或外部命令”报错。
+- `.gitattributes` 将 `dist/Install-TaskTrace.cmd` 标记为不转换文本，仓库直接保留无 BOM、UTF-8 的 CRLF 字节；GitHub 源码 ZIP 与本地检出保持一致，继续显示中文完成提示。
+- `portable/Test-InstallEntryPoint.ps1 -SourceArchive <git archive 生成的源码 ZIP>` 使用模拟引擎运行真实 CMD 入口，检查本地和 ZIP 两种来源各自的成功、失败、取消路径，验证退出码、中文提示及含空格/中文/方括号的安装路径传递。六种情况均通过，不会启动实际安装或访问任务数据。
