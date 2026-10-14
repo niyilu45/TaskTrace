@@ -918,6 +918,7 @@ try {
     Write-InstallLine '本次安装只覆盖程序文件；配置、data、teamData、.cache、backups 和其他用户文件均未修改。' Yellow
     Write-InstallLine '运行程序不再需要 Node.js、pnpm、Go、GCC 或 C# 编译器。'
     Write-InstallLine ('详细记录：' + $logFile)
+    Write-InstallLine '安装完成，可以关闭本窗口。' Green
     $archiveSummary = if ($copyArchive) { '同时生成安全复制包：' + [Environment]::NewLine + $copyArchive } else { $archiveWarning + [Environment]::NewLine + '程序已经安装成功；请勿使用旧复制包更新其他电脑。' }
     $resultTitle = if ($copyArchive) { 'TaskTrace：安装成功' } else { 'TaskTrace：安装成功，复制包未生成' }
     Show-InstallResult $resultTitle ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
