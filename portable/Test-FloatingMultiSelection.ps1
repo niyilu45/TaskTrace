@@ -104,6 +104,39 @@ internal sealed partial class FloatingWindow {
         tasks.Nodes.Clear();taskSurface.Rebuild(false);
         Console.WriteLine("PASS Ctrl/Shift/Ctrl+Shift, right-click selection, modified hit targets, filtered/visible/offscreen Ctrl+A, refresh identities, deselection, flat/root color, inheritance and local persistence.");
     }
+
+    internal void TestTaskDragRedirect(SelectionApi api) {
+        InitializeTaskSurface();
+        int notices=0,reads=api.Reads,writes=api.Writes.Count;
+        taskDragNotice=delegate(string text){Check(text=="请在网页模式概览中拖动改变任务所属关系","Wrong task drag guidance");notices++;};
+        var flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+        var down=typeof(TaskTreeSurface).GetMethod("OnMouseDown",flags);
+        var move=typeof(TaskTreeSurface).GetMethod("OnMouseMove",flags);
+        var up=typeof(TaskTreeSurface).GetMethod("OnMouseUp",flags);
+        using(var host=new Form{ShowInTaskbar=false,Opacity=0,ClientSize=new Size(570,270)}) {
+            host.Controls.Add(taskSurface);host.Show();Application.DoEvents();
+            foreach(bool simple in new[]{false,true})foreach(bool flat in new[]{false,true}) {
+                simpleMode=simple;tasks.SingleLinePaths=flat;rendering=true;tasks.Nodes.Clear();
+                var task=SelectionTask(81,"1. [P7] 拖动任务提示");var leaf=SelectionLeaf(81,"item","2. [P7] 遗留事项");
+                tasks.Nodes.AddRange(new[]{task,leaf});rendering=false;taskSurface.Rebuild(false);
+                Rectangle title=taskSurface.TitleBounds(task);int x=title.Left+8,y=title.Top+title.Height/2,before=notices;
+                down.Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,1,x,y,0)});
+                move.Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,0,x+30,y,0)});
+                move.Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,0,x+40,y,0)});
+                up.Invoke(taskSurface,new object[]{new MouseEventArgs(MouseButtons.Left,1,x+40,y,0)});
+                Check(notices==before+1,"A single task drag must show one notice, even with continued mouse movement");
+                Check(!dragging&&task.Parent==null,"Rejected task drag left active dragging or changed the tree");
+                Check(AllowFloatingItemDrag(leaf),"Outstanding item dragging was disabled");
+                before=notices;
+                typeof(TreeView).GetMethod("OnItemDrag",flags).Invoke(tasks,new object[]{new ItemDragEventArgs(MouseButtons.Left,task)});
+                Check(notices==before+1,"Legacy tree did not show task drag guidance");
+            }
+            host.Controls.Remove(taskSurface);host.Close();
+        }
+        Check(api.Reads==reads&&api.Writes.Count==writes,"A rejected task drag accessed the server");
+        taskDragNotice=null;simpleMode=false;tasks.Nodes.Clear();taskSurface.Rebuild(false);
+        Console.WriteLine("PASS full/simple and tree/flat task drag guidance once per gesture, legacy tree, no API writes and retained outstanding dragging.");
+    }
     internal void TestBranchMenu(SelectionApi api) {
         InitializeInteractions();taskSurface.ContextMenuStrip=tasks.ContextMenuStrip;
         var menu=tasks.ContextMenuStrip;
@@ -187,7 +220,7 @@ internal static class FloatingMultiSelectionTests {
             using(var api=new SelectionApi())using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
                 int result=0;window.ShowInTaskbar=false;window.Opacity=0;
                 window.Shown+=async delegate {
-                    try{window.TestSelectionAndColors();window.TestBranchMenu(api);await window.TestBatchWrites(api);}
+                    try{window.TestSelectionAndColors();window.TestBranchMenu(api);window.TestTaskDragRedirect(api);await window.TestBatchWrites(api);}
                     catch(Exception error){Console.Error.WriteLine(error);result=1;}finally{window.Close();}
                 };
                 Application.Run(window);if(result!=0)return result;

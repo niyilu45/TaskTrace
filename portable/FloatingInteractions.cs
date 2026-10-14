@@ -194,7 +194,7 @@ internal sealed partial class FloatingWindow {
         tasks.NodeMouseClick+=delegate(object sender,TreeNodeMouseClickEventArgs e){if(e.Button==MouseButtons.Right)tasks.SelectedNode=e.Node;};
         tasks.AllowDrop=true;
         tasks.ItemDrag+=delegate(object sender,ItemDragEventArgs e){
-            var node=e.Item as TreeNode;if(busy || node==null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)))return;
+            var node=e.Item as TreeNode;if(!AllowFloatingItemDrag(node))return;
             dragging=true;timer.Stop();hoverTimer.Stop();progressTip.Hide(tasks);
             try {tasks.DoDragDrop(node,DragDropEffects.Move);} finally {dragging=false;ClearDropMark();timer.Start();}
         };
@@ -218,6 +218,18 @@ internal sealed partial class FloatingWindow {
             if(source!=null && source.Tag is long && target!=null && target.Tag is OutstandingLeaf)target=target.Parent;
             int zone;var plan=ResolveDropPlan(source,target,point.Y,out zone);ClearDropMark();if(plan!=null)await ExecuteDrop(plan);
         };
+    }
+    const string TaskDragOverviewMessage="请在网页模式概览中拖动改变任务所属关系";
+    Action<string> taskDragNotice;
+    bool AllowFloatingItemDrag(TreeNode node) {
+        if(busy || node==null)return false;
+        if(node.Tag is long) {
+            hoverTimer.Stop();progressTip.Hide(tasks);progressTip.Hide(taskSurface);
+            if(taskDragNotice!=null)taskDragNotice(TaskDragOverviewMessage);
+            else MessageBox.Show(this,TaskDragOverviewMessage,"调整任务所属关系",MessageBoxButtons.OK,MessageBoxIcon.Information);
+            return false;
+        }
+        return node.Tag is OutstandingLeaf;
     }
     void SaveSortPreference(){try{File.WriteAllText(Path.Combine(data,"floating-order.json"),json.Serialize(new{priority=prioritySort.Checked,sort=completionSort.ToArray(),showCompletion=showCompletion.Checked}));}catch{}}
     void ClearDropMark(){bool hadMark=tasks.Dropping || tasks.DropNode!=null;tasks.Dropping=false;tasks.DropNode=null;dropHover=null;if(hadMark)tasks.Invalidate();taskSurface.ClearDropMark();progressTip.Hide(tasks);progressTip.Hide(taskSurface);}

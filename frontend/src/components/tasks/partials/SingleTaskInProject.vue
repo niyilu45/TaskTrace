@@ -302,6 +302,7 @@ const props = withDefaults(defineProps<{
 	canMarkAsDone?: boolean,
 	allTasks?: ITask[],
 	canDrag?: boolean,
+	taskDropMode?: 'tree' | 'parent',
 }>(), {
 	isArchived: false,
 	showProject: false,
@@ -309,6 +310,7 @@ const props = withDefaults(defineProps<{
 	canMarkAsDone: true,
 	allTasks: () => [],
 	canDrag: false,
+	taskDropMode: 'tree',
 })
 
 const emit = defineEmits<{
@@ -508,6 +510,7 @@ function finishTaskDrag(event: DragEvent) {
 }
 
 function zoneForEvent(event: DragEvent): TaskDropZone {
+	if (props.taskDropMode === 'parent') return 'inside'
 	const bounds = taskRoot.value?.getBoundingClientRect()
 	if (!bounds) return 'inside'
 	const offset = event.clientY - bounds.top

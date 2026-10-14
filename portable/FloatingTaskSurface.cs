@@ -247,7 +247,8 @@ internal sealed partial class TaskTreeSurface : Panel {
         base.OnMouseMove(e);var row=RowAt(e.Location);TreeNode node=row==null?null:row.Node;
         if(node!=hoverNode){hoverNode=node;if(HoverChanged!=null)HoverChanged(node,e.Location);}
         if(!dragging&&e.Button==MouseButtons.Left&&dragNode!=null&&(Math.Abs(e.X-pressedAt.X)>=SystemInformation.DragSize.Width/2||Math.Abs(e.Y-pressedAt.Y)>=SystemInformation.DragSize.Height/2)){
-            if(BeginItemDrag==null||BeginItemDrag(dragNode)){dragging=true;try{DoDragDrop(dragNode,DragDropEffects.Move);}finally{dragging=false;dragNode=null;if(EndItemDrag!=null)EndItemDrag();}}
+            var candidate=dragNode;dragNode=null;pressedNode=null;
+            if(BeginItemDrag==null||BeginItemDrag(candidate)){dragging=true;try{DoDragDrop(candidate,DragDropEffects.Move);}finally{dragging=false;dragNode=null;if(EndItemDrag!=null)EndItemDrag();}}
         }
     }
     protected override void OnMouseLeave(EventArgs e) {base.OnMouseLeave(e);hoverNode=null;if(HoverChanged!=null)HoverChanged(null,Point.Empty);}
@@ -311,7 +312,7 @@ internal sealed partial class FloatingWindow {
         taskSurface.NodeDoubleClicked=delegate(TreeNode node){if(tasks.NodeDoubleClicked!=null)tasks.NodeDoubleClicked(node);};
         taskSurface.HoverChanged=delegate(TreeNode node,Point point){hoverTimer.Stop();progressTip.Hide(taskSurface);hoverNode=node;hoverSurface=taskSurface;if(!dragging&&node!=null&&node.Tag is long)hoverTimer.Start();};
         taskSurface.BlankDragEnabled=delegate{return simpleMode&&!closing&&!dragging;};taskSurface.BlankDragRequested=delegate(Point point){StartSimpleWindowDrag(taskSurface,point);};
-        taskSurface.BeginItemDrag=delegate(TreeNode node){if(busy||node==null)return false;dragging=true;timer.Stop();hoverTimer.Stop();progressTip.Hide(taskSurface);return true;};
+        taskSurface.BeginItemDrag=delegate(TreeNode node){if(!AllowFloatingItemDrag(node))return false;dragging=true;timer.Stop();hoverTimer.Stop();progressTip.Hide(taskSurface);return true;};
         taskSurface.EndItemDrag=delegate{dragging=false;ClearDropMark();timer.Start();};
         taskSurface.CanDrop=delegate(TreeNode source,TreeNode target,int zone){if(source!=null&&source.Tag is long&&target!=null&&target.Tag is OutstandingLeaf)target=target.Parent;return MakeDropPlan(source,target,zone)!=null;};
         taskSurface.DropRequested=async delegate(TreeNode source,TreeNode target,int zone){if(source!=null&&source.Tag is long&&target!=null&&target.Tag is OutstandingLeaf)target=target.Parent;var plan=MakeDropPlan(source,target,zone);if(plan!=null)await ExecuteDrop(plan);};

@@ -82,5 +82,7 @@ test.describe('Read-only checkbox on Overview', () => {
 		// The checkbox for the read-only task should be disabled
 		const readOnlyCheckbox = readOnlyTaskRow.locator('input[type="checkbox"]')
 		await expect(readOnlyCheckbox).toBeDisabled()
+		await expect(ownTaskRow.locator('.task-link')).toHaveAttribute('draggable', 'true')
+		await expect(readOnlyTaskRow.locator('.task-link')).toHaveAttribute('draggable', 'false')
 	})
 })

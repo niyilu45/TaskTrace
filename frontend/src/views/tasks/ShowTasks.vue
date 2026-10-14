@@ -100,6 +100,8 @@
 			<OverviewTaskGroups
 				:tasks="tasks"
 				:ancestors="ancestors"
+				:loading="loading"
+				@taskMoved="updateTasks"
 				@taskUpdated="updateTasks"
 			/>
 		</Card>
