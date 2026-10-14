@@ -476,9 +476,14 @@
 				</div>
 				<!-- Task Actions -->
 				<div
-					v-if="canWrite || isModal"
+					v-if="task.id"
 					class="column is-one-third action-buttons d-print-none"
 				>
+					<TaskMarkdownExport
+						v-if="!canWrite"
+						:task-id="task.id"
+						:title="task.title"
+					/>
 					<template v-if="canWrite">
 						<XButton
 							v-shortcut="SHORTCUTS.taskDetail.done"
@@ -581,6 +586,10 @@
 						>
 							{{ $t('task.detail.actions.duplicate') }}
 						</XButton>
+						<TaskMarkdownExport
+							:task-id="task.id"
+							:title="task.title"
+						/>
 
 						<span class="action-heading">{{ $t('task.detail.dateAndTime') }}</span>
 
@@ -685,6 +694,7 @@
 </template>
 
 <script lang="ts" setup>
+import TaskMarkdownExport from '@/components/tasks/partials/TaskMarkdownExport.vue'
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {isProgressImageAttachment} from '@/helpers/progressEditorImages'

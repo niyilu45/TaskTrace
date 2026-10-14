@@ -38,7 +38,7 @@ internal sealed partial class FloatingWindow {
         AssertCompletion(OrderCompletionNodes(new[]{parent,top,leaf},all).SequenceEqual(new[]{parent,leaf,top}),"Reverse two-level sort incorrect");
         top.Checked=true;completionSort=new List<string>{"completion:desc"};AssertCompletion(OrderCompletionNodes(new[]{leaf,top},all)[0]==top,"Sort ignored Done overlay");
         top.Checked=false;AssertCompletion(OrderCompletionNodes(new[]{leaf,top},all)[0]==leaf,"Uncheck did not restore manual ordering");
-        showCompletion.Checked=true;NumberTasks(roots,all);AssertCompletion(parent.Text.StartsWith("2. 40% [P7]"),"Task completion prefix missing");
+        showCompletion.Checked=true;NumberTasks(roots,all);AssertCompletion(parent.Text.StartsWith("2. [P7] [待办-40%]"),"Task completion prefix missing");
         var list=ReadShared(new List<Dictionary<string,object>>{new Dictionary<string,object>{{"id",1},{"comment","<h3>"+SharedHeading+"</h3><ul><li data-id=\"one\" data-progress=\"40\" data-done=\"true\">Item</li><li data-id=\"two\">Old</li></ul>"}}});
         AssertCompletion(list.Items[0].Completion==40 && list.Items[0].Done && list.Items[1].Completion==0,"Outstanding parser lost stored completion");
         SaveSortPreference();showCompletion.Checked=false;completionSort.Clear();InitializeCompletion();

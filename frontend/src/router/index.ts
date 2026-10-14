@@ -398,6 +398,7 @@ const router = createRouter({
 				viewId: route.params.viewId ? parseInt(route.params.viewId as string): undefined,
 			}),
 		},
+		{path: '/tasks/:id/markdown', name: 'task.markdown', component: () => import('@/views/tasks/TaskMarkdownPreview.vue'), props: route => ({taskId: Number(route.params.id)})},
 		{
 			path: '/teams',
 			name: 'teams.index',

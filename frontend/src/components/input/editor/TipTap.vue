@@ -194,6 +194,7 @@
 </template>
 
 <script setup lang="ts">
+import {insertClipboardHTMLImages} from './pasteFormatting'
 import {computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch, watchEffect} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {eventToShortcutString} from '@/helpers/shortcut'
@@ -488,9 +489,16 @@ function setUploading(delta: number) {
 	emit('uploading', activeUploads > 0)
 }
 
-function uploadAndInsertFiles(files: File[] | FileList) {
+function uploadAndInsertFiles(files: File[] | FileList, html?: string) {
 	if (typeof props.uploadCallback === 'undefined') {
 		throw new Error('Can\'t add files here')
+	}
+
+	if (html && liveEditor()) {
+		setUploading(1)
+		void insertClipboardHTMLImages(liveEditor()!, html, Array.from(files), props.uploadCallback)
+			.then(() => bubbleNow()).catch(e => error(e)).finally(() => setUploading(-1))
+		return
 	}
 
 	// The server reports failed uploads (quota, disk full) in the response body,

@@ -1,3 +1,4 @@
+import {cleanPastedFormatting, PasteIndentation} from './pasteFormatting'
 import {nextTick, toValue, type MaybeRefOrGetter, type Ref} from 'vue'
 
 import StarterKit from '@tiptap/starter-kit'
@@ -47,7 +48,7 @@ export interface EditorExtensionDeps {
 	bubbleSave: () => void
 	getEditor: () => Editor | undefined
 	uploadCallback: MaybeRefOrGetter<UploadCallback | undefined>
-	uploadAndInsertFiles: (files: File[] | FileList) => void
+	uploadAndInsertFiles: (files: File[] | FileList, html?: string) => void
 	allowBase64Images?: MaybeRefOrGetter<boolean>
 }
 
@@ -175,9 +176,22 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 					key: new PluginKey('pasteHandler'),
 					props: {
 						clipboardParser: createClipboardParser(this.editor.schema),
+						transformPastedHTML: cleanPastedFormatting,
 						transformPasted: slice => repairSliceContent(slice),
 
 						handlePaste: (view, event) => {
+
+							// Rich HTML must retain interleaved text/images rather than paste only its first bitmap.
+							const clipboardHtml = event.clipboardData?.getData('text/html')
+							if (clipboardHtml) {
+								const files = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'))
+								const pasted = new DOMParser().parseFromString(cleanPastedFormatting(clipboardHtml), 'text/html')
+								if (toValue(uploadCallback) && files.length && (pasted.querySelector('img:not([src])') || !pasted.querySelector('img'))) {
+									uploadAndInsertFiles(files, clipboardHtml)
+									return true
+								}
+								return false
+							}
 
 							// Handle images pasted from clipboard
 							if (typeof toValue(uploadCallback) !== 'undefined' && event.clipboardData?.items?.length) {
@@ -342,6 +356,7 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 
 		EmojiExtension,
 
+		PasteIndentation,
 		PasteHandler,
 	]
 }

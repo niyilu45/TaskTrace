@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -297,7 +297,7 @@ internal sealed partial class FloatingWindow {
     void NumberTasks(List<TreeNode> roots,Dictionary<long,Dictionary<string,object>> all){for(int index=0;index<roots.Count;index++)NumberTask(roots[index],(index+1).ToString(),all,new List<string>());}
     void NumberTask(TreeNode node,string number,Dictionary<long,Dictionary<string,object>> all,List<string> ancestors){
         long id=(long)node.Tag;int priority=PriorityNumber(all[id]);string title=(string)all[id]["title"];
-        string current=number+". "+CompletionPrefix(TaskManualCompletion(all[id]),node.Checked)+"[P"+priority+"] ["+TaskStatusText(TaskStatusValue(all[id]))+"] "+title;
+        string current=number+". "+"[P"+priority+"] "+CompletionStatus(TaskStatusText(TaskStatusValue(all[id])),TaskManualCompletion(all[id]),node.Checked)+title;
         var taskNode=node as TaskNode;if(taskNode!=null)taskNode.CurrentTextLength=current.Length;
         node.Text=current+(singleLine.Checked && ancestors.Count>0?TaskTreeView.SingleLineSeparator+String.Join(TaskTreeView.SingleLineSeparator,ancestors):"");
         var nextAncestors=new List<string>{title};nextAncestors.AddRange(ancestors);
@@ -521,7 +521,7 @@ internal sealed partial class FloatingWindow {
                 priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 appearance.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="背景色尚未保存；仅保存到本机，不会同步给协作成员。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage() && !Clipboard.ContainsText()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && !writing && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
@@ -658,6 +658,7 @@ internal sealed partial class FloatingWindow {
                 var card=new Panel{Width=Math.Max(340,flow.ClientSize.Width-38),Height=330,Margin=new Padding(0,0,0,18)};
                 var label=new Label{Text=(++loaded)+". "+item.Caption,Dock=DockStyle.Top,Height=34,AutoEllipsis=true};
                 var box=new PictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.White};card.Controls.Add(box);card.Controls.Add(label);flow.Controls.Add(card);
+                box.DoubleClick+=async delegate{try{await ShowImagePreview(item,gallery);}catch(Exception error){heading.Text="图片预览失败："+error.Message;}};
                 try{
                     byte[] bytes=item.Bytes??await DownloadImage(item.Source);if(gallery.IsDisposed)return;
                     using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream)){

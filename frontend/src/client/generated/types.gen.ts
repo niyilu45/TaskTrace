@@ -2893,6 +2893,25 @@ export type TaskTraceDraftState = {
     updated?: string;
 };
 
+export type TaskTraceMarkdownExport = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Suggested Windows-safe Markdown filename.
+     */
+    readonly filename?: string;
+    /**
+     * GFM document including readable descendants. Inline images are embedded as data URLs for offline use.
+     */
+    readonly markdown?: string;
+    /**
+     * Missing or inaccessible images, omitted without disclosing protected content.
+     */
+    readonly warnings?: Array<string> | null;
+};
+
 export type TaskTraceMove = {
     /**
      * A URL to the JSON Schema for this object.
@@ -10947,6 +10966,36 @@ export type TaskLabelsDeleteResponses = {
 };
 
 export type TaskLabelsDeleteResponse = TaskLabelsDeleteResponses[keyof TaskLabelsDeleteResponses];
+
+export type TasksTasktraceMarkdownData = {
+    body?: never;
+    path: {
+        /**
+         * Root task of the exported subtree.
+         */
+        task: number;
+    };
+    query?: never;
+    url: '/tasks/{task}/markdown';
+};
+
+export type TasksTasktraceMarkdownErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasksTasktraceMarkdownError = TasksTasktraceMarkdownErrors[keyof TasksTasktraceMarkdownErrors];
+
+export type TasksTasktraceMarkdownResponses = {
+    /**
+     * OK
+     */
+    200: TaskTraceMarkdownExport;
+};
+
+export type TasksTasktraceMarkdownResponse = TasksTasktraceMarkdownResponses[keyof TasksTasktraceMarkdownResponses];
 
 export type TasksTasktraceMoveData = {
     body: TaskTraceMoveWritable;

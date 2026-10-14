@@ -19,7 +19,7 @@ import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {deduplicateHtmlImages} from '@/helpers/tasktraceImages'
 import ImageLightbox from '@/components/misc/ImageLightbox.vue'
 
-const props = defineProps<{html?: string}>()
+const props = withDefaults(defineProps<{html?: string, deduplicateImages?: boolean}>(), {html: '', deduplicateImages: true})
 const rendered = ref('')
 const lightboxSrc = ref<string | null>(null)
 const lightboxAlt = ref('')
@@ -32,9 +32,11 @@ function handleContentClick(event: MouseEvent) {
 }
 
 let version = 0
+let embeddedUrls: string[] = []
 watch(() => props.html, async value => {
 	const current = ++version
-	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(deduplicateHtmlImages(value || ''), {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
+	const pendingUrls: string[] = []
+	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(props.deduplicateImages ? deduplicateHtmlImages(value || '') : value || '', {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
 	for (const anchor of doc.querySelectorAll('a')) {
 		anchor.removeAttribute('target')
 		anchor.setAttribute('rel', 'noopener noreferrer')
@@ -58,6 +60,15 @@ watch(() => props.html, async value => {
 	const images = Array.from(doc.querySelectorAll('img'))
 	await Promise.all(images.map(async image => {
 		const source = image.getAttribute('data-src') || image.getAttribute('src') || ''
+		if (/^data:image\/(?:png|jpe?g|gif|bmp|webp);base64,/i.test(source)) {
+			try {
+				const [header, encoded] = source.split(',')
+				const bytes = Uint8Array.from(atob(encoded), char => char.charCodeAt(0))
+				image.src = URL.createObjectURL(new Blob([bytes], {type: header.slice(5).split(';')[0]}))
+				pendingUrls.push(image.src)
+			} catch {image.removeAttribute('src'); image.alt = '图片读取失败'}
+			return
+		}
 		let parsed: URL
 		try { parsed = new URL(source, window.location.origin) } catch { image.remove(); return }
 		const api = new URL(window.API_URL, window.location.origin)
@@ -68,9 +79,10 @@ watch(() => props.html, async value => {
 		}
 		image.setAttribute('loading', 'lazy')
 	}))
-	if (version === current) rendered.value = doc.body.innerHTML
+	if (version === current) {embeddedUrls.forEach(url => URL.revokeObjectURL(url)); embeddedUrls = pendingUrls; rendered.value = doc.body.innerHTML}
+	else pendingUrls.forEach(url => URL.revokeObjectURL(url))
 }, {immediate: true})
-onBeforeUnmount(() => version++)
+onBeforeUnmount(() => {version++; embeddedUrls.forEach(url => URL.revokeObjectURL(url))})
 </script>
 
 <style scoped lang="scss">

@@ -1,9 +1,10 @@
-import {describe, it, expect, afterEach, beforeEach} from 'vitest'
+import {describe, it, expect, afterEach, beforeEach, vi} from 'vitest'
 import {createPinia, setActivePinia} from 'pinia'
 import {ref} from 'vue'
 import {Editor} from '@tiptap/core'
 import {TextSelection} from '@tiptap/pm/state'
 
+import {insertClipboardHTMLImages} from './pasteFormatting'
 import {createEditorExtensions, type EditorExtensionDeps} from './editorExtensions'
 
 window.API_URL = 'http://localhost:3456/api/v1'
@@ -92,5 +93,33 @@ describe('pasting html the schema cannot hold', () => {
 		pasteHTML(editor, copied.innerHTML, 6)
 
 		expect(editor.getHTML()).toBe('<p>hello</p><ol><li><p>one</p></li><li><p>two</p></li></ol><p></p>')
+	})
+})
+
+
+describe('Word pictures with surrounding text', () => {
+	it('keeps image positions even if the selection moves before upload finishes', async () => {
+		const editor = createEditor('<p>existing</p>')
+		let finish!: (urls: string[]) => void
+		const upload = vi.fn(() => new Promise<string[]>(resolve => {finish = resolve}))
+		const pending = insertClipboardHTMLImages(editor, '<p style="color:red">before</p><img src="file:///word.png"><p>after</p>', [new File(['png'], 'word.png', {type: 'image/png'})], upload)
+		editor.commands.focus('end')
+		editor.commands.insertContent('typed later')
+		finish(['https://images.example/word.png'])
+		await pending
+		const html = editor.getHTML()
+		expect(html.indexOf('before')).toBeLessThan(html.indexOf('https://images.example/word.png'))
+		expect(html.indexOf('https://images.example/word.png')).toBeLessThan(html.indexOf('after'))
+		expect(html).toContain('typed later')
+		expect(html).not.toMatch(/color|file:|blob:/)
+		editor.destroy()
+	})
+	it('keeps text and removes unusable image placeholders if uploading fails', async () => {
+		const editor = createEditor('<p></p>')
+		await expect(insertClipboardHTMLImages(editor, '<p>before</p><img src="file:///word.png"><p>after</p>', [new File(['png'], 'word.png', {type: 'image/png'})], async () => {throw new Error('disk full')})).rejects.toThrow('disk full')
+		expect(editor.getHTML()).toContain('before')
+		expect(editor.getHTML()).toContain('after')
+		expect(editor.getHTML()).not.toContain('blob:')
+		editor.destroy()
 	})
 })

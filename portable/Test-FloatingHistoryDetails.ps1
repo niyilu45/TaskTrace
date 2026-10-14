@@ -25,6 +25,14 @@ internal sealed partial class FloatingWindow {
     static T FindControl<T>(Control parent) where T:Control {if(parent is T)return (T)parent;foreach(Control child in parent.Controls){var found=FindControl<T>(child);if(found!=null)return found;}return null;}
     static byte[] Picture(Color color,string text){using(var image=new Bitmap(260,75))using(var stream=new MemoryStream()){using(var graphics=Graphics.FromImage(image)){graphics.Clear(color);graphics.DrawString(text,SystemFonts.DefaultFont,Brushes.Black,12,28);}image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);return stream.ToArray();}}
     internal async Task TestHistoryDetails(Form owner) {
+        using(var editor=new ProgressHtmlEditor{Dock=DockStyle.Fill}) {
+            owner.Controls.Add(editor);editor.Html="<p>start</p>";
+            var browser=FindControl<WebBrowser>(editor);
+            for(int wait=0;wait<60 && (browser.Document==null || browser.Document.GetElementById("progress-editor")==null);wait++)await Task.Delay(40);
+            string pasted=Convert.ToString(browser.Document.InvokeScript("cleanTaskTracePaste",new object[]{"<p style='font-size:40pt;color:white;background:black;margin-left:36pt;text-indent:12pt'><b>before</b><br>after</p><img src='data:image/png;base64,AQID'>"}));
+            Require(!Regex.IsMatch(pasted,@"font-size|color|background|<b>",RegexOptions.IgnoreCase) && pasted.Contains("36pt") && pasted.Contains("12pt") && pasted.Contains("before") && pasted.Contains("<br") && pasted.Contains("data:image/png"),"Word paste lost text/image structure or retained its font theme");
+            string saved=ProgressSnapshotHtml(pasted,42);Require(saved.Contains("36pt") && saved.Contains("12pt") && saved.Contains("<br"),"Saving removed pasted indentation or line breaks");owner.Controls.Remove(editor);
+        }
         var bytes=new[]{Picture(Color.LightSkyBlue,"Image A"),Picture(Color.PaleGreen,"Image B")};
         string body="<p><strong>检查设备</strong>，第一张图片如下：</p><p><img src=\"/api/v1/tasks/42/attachments/1\"></p><p>处理完成后，第二张图片如下：<br>保留这一行换行。</p><p><img src=\"/api/v1/tasks/42/attachments/2\"></p><ul><li>确认结果</li></ul>";
         var reference=new ProgressReference{Id="r"+new string('a',32),TaskId=42,Date="2026-10-11",CommentIds=new List<long>{1},Html="<p>旧记录说明</p><img src=\"/api/v1/tasks/42/attachments/1\">"};
@@ -43,6 +51,13 @@ internal sealed partial class FloatingWindow {
         // Exercise the production history dialog and its Complete information button with inline images.
         var inlineNotes=notes.Select(note=>new Dictionary<string,object>(note)).ToList();
         foreach(var note in inlineNotes){string html=(string)note["comment"];for(int i=0;i<2;i++)html=html.Replace("/api/v1/tasks/42/attachments/"+(i+1),"data:image/png;base64,"+Convert.ToBase64String(bytes[i]));note["comment"]=html;}
+        await ShowImagePreview(new GalleryImage{Bytes=bytes[0],Caption="small"},owner,true);
+        using(var small=Image.FromFile(Path.Combine(data,"floating-image-preview-test.png")))Require(small.Width<650 && small.Height<480,"Small pictures still open in a large fixed window");
+        using(var huge=new Bitmap(3000,2200))using(var stream=new MemoryStream()){
+            huge.Save(stream,System.Drawing.Imaging.ImageFormat.Png);
+            await ShowImagePreview(new GalleryImage{Bytes=stream.ToArray(),Caption="large"},owner,true);
+            using(var rendered=Image.FromFile(Path.Combine(data,"floating-image-preview-test.png"))){var screen=Screen.FromControl(owner).WorkingArea;Require(rendered.Width<=screen.Width && rendered.Height<=screen.Height && rendered.Width>650,"Large pictures exceed the screen or fail to resize the preview");}
+        }
         Exception failure=null;bool handled=false;
         using(var driver=new Timer{Interval=40}) {
             driver.Tick+=async delegate {
@@ -59,8 +74,25 @@ internal sealed partial class FloatingWindow {
                     Require(details!=null && browser!=null && browser.Document!=null && browser.Document.Body.InnerText.Contains("李四"),"Complete information button did not open all collaborators' content");
                     Require(browser.Document.Images.Count==3 && browser.Document.GetElementsByTagName("strong").Count>=2 && browser.Document.GetElementsByTagName("ul").Count==1,"Rendered details lost pictures or rich formatting");
                     foreach(int width in new[]{760,480}){details.Width=width;details.PerformLayout();await Task.Delay(150);Require(browser.Document.Body.ScrollRectangle.Width<=browser.ClientSize.Width,"Narrow details overflow horizontally");using(var bitmap=new Bitmap(details.Width,details.Height)){details.DrawToBitmap(bitmap,new Rectangle(Point.Empty,details.Size));bitmap.Save(Path.Combine(data,"history-details-"+width+".png"));}}
+                    Require(browser.Document.GetElementsByTagName("section").Count==1,"Other dates loaded before scrolling");
+                    browser.Document.InvokeScript("eval",new object[]{"window.scrollTo(0,document.body.scrollHeight);historyWheel({wheelDelta:-120});historyWheel({wheelDelta:-120});"});
+                    for(int wait=0;wait<60 && browser.Document.GetElementsByTagName("section").Count<2;wait++)await Task.Delay(40);
+                    Require(browser.Document.GetElementsByTagName("section").Count==2,"Scrolling past the bottom did not load the older date once");
+                    Require(browser.Document.GetElementById("history-2026-10-11")!=null,"Loaded the wrong adjacent date");
+                    browser.Document.InvokeScript("eval",new object[]{"openHistoryImage({target:document.images[0]});"});
+                    for(int wait=0;wait<60 && !File.Exists(Path.Combine(data,"floating-image-preview-test.png"));wait++)await Task.Delay(40);
+                    Require(File.Exists(Path.Combine(data,"floating-image-preview-test.png")),"History image double-click did not open fitted preview");
                     details.Close();
-                    Console.WriteLine("PASS rich text/image order; authors/references; unique image links; text-only entries; failed images; passive content; image-count gallery click; Complete information click; desktop/narrow layout.");
+                    typeof(DataGridView).GetMethod("OnCellContentClick",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(table,new object[]{new DataGridViewCellEventArgs(2,1)});
+                    for(int wait=0;wait<60;wait++){await Task.Delay(40);details=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text.StartsWith("完整信息 ·"));if(details!=null){browser=FindControl<WebBrowser>(details);if(browser!=null&&browser.Document!=null&&browser.Document.GetElementById("history-2026-10-11")!=null)break;}}
+                    Require(browser.Document.GetElementsByTagName("section").Count==1,"Selecting an older day preloaded another day");
+                    browser.Document.InvokeScript("eval",new object[]{"historyWheel({wheelDelta:120});"});
+                    for(int wait=0;wait<60 && browser.Document.GetElementsByTagName("section").Count<2;wait++)await Task.Delay(40);
+                    Require(browser.Document.GetElementById("history-2026-10-13")!=null,"Top scroll did not load the newer day");
+                    int offset=browser.Document.GetElementById("history-2026-10-11").OffsetRectangle.Top;
+                    Require(browser.Document.Window.Position.Y>=0 && offset>0,"Prepending a day did not retain the old section");
+                    details.Close();
+                    Console.WriteLine("PASS rich text/image order; authors/references; unique image links; text-only entries; failed images; passive content; image-count gallery click; Complete information click; desktop/narrow layout; deferred adjacent days; repeated wheel guarded; image double-click preview.");
                 }catch(Exception error){failure=error;}finally{foreach(var open in Application.OpenForms.Cast<Form>().Where(form=>form.Text.StartsWith("完整信息 ·")).ToList())open.Close();history.Close();}
             };
             driver.Start();await ShowProgressHistory(42,"验收任务",inlineNotes,owner);

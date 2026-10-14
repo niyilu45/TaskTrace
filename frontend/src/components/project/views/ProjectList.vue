@@ -57,7 +57,7 @@
 					<ul
 						v-if="tasks && tasks.length > 0"
 						class="tasks"
-						:class="{'dragging-disabled': !canDragTasks || !isPositionSorting}"
+						:class="{'dragging-disabled': !canDragTasks}"
 						@dragover.self.prevent
 						@drop.self.prevent="dropAtRootEnd"
 					>
@@ -72,7 +72,7 @@
 								:can-mark-as-done="canWrite || isPseudoProject"
 								:the-task="t"
 								:all-tasks="allTasks"
-								:can-drag="canDragTasks && isPositionSorting && !dragMoveSaving"
+								:can-drag="canDragTasks && !dragMoveSaving"
 								@taskUpdated="updateTasks"
 								@taskDragStart="handleTaskDragStart"
 								@taskDragEnd="handleTaskDragEnd"

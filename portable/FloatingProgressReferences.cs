@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -85,7 +85,7 @@ internal sealed partial class FloatingWindow {
             if(Regex.IsMatch(name,@"^h[1-6]$"))name="div";
             if(!Regex.IsMatch(name,@"^(?:p|div|br|ul|ol|li|blockquote|pre)$"))continue;
             if(name=="br") {if(!closing)output.Append("<br>");continue;}
-            output.Append(closing?"</"+name+">":"<"+name+">");
+            output.Append(closing?"</"+name+">":"<"+name+SafeIndentStyle(ReferenceAttribute(token.Value,"style"))+">");
         }
         output.Append(html.Substring(cursor));return output.ToString();
     }
@@ -201,23 +201,68 @@ internal sealed partial class FloatingWindow {
                 output.Append(source==""?"<span>（图片加载失败，请关闭后重试）</span>":"<img src=\""+source+"\" alt=\"进展图片\">");continue;
             }
             if(!Regex.IsMatch(name,@"^(?:p|div|span|br|strong|b|em|i|u|s|strike|ul|ol|li|blockquote|pre|code|table|thead|tbody|tfoot|tr|th|td|h[1-6]|hr|sub|sup)$"))continue;
-            output.Append(closing?"</"+name+">":"<"+name+">");
+            output.Append(closing?"</"+name+">":"<"+name+SafeIndentStyle(ReferenceAttribute(token.Value,"style"))+">");
         }
         output.Append(safe.Substring(cursor));
         return "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{margin:0;background:#fff;color:#17212d;font:15px/1.6 'Microsoft YaHei UI','Segoe UI',sans-serif}body{padding:16px;overflow-wrap:break-word;word-wrap:break-word}p{margin:.5em 0}img{max-width:100%;height:auto;vertical-align:middle}blockquote{margin:12px 0;padding:8px 12px;background:#f1f5fa}pre{white-space:pre-wrap}table{max-width:100%;border-collapse:collapse}td,th{border:1px solid #cbd3dc;padding:6px}</style></head><body>"+output+"</body></html>";
     }
-    async Task ShowProgressHistoryDetails(ProgressHistoryRow item,string taskTitle,Form owner) {
+    async Task ShowProgressHistoryDetails(ProgressHistoryRow item,string taskTitle,Form owner,List<ProgressHistoryRow> rows=null) {
+        rows=rows??new List<ProgressHistoryRow>{item};
+        int first=Math.Max(0,rows.IndexOf(item)),last=first;bool loading=false;
         using(var dialog=DpiDialog(new Form{Text="完整信息 · "+item.Date+" · "+taskTitle,Size=new Size(760,640),MinimumSize=new Size(440,330),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true})) {
             var heading=new Label{Text=item.Date+" · 正在读取完整进展…",Dock=DockStyle.Top,Height=48,Padding=new Padding(14,10,14,0),AccessibleName="完整进展日期"};
-            var browser=new WebBrowser{Dock=DockStyle.Fill,AllowWebBrowserDrop=false,IsWebBrowserContextMenuEnabled=false,ScriptErrorsSuppressed=true,AccessibleName="进展完整图文内容"};
+            var browser=new WebBrowser{Dock=DockStyle.Fill,AllowWebBrowserDrop=false,IsWebBrowserContextMenuEnabled=true,ScriptErrorsSuppressed=true,AccessibleName="进展完整图文内容"};
+            var bridge=new ProgressHistoryBrowserBridge();browser.ObjectForScripting=bridge;
             browser.Navigating+=delegate(object sender,WebBrowserNavigatingEventArgs e){if(e.Url.AbsoluteUri!="about:blank")e.Cancel=true;};
+            AttachHistoryImageActions(browser,dialog,heading);
+            bridge.ImageRequested=delegate(string source){if(dialog.IsDisposed)return;dialog.BeginInvoke(new Action(async delegate{try{await ShowProgressEditorImage(new ProgressEditorImageEventArgs(source,""),dialog,"进展图片");}catch(Exception error){if(!dialog.IsDisposed)heading.Text="图片预览失败："+error.Message;}}));};
+            Action explain=delegate{heading.Text=rows[first].Date+" 至 "+rows[last].Date+" · 滚动到边缘继续滚动，加载相邻日期";};
+            bridge.LoadMore=delegate(int direction) {
+                if(loading || dialog.IsDisposed || browser.Document==null)return;
+                int next=direction<0?first-1:last+1;if(next<0 || next>=rows.Count)return;
+                loading=true;heading.Text="正在加载 "+rows[next].Date+"…";
+                dialog.BeginInvoke(new Action(async delegate {
+                    try {
+                        string document=await ProgressHistoryDocument(rows[next].Html,DownloadImage);
+                        if(dialog.IsDisposed || browser.Document==null)return;
+                        var body=Regex.Match(document,@"<body>([\s\S]*)</body>").Groups[1].Value;
+                        browser.Document.InvokeScript("appendHistoryDay",new object[]{rows[next].Date,body,direction<0});
+                        if(direction<0)first=next;else last=next;explain();
+                    }catch(Exception error){if(!dialog.IsDisposed)heading.Text="加载失败，可继续滚动重试："+error.Message;}
+                    finally{loading=false;}
+                }));
+            };
             dialog.Controls.Add(browser);dialog.Controls.Add(heading);
             dialog.Shown+=async delegate {
-                try{string document=await ProgressHistoryDocument(item.Html,DownloadImage);if(dialog.IsDisposed)return;browser.DocumentText=document;heading.Text=item.Date+" · 完整信息";}
-                catch(Exception error){if(!dialog.IsDisposed)heading.Text="完整信息读取失败："+error.Message;}
+                try {
+                    loading=true;string document=await ProgressHistoryDocument(item.Html,DownloadImage);if(dialog.IsDisposed)return;
+                    document=document.Replace("<body>","<body><section id=\"history-"+item.Date+"\"><h2>"+item.Date+"</h2>").Replace("</body>","</section></body>");
+                    browser.DocumentText=document.Replace("</head>","<script>"+ProgressHistoryBrowserBridge.Script+"</script></head>");explain();
+                }catch(Exception error){if(!dialog.IsDisposed)heading.Text="完整信息读取失败："+error.Message;}
+                finally{loading=false;}
             };
             await ShowEditorWindowAsync(dialog,owner);
         }
+    }
+    void AttachHistoryImageActions(WebBrowser browser,Form owner,Label feedback) {
+        browser.DocumentCompleted+=delegate {
+            if(browser.Document==null)return;
+            browser.Document.ContextMenuShowing+=delegate(object sender,HtmlElementEventArgs args) {
+                var element=browser.Document.GetElementFromPoint(args.ClientMousePosition);
+                if(element==null || !String.Equals(element.TagName,"IMG",StringComparison.OrdinalIgnoreCase))return;
+                args.ReturnValue=false;
+                var menu=new ContextMenuStrip();
+                menu.Items.Add("复制图片",null,async delegate {
+                    try {
+                        var picture=ProgressEditorGalleryImage(new ProgressEditorImageEventArgs(element.GetAttribute("src"),""),"进展图片");
+                        if(picture==null)return;
+                        byte[] bytes=picture.Bytes??await DownloadImage(picture.Source);
+                        using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream))Clipboard.SetImage(image);
+                    }catch(Exception error){if(!feedback.IsDisposed)feedback.Text="图片复制失败："+error.Message;}
+                });
+                menu.Closed+=delegate{menu.Dispose();};menu.Show(browser,args.ClientMousePosition);
+            };
+        };
     }
     Task ShowProgressHistory(long taskId,string taskTitle,List<Dictionary<string,object>> history,Form owner,bool verify=false) {
         var rows=ProgressHistoryRows(taskId,history);
@@ -227,7 +272,7 @@ internal sealed partial class FloatingWindow {
             var table=ProgressHistoryTable(rows);
             table.CellContentClick+=async delegate(object sender,DataGridViewCellEventArgs e){
                 if(e.RowIndex<0 || e.ColumnIndex<1)return;var item=table.Rows[e.RowIndex].Tag as ProgressHistoryRow;if(item==null)return;
-                try{if(e.ColumnIndex==2)await ShowProgressHistoryDetails(item,taskTitle,dialog);else if(item.ImageCount>0)await ShowImageGallery(taskId,item.Html,dialog,"每日进展 · "+item.Date);}
+                try{if(e.ColumnIndex==2)await ShowProgressHistoryDetails(item,taskTitle,dialog,rows);else if(item.ImageCount>0)await ShowImageGallery(taskId,item.Html,dialog,"每日进展 · "+item.Date);}
                 catch(Exception error){if(!dialog.IsDisposed)heading.Text="进展查看失败："+error.Message;}
             };
             layout.Controls.Add(table,0,1);dialog.Controls.Add(layout);

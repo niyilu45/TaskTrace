@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -222,7 +222,7 @@ internal sealed partial class FloatingWindow {
     }
     TreeNode CreateOutstandingNode(long taskId,PendingItem item,int index,string path="") {
         int number=index+1;
-        string current=number+". "+CompletionPrefix(item.Completion,item.Done)+"[P"+item.Priority+"] "+OutstandingText(item.Html);
+        string current=number+". "+"[P"+item.Priority+"] "+(showCompletion.Checked?CompletionStatus(item.Done?"完成":"待办",item.Completion,item.Done):"")+OutstandingText(item.Html);
         string localColor=LocalOutstandingAppearance(taskId,item.Id);string inherited=EffectiveTaskAppearance(taskId,taskParents);
         var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,Completion=item.Completion,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
         var leaf=new TreeNode(current+path){Tag=state,Checked=item.Done,

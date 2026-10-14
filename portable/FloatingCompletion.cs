@@ -16,7 +16,7 @@ internal sealed partial class FloatingWindow {
     static int ManualCompletion(object value) {double number;return value!=null && Double.TryParse(Convert.ToString(value),out number) && !Double.IsNaN(number) && !Double.IsInfinity(number)?(int)Math.Round(Math.Max(0,Math.Min(100,number))):0;}
     static int TaskManualCompletion(Dictionary<string,object> task) {object value;return task!=null && task.TryGetValue("percent_done",out value)?ManualCompletion(Convert.ToDouble(value)*100):0;}
     static int EffectiveCompletion(int manual,bool done) {return done?100:ManualCompletion(manual);}
-    string CompletionPrefix(int manual,bool done) {return showCompletion.Checked?EffectiveCompletion(manual,done)+"% ":"";}
+    string CompletionStatus(string state,int manual,bool done) {return "["+state+(showCompletion.Checked?"-"+EffectiveCompletion(manual,done)+"%":"")+"] ";}
     void InitializeCompletion() {
         try {
             var prefs=ReadObject(File.ReadAllText(Path.Combine(data,"floating-order.json")));object value;

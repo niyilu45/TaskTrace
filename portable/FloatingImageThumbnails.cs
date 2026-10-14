@@ -18,12 +18,13 @@ internal sealed class ZoomableImagePreview : Control {
         DoubleBuffered=true;BackColor=Color.FromArgb(30,30,30);TabStop=true;
         AccessibleName="大图预览";AccessibleDescription="使用鼠标滚轮缩放，放大后按住鼠标拖动查看";
         SetStyle(ControlStyles.ResizeRedraw|ControlStyles.Selectable,true);
+        var copyMenu=new ContextMenuStrip();copyMenu.Items.Add("复制图片",null,delegate{if(image!=null)Clipboard.SetImage(image);});ContextMenuStrip=copyMenu;Disposed+=delegate{copyMenu.Dispose();};
     }
     internal void SetPreviewImage(Image value) {if(image!=null&&!Object.ReferenceEquals(image,value))image.Dispose();image=value;zoom=1f;panX=panY=0;Invalidate();}
     internal void ClearPreviewImage() {if(image!=null)image.Dispose();image=null;Invalidate();}
     SizeF FitSize() {
         if(image==null||ClientSize.Width<=0||ClientSize.Height<=0)return SizeF.Empty;
-        float fit=Math.Min((float)ClientSize.Width/image.Width,(float)ClientSize.Height/image.Height);
+        float fit=Math.Min(1f,Math.Min((float)ClientSize.Width/image.Width,(float)ClientSize.Height/image.Height));
         return new SizeF(image.Width*fit,image.Height*fit);
     }
     void ClampPan() {
@@ -97,7 +98,17 @@ internal sealed partial class FloatingWindow {
             preview.Controls.Add(box);preview.Controls.Add(heading);preview.Shown+=async delegate {
                 try {
                     byte[] bytes=item.Bytes??await DownloadImage(item.Source);
-                    box.SetPreviewImage(ThumbnailImage(bytes,2200,1600));loaded=true;
+                    using(var stream=new MemoryStream(bytes))using(var original=Image.FromStream(stream)) {
+                        var screen=Screen.FromControl(owner).WorkingArea;
+                        Size frame=preview.Size-preview.ClientSize;
+                        preview.MinimumSize=new Size(Math.Min(320,screen.Width),Math.Min(240,screen.Height));
+                        float fit=Math.Min(1f,Math.Min((float)(screen.Width-frame.Width-32)/original.Width,(float)(screen.Height-frame.Height-heading.Height-32)/original.Height));
+                        preview.ClientSize=new Size(Math.Max(300,(int)Math.Ceiling(original.Width*fit)),Math.Max(160,(int)Math.Ceiling(original.Height*fit))+heading.Height);
+                        preview.Size=new Size(Math.Min(screen.Width,preview.Width),Math.Min(screen.Height,preview.Height));
+                        preview.Location=new Point(screen.Left+(screen.Width-preview.Width)/2,screen.Top+(screen.Height-preview.Height)/2);
+                        box.SetPreviewImage(new Bitmap(original));
+                    }
+                    loaded=true;
                     if(verify||selfTest){box.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);if(box.Zoom<=1f)throw new Exception("Image preview wheel zoom failed");using(var bitmap=new Bitmap(preview.Width,preview.Height)){preview.DrawToBitmap(bitmap,new Rectangle(Point.Empty,preview.Size));bitmap.Save(Path.Combine(data,"floating-image-preview-test.png"));}preview.Close();}
                 } catch(Exception error){failure=error;heading.Text="图片读取失败："+error.Message;if(verify||selfTest)preview.Close();}
             };
