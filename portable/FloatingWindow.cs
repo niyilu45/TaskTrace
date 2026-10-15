@@ -608,8 +608,9 @@ internal sealed partial class FloatingWindow : Form {
     sealed class ProgressDraft { public string Text, Html; public List<PastedImage> Pictures; public List<ProgressReference> References; }
     async void ShowProgress() {
         if(busy || closing) return;
-        if(tasks.SelectedNode == null || !(tasks.SelectedNode.Tag is long)) { status.Text="请先选中事项。";return; }
-        await EditProgress((long)tasks.SelectedNode.Tag,tasks.SelectedNode.Text);
+        long id=SelectedTaskId();
+        if(id<=0) { status.Text="请先选中任务或遗留事项。";return; }
+        await EditProgress(id,TaskTitle(id));
     }
     async Task EditProgress(long id,string taskTitle,bool verify=false,bool expectSavedImage=false) {
         SetBusy(true); timer.Stop();
