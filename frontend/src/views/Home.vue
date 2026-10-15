@@ -21,8 +21,9 @@
 		</Message>
 		<div
 			v-if="isLocalBuild"
-			class="is-max-width-desktop has-text-end"
+			class="is-max-width-desktop overview-actions"
 		>
+			<PeriodReviewButton />
 			<TasktraceTeamImportButton
 				button-label="导入共享任务"
 				@imported="updateTaskKey"
@@ -60,6 +61,7 @@ import ShowTasks from '@/views/tasks/ShowTasks.vue'
 import ProjectCardGrid from '@/components/project/partials/ProjectCardGrid.vue'
 import TasktraceTeamImportButton from '@/components/project/TasktraceTeamImportButton.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import PeriodReviewButton from '@/components/home/PeriodReviewButton.vue'
 import ImportHint from '@/components/home/ImportHint.vue'
 
 import {getHistory} from '@/modules/projectHistory'
@@ -119,6 +121,12 @@ function handleClearLabelFilter() {
 </script>
 
 <style scoped lang="scss">
+.overview-actions {
+	display: flex;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: .75rem;
+}
 .show-tasks {
 	margin-block-start: 2rem;
 }

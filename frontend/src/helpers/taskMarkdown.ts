@@ -30,3 +30,19 @@ export async function saveTaskMarkdown(taskId: number, title: string) {
 	}
 	return data.warnings || []
 }
+
+// Save the already displayed report, so a later team update cannot change the export.
+export async function saveMarkdownDocument(markdown: string, filename: string) {
+	const picker = (window as PickerWindow).showSaveFilePicker
+	const handle = picker ? await picker.call(window, {suggestedName: filename, types: [{description: 'Markdown 文档', accept: {'text/markdown': ['.md']}}]}) : null
+	const blob = new Blob([markdown], {type: 'text/markdown;charset=utf-8'})
+	if (handle) {
+		const writable = await handle.createWritable()
+		try {await writable.write(blob); await writable.close()}
+		catch (error) {await writable.abort(); throw error}
+	} else {
+		const href = URL.createObjectURL(blob), anchor = document.createElement('a')
+		anchor.href = href; anchor.download = filename; anchor.click()
+		setTimeout(() => URL.revokeObjectURL(href), 30_000)
+	}
+}

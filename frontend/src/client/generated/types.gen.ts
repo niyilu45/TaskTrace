@@ -3005,6 +3005,18 @@ export type TaskTraceOutstandingMove = {
     readonly task_id?: number;
 };
 
+export type TaskTracePeriodReview = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    readonly change_count?: number;
+    readonly filename?: string;
+    readonly markdown?: string;
+    readonly task_count?: number;
+    readonly warnings?: Array<string> | null;
+};
+
 export type TaskTraceRecoverableBackup = {
     /**
      * Validated personal and team data available for recovery.
@@ -11705,6 +11717,44 @@ export type TasktraceNotificationSettingsWriteResponses = {
 };
 
 export type TasktraceNotificationSettingsWriteResponse = TasktraceNotificationSettingsWriteResponses[keyof TasktraceNotificationSettingsWriteResponses];
+
+export type TasktracePeriodReviewData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Comma-separated project IDs; access is checked for every project.
+         */
+        projects?: Array<number> | null;
+        /**
+         * Inclusive local day start with UTC offset.
+         */
+        from: string;
+        /**
+         * Exclusive next-day start with UTC offset.
+         */
+        until: string;
+    };
+    url: '/tasktrace/review';
+};
+
+export type TasktracePeriodReviewErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktracePeriodReviewError = TasktracePeriodReviewErrors[keyof TasktracePeriodReviewErrors];
+
+export type TasktracePeriodReviewResponses = {
+    /**
+     * OK
+     */
+    200: TaskTracePeriodReview;
+};
+
+export type TasktracePeriodReviewResponse = TasktracePeriodReviewResponses[keyof TasktracePeriodReviewResponses];
 
 export type TasktraceTeamStatusData = {
     body?: never;

@@ -93,6 +93,10 @@ func taskTraceRecordOutstandingActivity(s *xorm.Session, actor *user.User, taskI
 			attrs += ` data-tasktrace-local="true"`
 		}
 		content := `<p data-tasktrace-comment-type="` + taskTraceOutstandingActivityType + `"` + attrs + `><strong>` + action + `遗留事项</strong>：` + html.EscapeString(taskTraceOutstandingActivityLabel(item)) + `</p>`
+		old, exists := previous[item.id]
+		if action != "删除" && !local {
+			content += taskTraceReviewItemSnapshot(old, exists, item)
+		}
 		record := &TaskComment{TaskID: taskID, AuthorID: actor.ID,
 			Comment: taskTraceTeamAddMarker(content, uuid.NewString(), actor.Username)}
 		// The original mutation already dispatches the task/comment event. A second

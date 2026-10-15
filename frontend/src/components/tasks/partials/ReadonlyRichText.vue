@@ -43,6 +43,8 @@ watch(() => props.html, async value => {
 	const current = ++version
 	const pendingUrls: string[] = []
 	const doc = new DOMParser().parseFromString(DOMPurify.sanitize(props.deduplicateImages ? deduplicateHtmlImages(value || '') : value || '', {FORBID_TAGS: ['input', 'button', 'form', 'textarea', 'select'], FORBID_ATTR: ['contenteditable', 'autofocus']}), 'text/html')
+	// Operation snapshots are for reports only; do not render or load their images in comments.
+	for (const snapshot of doc.querySelectorAll('[data-tasktrace-review-change]')) snapshot.remove()
 	for (const anchor of doc.querySelectorAll('a')) {
 		anchor.removeAttribute('target')
 		anchor.setAttribute('rel', 'noopener noreferrer')
