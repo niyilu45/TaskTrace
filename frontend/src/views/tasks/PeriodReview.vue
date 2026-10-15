@@ -3,7 +3,7 @@
 		<div class="preview-toolbar">
 			<div>
 				<h1>周期回顾</h1><p v-if="report">
-					共 {{ report.task_count }} 个任务 · {{ report.change_count }} 条变化
+					共 {{ report.task_count }} 个任务 · {{ report.change_count }} 条回顾内容
 				</p>
 			</div>
 			<XButton
@@ -51,7 +51,7 @@
 				{{ scope }}
 			</p>
 			<p class="review-hint">
-				仅汇总所选期间的变化；已删除任务和遗留事项不展示。任务描述为当前内容，拖动表头分隔线可调整列宽。
+				遗留事项只展示期间内有改动的条目，每项显示最新内容并编号；已删除内容不展示。任务描述为当前内容，拖动表头分隔线可调整列宽。
 			</p>
 			<div
 				v-if="projects.length"
@@ -100,7 +100,7 @@
 					>
 						<header><h2>{{ project.title }}</h2><span>{{ project.tasks?.length || 0 }} 个任务</span></header>
 						<ProjectProgressTable
-							:labels="['任务名', '任务描述', '遗留事项变化', '进展']"
+							:labels="['任务名', '任务描述', '遗留事项', '进展']"
 							:widths="widths"
 							:label="project.title + '周期回顾'"
 							@resize="resizeColumns"
@@ -155,7 +155,7 @@
 				v-else
 				role="status"
 			>
-				所选项目在此时间范围内没有可回顾的进展更新、遗留事项新增或备注修改。
+				所选项目在此时间范围内没有可回顾的进展更新或遗留事项变化。
 			</p>
 		</template>
 	</main>

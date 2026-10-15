@@ -38,18 +38,18 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="item"><strong>新增遗留事项</strong>：New issue</p>`+taskTraceReviewItemSnapshot(taskTraceOutstandingItem{}, false, old), from)
 	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="item"><strong>修改遗留事项</strong>：New issue</p>`+taskTraceReviewItemSnapshot(old, true, updated), until.Add(-time.Second))
 	add(`<p data-tasktrace-comment-type="item-activity"><strong>完成遗留事项</strong>：irrelevant completion</p>`, from.Add(time.Hour))
-	add(`<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="item">New issue</li><li data-id="legacy">legacy item</li></ul>`, until.Add(time.Hour))
+	add(`<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="item"><p>Latest issue title</p><aside data-tasktrace-outstanding-note="true" hidden><p>latest note after period</p></aside></li><li data-id="legacy">legacy item</li></ul>`, until.Add(time.Hour))
 	report := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
 	can, _, err := report.CanRead(s, actor)
 	require.NoError(t, err)
 	require.True(t, can)
 	require.NoError(t, report.ReadOne(s, actor))
 	require.Equal(t, 1, report.TaskCount)
-	require.Equal(t, 4, report.ChangeCount)
-	for _, text := range []string{"final progress", "other member progress", "New issue", "old note", "new note", "修改前", "修改后", "2026-10-16 23:59"} {
+	require.Equal(t, 3, report.ChangeCount)
+	for _, text := range []string{"final progress", "other member progress", "1. Latest issue title", "latest note after period"} {
 		require.Contains(t, report.Markdown, text)
 	}
-	for _, text := range []string{"superseded draft", "exclusive end", "before range", "irrelevant completion", "data-tasktrace"} {
+	for _, text := range []string{"superseded draft", "exclusive end", "before range", "irrelevant completion", "data-tasktrace", "New issue", "old note", "new note", "修改前", "修改后"} {
 		require.NotContains(t, report.Markdown, text)
 	}
 	require.Empty(t, report.Warnings)
@@ -73,8 +73,9 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	add(legacy, from.Add(4*time.Hour))
 	report = &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
 	require.NoError(t, report.ReadOne(s, actor))
-	require.NotEmpty(t, report.Warnings)
-	require.Contains(t, report.Markdown, "旧记录")
+	require.Empty(t, report.Warnings)
+	require.Contains(t, report.Markdown, "2. legacy item")
+	require.NotContains(t, report.Markdown, "旧记录")
 }
 
 //nolint:gosmopolitan // Persisted Chinese activity fixtures cover current existence filtering.
@@ -128,4 +129,47 @@ func TestTaskTracePeriodReviewDeleted(t *testing.T) {
 		require.NotContains(t, report.Markdown, absent)
 	}
 	require.Empty(t, report.Warnings)
+}
+
+//nolint:gosmopolitan // Persisted Chinese activity and numbering match the UI.
+func TestTaskTracePeriodReviewLatestOutstanding(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	t.Setenv("TASKTRACE_DATA_ROOT", t.TempDir())
+	s := db.NewSession()
+	defer s.Close()
+	actor := &user.User{ID: 1, Username: "user1"}
+	task := &Task{ProjectID: 1, Title: "Latest outstanding"}
+	require.NoError(t, task.Create(s, actor))
+	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	until := from.AddDate(0, 0, 7)
+	add := func(body string, when time.Time) {
+		_, err := s.NoAutoTime().Insert(&TaskComment{TaskID: task.ID, AuthorID: 1, Comment: body, Created: when, Updated: when})
+		require.NoError(t, err)
+	}
+	for _, action := range []string{"新增", "修改", "修改"} {
+		body := `<p data-tasktrace-comment-type="item-activity" data-item-id="edited"><strong>` + action + `遗留事项</strong>：Old title</p>`
+		add(taskTraceTeamAddMarker(body, "shared-operation", "member"), from)
+	}
+	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="completed"><strong>完成遗留事项</strong>：Finished title</p>`, until.Add(-time.Second))
+	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="outside"><strong>修改遗留事项</strong>：Outside period</p>`, until)
+	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="outside"><strong>新增遗留事项</strong>：Outside period</p>`, from.Add(-time.Second))
+	image := "data:image/png;base64,iVBORw0KGgo="
+	add(`<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul>`+
+		`<li data-id="completed" data-done="true">Finished title</li>`+
+		`<li data-id="edited"><p>Latest title</p><aside data-tasktrace-outstanding-note="true" hidden><p>Latest memo</p><img alt="current picture" src="`+image+`"><p>After picture</p></aside></li>`+
+		`<li data-id="untouched">Unchanged item</li><li data-id="outside">Outside period</li></ul>`, until.Add(time.Hour))
+	report := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
+	require.NoError(t, report.ReadOne(s, actor))
+	require.Equal(t, 2, report.ChangeCount)
+	body := report.Projects[0].Tasks[0].Outstanding
+	require.Contains(t, body, "1. Latest title")
+	require.Contains(t, body, "2. **已完成** Finished title")
+	require.Equal(t, 1, strings.Count(body, "Latest title"))
+	require.Contains(t, body, "Latest memo")
+	require.Contains(t, body, image)
+	require.Contains(t, body, "After picture")
+	for _, absent := range []string{"Old title", "Unchanged item", "Outside period", "保存时间", "新增遗留事项", "修改遗留事项", "修改前", "修改后"} {
+		require.NotContains(t, body, absent)
+	}
+	require.Contains(t, report.Markdown, body)
 }

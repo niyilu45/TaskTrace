@@ -41,7 +41,7 @@ type TaskTraceReviewTask struct {
 	Title       string `json:"title"`
 	Description string `json:"description" doc:"Current task description as Markdown."`
 	Progress    string `json:"progress" doc:"Daily progress changes as Markdown."`
-	Outstanding string `json:"outstanding" doc:"Changes to currently existing outstanding items as Markdown."`
+	Outstanding string `json:"outstanding" doc:"Latest contents of outstanding items changed during the period, as numbered Markdown."`
 }
 type errTaskTraceReview string
 
@@ -72,9 +72,11 @@ func (r *TaskTracePeriodReview) CanRead(s *xorm.Session, a web.Auth) (bool, int,
 }
 
 type taskTraceReviewEntry struct {
-	when                time.Time
-	id                  int64
-	label, body, author string
+	when                   time.Time
+	id                     int64
+	label, body, author    string
+	outstanding, completed bool
+	itemOrder              int
 }
 
 func taskTraceReviewTime(c *TaskComment) time.Time {
@@ -218,9 +220,8 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		}
 		names = append(names, taskTraceReviewText(p.Title))
 	}
-	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
+	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。遗留事项按期间内有改动筛选，每项只展示当前最新内容并编号。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
 	lastProject := int64(-1)
-	legacy := false
 	for _, task := range candidates {
 		can, _, err := task.CanRead(s, a)
 		if err != nil {
@@ -233,15 +234,23 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		if err != nil {
 			return err
 		}
-		entries, old, err := r.collectEntries(comments, convert)
+		entries, err := r.collectEntries(comments, convert)
 		if err != nil {
 			return err
 		}
-		legacy = legacy || old
 		if len(entries) == 0 {
 			continue
 		}
 		sort.SliceStable(entries, func(i, j int) bool {
+			if entries[i].outstanding != entries[j].outstanding {
+				return !entries[i].outstanding
+			}
+			if entries[i].outstanding {
+				if entries[i].completed != entries[j].completed {
+					return !entries[i].completed
+				}
+				return entries[i].itemOrder < entries[j].itemOrder
+			}
 			if entries[i].when.Equal(entries[j].when) {
 				return entries[i].id > entries[j].id
 			}
@@ -262,19 +271,25 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 			output.WriteString("**任务描述**\n\n" + description + "\n\n")
 		}
 
+		itemNumber := 0
 		for _, e := range entries {
+			if e.outstanding {
+				itemNumber++
+				prefix := fmt.Sprintf("%d. ", itemNumber)
+				row.Outstanding += prefix + strings.ReplaceAll(strings.TrimSpace(e.body), "\n", "\n"+strings.Repeat(" ", len(prefix))) + "\n\n"
+				continue
+			}
 			var entry strings.Builder
 			fmt.Fprintf(&entry, "#### %s\n\n保存时间：%s", e.label, e.when.In(r.From.Location()).Format("2006-01-02 15:04"))
 			if e.author != "" {
 				entry.WriteString(" · " + taskTraceReviewText(e.author))
 			}
 			entry.WriteString("\n\n" + e.body + "\n\n")
-			output.WriteString(entry.String())
-			if strings.HasPrefix(e.label, "每日进展") {
-				row.Progress += entry.String()
-			} else {
-				row.Outstanding += entry.String()
-			}
+			row.Progress += entry.String()
+		}
+		output.WriteString(row.Progress)
+		if row.Outstanding != "" {
+			output.WriteString("**遗留事项**\n\n" + row.Outstanding)
 		}
 		project := &r.Projects[len(r.Projects)-1]
 		project.Tasks = append(project.Tasks, row)
@@ -282,31 +297,27 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		r.ChangeCount += len(entries)
 	}
 	if r.ChangeCount == 0 {
-		output.WriteString("所选项目在此时间范围内没有可回顾的进展更新、遗留事项新增或备注修改。\n")
+		output.WriteString("所选项目在此时间范围内没有可回顾的进展更新或遗留事项变化。\n")
 	}
 	r.Warnings = exporter.Warnings
-	if legacy {
-		r.Warnings = append(r.Warnings, "部分旧遗留事项记录只有操作名称，未保存修改前后内容；已单独标注，未推测历史差异。")
-	}
 	r.Filename = taskTraceMarkdownFilename("周期回顾_" + start + "_" + end)
 	r.Markdown = output.String()
 	return nil
 }
 
 //nolint:gosmopolitan // Saved daily progress labels are part of the local report.
-func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert func(string) (string, error)) ([]taskTraceReviewEntry, bool, error) {
-	legacy := false
+func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert func(string) (string, error)) ([]taskTraceReviewEntry, error) {
 	// The current canonical list, including changes after Until, determines existence.
 	// Operation logs remain for audit and must not resurrect deleted or moved items.
 	current, err := taskTraceParseOutstanding(append([]*TaskComment(nil), comments...))
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	existing := map[string]bool{}
-	labels := map[string]bool{}
+	// Legacy activity without an ID is only matched when its title is unambiguous.
+	labels := map[string][]string{}
 	for _, item := range current.items {
-		existing[item.id] = true
-		labels[taskTraceOutstandingActivityLabel(item)] = true
+		label := taskTraceOutstandingActivityLabel(item)
+		labels[label] = append(labels[label], item.id)
 	}
 	// A later edit must not be mislabeled as a past version.
 	history := []*TaskComment{}
@@ -344,82 +355,49 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		}
 		body, err := convert(day.body)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		entries = append(entries, taskTraceReviewEntry{when: when, id: c.ID, label: "每日进展 · " + day.date, body: body, author: taskTraceReviewAuthor(c)})
 	}
-	seenActivity := map[string]bool{}
+	changed := map[string]bool{}
 	for _, c := range history {
-		when := taskTraceReviewTime(c)
-		if when.Before(r.From) {
+		if taskTraceReviewTime(c).Before(r.From) {
 			continue
 		}
 		action, label, id := taskTraceReviewActivity(c.Comment)
-		if action == "" || (id != "" && !existing[id]) || (id == "" && !labels[label]) {
+		if action == "" || action == "删除遗留事项" {
 			continue
 		}
-		if marker, ok := taskTraceTeamReadMarker(c.Comment); ok && marker.ID != "" {
-			if seenActivity[marker.ID] {
-				continue
-			}
-			seenActivity[marker.ID] = true
+		if id == "" && len(labels[label]) == 1 {
+			id = labels[label][0]
 		}
-		kind, body, old, err := taskTraceReviewActivityContent(c.Comment, action, label, convert)
+		if id != "" {
+			changed[id] = true
+		}
+	}
+	for index, item := range current.items {
+		if !changed[item.id] {
+			continue
+		}
+		// Activity only selects items. Never render stale snapshots or repeat an item
+		// for each edit; use the same current list as the editors, including images.
+		title, note := taskTraceReviewItemParts(item)
+		body, err := convert(title)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		legacy = legacy || old
-		if kind == "" {
-			continue
+		memo, err := convert(note)
+		if err != nil {
+			return nil, err
 		}
-		entries = append(entries, taskTraceReviewEntry{when: when, id: c.ID, label: kind, body: body, author: taskTraceReviewAuthor(c)})
+		if memo != "" {
+			body += "\n\n**备注**\n\n" + memo
+		}
+		completed := taskTraceOutstandingItemAttribute(item, "data-done") == "true"
+		if completed {
+			body = "**已完成** " + body
+		}
+		entries = append(entries, taskTraceReviewEntry{outstanding: true, completed: completed, itemOrder: index, body: body})
 	}
-	return entries, legacy, nil
-}
-
-//nolint:gosmopolitan // Chinese report field labels match the local application.
-func taskTraceReviewActivityContent(raw, action, label string, convert func(string) (string, error)) (kind, body string, legacy bool, err error) {
-	added, fields, found := taskTraceReviewSnapshot(raw)
-	switch {
-	case found:
-		if !added && taskTraceTeamCanonicalHTML(fields["before"], nil) == taskTraceTeamCanonicalHTML(fields["after"], nil) {
-			return
-		}
-		title, e := convert(fields["title"])
-		if e != nil {
-			return "", "", false, e
-		}
-		after, e := convert(fields["after"])
-		if e != nil {
-			return "", "", false, e
-		}
-		if added {
-			kind = "新增遗留事项"
-			body = title
-			if after != "" {
-				body += "\n\n**备注**\n\n" + after
-			}
-		} else {
-			before, e := convert(fields["before"])
-			if e != nil {
-				return "", "", false, e
-			}
-			if before == "" {
-				before = "（空）"
-			}
-			if after == "" {
-				after = "（已清空）"
-			}
-			kind = "遗留事项备注修改"
-			body = title + "\n\n**修改前**\n\n" + before + "\n\n**修改后**\n\n" + after
-		}
-	case action == "新增遗留事项":
-		kind = action
-		body = taskTraceReviewText(label)
-	case action == "修改遗留事项":
-		legacy = true
-		kind = "遗留事项修改（旧记录）"
-		body = taskTraceReviewText(label) + "\n\n旧记录未保存字段快照，无法区分正文与备注的变化，也无法还原修改前后内容。"
-	}
-	return
+	return entries, nil
 }
