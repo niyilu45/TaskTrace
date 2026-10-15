@@ -34,6 +34,15 @@ test('portable launch enters workspace without login and renews the session', as
  await expect(page.locator('.menu-container')).toBeVisible({timeout: 30000})
  await expect(page).not.toHaveURL(/\/login/)
  expect(await page.evaluate(() => localStorage.getItem('tasktraceLocalRefresh'))).not.toBe(session.refresh_token)
+ // Task creation remains in project editing; the overview no longer has quick add.
+ const token = await page.evaluate(() => localStorage.getItem('token'))
+ const projectResponse = await page.request.post(base + '/api/v2/projects', {
+  headers: {Authorization: 'Bearer ' + token}, data: {title: 'No-login test project'},
+ })
+ expect(projectResponse.ok()).toBe(true)
+ const project = await projectResponse.json()
+ const listView = project.views.find((view: {view_kind: string}) => view.view_kind === 'list')
+ await page.goto(base + '/projects/' + project.id + '/' + listView.id + '?mode=edit')
  const taskTitle = 'No-login browser task ' + Date.now()
  await page.locator('.add-task-textarea').first().fill(taskTitle)
  await page.locator('.add-task-textarea').first().press('Enter')

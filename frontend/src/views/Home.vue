@@ -19,10 +19,15 @@
 				{{ $t('user.deletion.scheduledCancel') }}
 			</RouterLink>
 		</Message>
-		<AddTask
-			class="is-max-width-desktop"
-			@tasksAdded="updateTaskKey"
-		/>
+		<div
+			v-if="isLocalBuild"
+			class="is-max-width-desktop has-text-end"
+		>
+			<TasktraceTeamImportButton
+				button-label="导入共享任务"
+				@imported="updateTaskKey"
+			/>
+		</div>
 		<ImportHint v-if="tasksLoaded" />
 		<div
 			v-if="authStore.settings.frontendSettings.showLastViewed !== false && projectHistory.length > 0"
@@ -53,7 +58,8 @@ import {useRoute, useRouter} from 'vue-router'
 import Message from '@/components/misc/Message.vue'
 import ShowTasks from '@/views/tasks/ShowTasks.vue'
 import ProjectCardGrid from '@/components/project/partials/ProjectCardGrid.vue'
-import AddTask from '@/components/tasks/AddTask.vue'
+import TasktraceTeamImportButton from '@/components/project/TasktraceTeamImportButton.vue'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import ImportHint from '@/components/home/ImportHint.vue'
 
 import {getHistory} from '@/modules/projectHistory'
@@ -95,8 +101,7 @@ const labelIds = computed(() => {
 	return Array.isArray(labelsParam) ? labelsParam : [labelsParam]
 })
 
-// This is to reload the tasks list after adding a new task through the global task add.
-// FIXME: Should use pinia (somehow?)
+// Reload only after an import changes the tasks in the overview.
 const showTasksKey = ref(0)
 
 function updateTaskKey() {

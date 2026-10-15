@@ -5,16 +5,6 @@
 		:class="{'team-center--page': !activityHost, 'team-center--activity-host': activityHost}"
 	>
 		<template v-if="!activityHost">
-			<div class="team-page-actions">
-				<XButton
-					variant="secondary"
-					icon="link"
-					@click="showImport = true"
-				>
-					导入任务链接
-				</XButton>
-			</div>
-
 			<section class="team-management-section">
 				<div class="team-management-heading">
 					<div>
@@ -190,62 +180,6 @@
 				</p>
 			</template>
 		</Modal>
-		<Modal
-			v-if="!activityHost"
-			:enabled="showImport"
-			@close="closeImport"
-			@submit="importTask"
-		>
-			<template #header>
-				导入团队任务链接
-			</template>
-			<template #text>
-				<div class="field">
-					<label
-						class="label"
-						for="team-task-link"
-					>任务链接</label>
-					<textarea
-						id="team-task-link"
-						v-model="link"
-						class="textarea"
-						rows="4"
-						placeholder="粘贴以 tasktrace-team:// 开头的链接"
-					/>
-					<p class="help">
-						链接只会导入共享任务及其子任务。相同协作标识的任务已存在时，会更新同步地址并合并本地修改，保留原来的任务位置。
-					</p>
-				</div>
-				<div class="field">
-					<label
-						class="label"
-						for="team-repository-override"
-					>共享目录地址（可选）</label>
-					<input
-						id="team-repository-override"
-						v-model="repositoryOverride"
-						class="input"
-						placeholder="\\\\10.143.58.8\\teamData"
-					>
-					<p class="help">
-						正常情况下无需填写。如果链接里的电脑名无法访问，可填写所属人提供的完整共享地址；若包含 imports 子目录，需一并保留。
-					</p>
-				</div>
-				<div class="field">
-					<label class="label">保存到项目</label>
-					<ProjectSearch
-						:model-value="targetProject || undefined"
-						@update:modelValue="targetProject = $event"
-					/>
-				</div>
-				<div
-					v-if="teamStore.status.repository && !teamStore.status.repository.shared"
-					class="notification is-warning is-light"
-				>
-					本机 teamData 尚未检测到 Windows 共享。接收别人链接不受影响；若要分享自己的任务，请先在文件夹属性中共享 teamData。
-				</div>
-			</template>
-		</Modal>
 
 		<TeamConflictResolver
 			v-if="activityHost && showConflicts"
@@ -260,11 +194,9 @@ import {useVisiblePolling} from '@/composables/useVisiblePolling'
 
 import TeamConflictResolver from './TeamConflictResolver.vue'
 import Modal from '@/components/misc/Modal.vue'
-import ProjectSearch from '@/components/tasks/partials/ProjectSearch.vue'
 import TeamMemberPicker from '@/components/tasks/partials/TeamMemberPicker.vue'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import XButton from '@/components/input/Button.vue'
-import type {IProject} from '@/modelTypes/IProject'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {error, getErrorText, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
@@ -279,11 +211,7 @@ const props = withDefaults(defineProps<{
 const activityHost = computed(() => props.activityHost)
 
 const teamStore = useTasktraceTeamStore()
-const showImport = ref(false)
 const showConflicts = ref(false)
-const link = ref('')
-const repositoryOverride = ref('')
-const targetProject = ref<IProject | null>(null)
 const addingMember = ref(false)
 const memberLink = ref('')
 const memberImportResult = ref<TaskTraceTeamMemberImportResult | null>(null)
@@ -457,27 +385,6 @@ async function importTeamMembers() {
 	}
 }
 
-function closeImport() {
-	showImport.value = false
-	link.value = ''
-	repositoryOverride.value = ''
-	targetProject.value = null
-}
-
-async function importTask() {
-	if (!link.value.trim() || !targetProject.value?.id) {
-		error({message: '请填写任务链接并选择保存项目。'})
-		return
-	}
-	try {
-		await teamStore.importLink(link.value.trim(), targetProject.value.id, repositoryOverride.value)
-		success({message: '协作连接已同步。新任务已导入；已有任务保留原位置。'})
-		closeImport()
-	} catch (cause) {
-		error(cause)
-	}
-}
-
 </script>
 
 <style scoped lang="scss">
@@ -487,12 +394,6 @@ async function importTask() {
 
 .team-center--activity-host {
 	display: contents;
-}
-
-.team-page-actions {
-	display: flex;
-	justify-content: flex-end;
-	margin-block-end: .75rem;
 }
 
 .team-management-section {

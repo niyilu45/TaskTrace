@@ -1,6 +1,5 @@
 import {test, expect} from '../../support/fixtures'
 import {ProjectFactory} from '../../factories/project'
-import {seed} from '../../support/seed'
 import {TaskFactory} from '../../factories/task'
 import {BucketFactory} from '../../factories/bucket'
 import {updateUserSettings} from '../../support/updateUserSettings'
@@ -62,7 +61,7 @@ test.describe('Home Page Task Overview', () => {
 	})
 
 	test('Should show a new task with a very soon due date at the top', async ({authenticatedPage: page, apiContext}) => {
-		const {tasks, project} = await seedTasks(apiContext, 49)
+		const {project} = await seedTasks(apiContext, 49)
 		const newTaskTitle = 'New Task'
 
 		await page.goto('/')
@@ -121,43 +120,17 @@ test.describe('Home Page Task Overview', () => {
 		await expect(page.locator('[data-cy="showTasks"]')).toContainText(newTaskTitle)
 	})
 
-	test('Should show a task without a due date added via default project at the bottom', async ({authenticatedPage: page, apiContext}) => {
-		const {project} = await seedTasks(apiContext, 40)
-
-		// Navigate first to get access to localStorage
+	test('Should not show the removed overview task entry even with a default project', async ({authenticatedPage: page, apiContext}) => {
+		const {project} = await seedTasks(apiContext, 1)
 		await page.goto('/')
-		await page.waitForLoadState('networkidle')
 		const token = await page.evaluate(() => localStorage.getItem('token'))
-
 		await updateUserSettings(apiContext, token, {
 			default_project_id: project.id,
 			overdue_tasks_reminders_time: '9:00',
 		})
-
-		const newTaskTitle = 'New Task'
-		// Reload page to apply the new settings
 		await page.reload()
-
-		// Wait for page to be fully loaded
-		await page.waitForLoadState('networkidle')
-
-		// Wait for the add task input to be visible and ready
-		const addTaskInput = page.locator('.add-task-textarea')
-		await expect(addTaskInput).toBeVisible()
-
-		await addTaskInput.fill(newTaskTitle)
-
-		// Wait for the task creation request to complete
-		const createTaskPromise = page.waitForResponse(response =>
-			response.url().includes('/api/v2/projects/') &&
-			response.url().includes('/tasks/bulk') &&
-			response.request().method() === 'POST',
-		)
-		await addTaskInput.press('Enter')
-		await createTaskPromise
-
-		// Wait for the task to appear in the list (no due date tasks appear at the bottom)
-		await expect(page.locator('[data-cy="showTasks"] .card .task').last()).toContainText(newTaskTitle, {timeout: 10000})
+		await expect(page.locator('[data-overview-task]')).toHaveCount(1)
+		await expect(page.locator('.task-add')).toHaveCount(0)
 	})
 
 	test('Should show the cta buttons for new project when there are no tasks', async ({authenticatedPage: page}) => {

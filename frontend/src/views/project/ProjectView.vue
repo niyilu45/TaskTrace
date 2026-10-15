@@ -141,7 +141,6 @@ watchEffect(() => baseStore.setCurrentProjectViewId(props.viewId))
 			<TasktraceTeamImportButton
 				v-if="editing && isLocalBuild"
 				:project-id="projectId"
-				:project-name="currentProject?.title"
 				@imported="editRevision++"
 			/>
 			<XButton
