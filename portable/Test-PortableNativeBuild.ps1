@@ -20,10 +20,10 @@ foreach ($name in @('TaskTrace.exe', 'TaskTrace-floating.exe', 'TaskTrace-update
     if (!(Test-Path -LiteralPath (Join-Path $packageRoot $name) -PathType Leaf)) { throw ('Missing binary: ' + $name) }
 }
 $assembly = [Reflection.Assembly]::LoadFile((Join-Path $packageRoot 'TaskTrace-floating.exe'))
-foreach ($name in @('FloatingWindow', 'ProgressHistoryBrowserBridge', 'FloatingClipboard', 'FloatingQuickAlarms', 'FloatingReminderRepeatRule', 'FloatingReminderRepeatFields')) {
+foreach ($name in @('FloatingWindow', 'ProgressHistoryBrowserBridge', 'FloatingClipboard', 'FloatingQuickAlarms', 'FloatingReminderRepeatRule', 'FloatingReminderRepeatFields', 'FloatingBulkImportDialog', 'FloatingBulkText')) {
     if ($null -eq $assembly.GetType($name)) { throw ('Missing compiled feature: ' + $name) }
 }
 $export = $assembly.GetType('FloatingWindow').GetMethod('ExportMarkdown', [Reflection.BindingFlags]'Instance,NonPublic')
 if ($null -eq $export) { throw 'Markdown export was not compiled into the floating window.' }
-Write-Output 'PASS: production native build includes Markdown export, history browser, clipboard, quick alarms, weekly reminders, launcher and updater.'
+Write-Output 'PASS: production native build includes Markdown export, history browser, clipboard, quick alarms, weekly reminders, bulk import, launcher and updater.'
 Write-Output ('Results: ' + $packageRoot)

@@ -423,12 +423,13 @@ internal sealed partial class FloatingWindow {
                 priorityRow.Controls.Add(new Label{Text="优先级（0 最高，9 最低）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项优先级说明"},0,0);priorityRow.Controls.Add(priority,1,0);priorityRow.Controls.Add(new Label{Text="背景色（仅本机）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleRight,AccessibleName="遗留事项背景色说明"},2,0);priorityRow.Controls.Add(appearance,3,0);
                 var previews=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoScroll=true,WrapContents=false};
                 var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill};
-                var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
+                var bulk=new Button{Text="批量导入…",Dock=DockStyle.Fill,Margin=Padding.Empty,AccessibleName="批量导入遗留事项"};var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
                 int noteImageDoubleClicks=0;
                 noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
-                layout.Controls.Add(list);layout.Controls.Add(mode);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(mode,0,0);modeRow.Controls.Add(bulk,1,0);
+                layout.Controls.Add(list);layout.Controls.Add(modeRow);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,originalAppearance="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,noteDraftRestored=false,updateDiscarded=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
@@ -457,6 +458,20 @@ internal sealed partial class FloatingWindow {
                 list.SelectedIndexChanged+=async delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}await edit(selected);};
                 PendingItem initiallySelected=null;if(!String.IsNullOrEmpty(selectedItemId))initiallySelected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(initiallySelected!=null){loading=true;list.SelectedItem=initiallySelected;loading=false;}await edit(initiallySelected);
                 WarnIfTeamReadOnly(id,dialog,feedback);
+                bulk.Click+=async delegate{
+                    if(writing)return;
+                    writing=true;buttons.Enabled=false;list.Enabled=false;
+                    try{
+                        int selectedPriority=priority.SelectedIndex;string group=Guid.NewGuid().ToString();
+                        using(var importer=new FloatingBulkImportDialog("遗留事项",TaskTitle(id),selectedPriority,10000,Font,async delegate(IList<FloatingBulkLine> lines,Action<int> progress){
+                            using(BeginUndoGroup(group))await ImportBulkOutstanding(id,lines,selectedPriority,progress);
+                        })){
+                            importer.Icon=Icon;importer.TopMost=dialog.TopMost;DpiDialog(importer);importer.ShowDialog(dialog);
+                            if(importer.HasSaved){shared=ReadShared(await ReadHistory(id));render();loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;feedback.Text="批量遗留事项已导入；当前编辑内容保持不变。";await RefreshUndo();}
+                        }
+                    }catch(Exception error){feedback.Text=error.Message;}
+                    finally{writing=false;buttons.Enabled=true;list.Enabled=true;}
+                };
                 fresh.Click+=async delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;await edit(null);input.Focus();};
                 editParent.Click+=delegate{if(writing || !mayDiscard())return;editParentRequested=true;dialog.Close();};
                 recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalCompletedAt=null;originalReminderAt=null;originalDone=false;originalPriority=defaultPriority;originalAppearance="";priority.SelectedIndex=defaultPriority;SelectAppearance(appearance,"");removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};

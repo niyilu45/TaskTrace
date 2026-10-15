@@ -186,6 +186,7 @@ internal sealed partial class FloatingWindow : Form {
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
         InitializePriorityChoice(entryPriority, defaultPriority);
         addRow = TaskCreationRow(entry, entryPriority, "新事项名称", "添加事项", async delegate { await AddTask(); });
+        AddBulkButton(addRow,async delegate{await ShowBulkRootTasks();});
         addRow.Visible=false;
         content.Controls.Add(addRow, 0, 1);
         searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
@@ -425,7 +426,7 @@ internal sealed partial class FloatingWindow : Form {
     void ShowNewTaskEditor() {
         if(simpleMode || closing || IsDisposed)return;
         if(collapsed)ToggleFold();
-        addRow.Visible=true;content.RowStyles[1].Height=58;RefreshFullLayout();
+        addRow.Visible=true;content.RowStyles[1].Height=70;RefreshFullLayout();
         if(IsHandleCreated)BeginInvoke(new Action(delegate {if(!closing && addRow.Visible)entry.Focus();}));
     }
     void HideNewTaskEditor() {
@@ -943,7 +944,8 @@ internal sealed partial class FloatingWindow : Form {
                 var priority = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = "新子任务优先级" };InitializePriorityChoice(priority,defaultPriority);
                 var feedback = new Label { Dock = DockStyle.Bottom, Height = 46, Text = "子任务独立完成；在主列表中选择它可记录每日进展。" };
                 var add = new Button { Text = "添加子任务", Dock = DockStyle.Fill, Width = 95 };
-                var row = TaskCreationRow(title,priority,"新子任务名称",add);row.Dock=DockStyle.Top;row.Height=58;
+                var row = TaskCreationRow(title,priority,"新子任务名称",add);row.Dock=DockStyle.Top;row.Height=70;
+                Button bulk=null;
                 var renameTitle = new TextBox { Dock = DockStyle.Fill, MaxLength = 250, AccessibleName = "修改子任务名称" };
                 var rename = new Button { Text = "保存名称", Dock = DockStyle.Fill, Enabled = false, Width = 95 };
                 var renameRow = TextFieldRow(renameTitle,"修改选中子任务名称",rename);renameRow.Dock=DockStyle.Top;renameRow.Height=58;
@@ -953,7 +955,7 @@ internal sealed partial class FloatingWindow : Form {
                     loading = true;
                     try {
                         depthLimit = await TaskHierarchySpan(parentId) >= 5;
-                        add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0;
+                        add.Enabled = !depthLimit;if(bulk!=null)bulk.Enabled=!depthLimit && pendingId==0; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0;
                         if(depthLimit) feedback.Text = TaskDepthMessage;
                         var current = await Api("GET", "/tasks/" + parentId, null);
                         list.Items.Clear();
@@ -961,6 +963,13 @@ internal sealed partial class FloatingWindow : Form {
                         if(relations != null && relations.ContainsKey("subtask")) foreach(Dictionary<string, object> child in (IEnumerable)relations["subtask"]) list.Items.Add(new ListViewItem((string)child["title"]) { Tag = Convert.ToInt64(child["id"]), Checked = Convert.ToBoolean(child["done"]) });
                     } finally { loading = false; }
                 };
+                bulk=AddBulkButton(row,async delegate{
+                    if(writing || depthLimit || pendingId>0)return;
+                    writing=true;
+                    try{if(await ShowBulkTasks(dialog,projectId,parentId,priority.SelectedIndex,(string)parent["title"])){await reload();feedback.Text="批量任务已导入。";}}
+                    catch(Exception error){feedback.Text=error.Message;}
+                    finally{writing=false;}
+                });
                 list.SelectedIndexChanged += delegate {
                     if(writing) return;
                     rename.Enabled = list.SelectedItems.Count > 0;
@@ -989,7 +998,7 @@ internal sealed partial class FloatingWindow : Form {
                         }
                         pendingId = 0;pendingPriority=-1; pendingUndoGroup = null; title.Clear();priority.SelectedIndex=defaultPriority; feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
                     } catch { feedback.Text = depthLimit ? TaskDepthMessage : pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
-                    finally { writing = false; add.Enabled = !depthLimit; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0; }
+                    finally { writing = false; add.Enabled = !depthLimit;if(bulk!=null)bulk.Enabled=!depthLimit && pendingId==0; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0; }
                 };
                 title.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; add.PerformClick(); } };
                 list.ItemCheck += delegate(object sender, ItemCheckEventArgs e) {
