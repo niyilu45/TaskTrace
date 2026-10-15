@@ -148,7 +148,7 @@ export default class TaskService extends AbstractService<ITask> {
 		// wire format, not an ITask.
 		const processed = this.processModel(task) as unknown as {
 			assignees: {id: number, username: string}[],
-			reminders: {reminder: string | null, relative_period: number, relative_to: string | null}[],
+			reminders: {reminder: string | null, relative_period: number, relative_to: string | null, repeat_rule?: string}[],
 		} & Record<string, unknown>
 		return {
 			title: processed.title,
@@ -171,6 +171,7 @@ export default class TaskService extends AbstractService<ITask> {
 			})),
 			reminders: processed.reminders.map(r => ({
 				reminder: r.reminder,
+				repeat_rule: r.repeat_rule || '',
 				relative_period: r.relative_period,
 				relative_to: r.relative_to,
 			})),

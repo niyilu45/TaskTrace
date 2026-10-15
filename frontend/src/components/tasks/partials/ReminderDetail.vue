@@ -11,6 +11,7 @@
 				<SimpleButton
 					ref="trigger"
 					v-tooltip="reminder.reminder ? reminderText : null"
+					:disabled="disabled"
 					@click.prevent.stop="toggle()"
 				>
 					{{ reminderText }}
@@ -52,6 +53,28 @@
 						</SimpleButton>
 					</div>
 
+
+					<div
+						v-if="allowAbsolute"
+						class="reminder-modes"
+					>
+						<SimpleButton
+							:class="{'currently-active': activeForm !== 'weekly'}"
+							@click="showFormSwitch = 'absolute'"
+						>
+							单次提醒
+						</SimpleButton>
+						<SimpleButton
+							:class="{'currently-active': activeForm === 'weekly'}"
+							@click="showFormSwitch = 'weekly'"
+						>
+							按周重复
+						</SimpleButton>
+					</div>
+					<ReminderWeekly
+						v-if="activeForm === 'weekly'"
+						v-model="weeklyRule"
+					/>
 					<ReminderPeriod
 						v-if="activeForm === 'relative'"
 						v-model="reminder"
@@ -69,7 +92,7 @@
 						v-if="activeForm !== null"
 						class="reminder__close-button"
 						:shadow="false"
-						:disabled="activeForm === 'absolute' && reminderDate === null"
+						:disabled="disabled || (activeForm === 'absolute' && reminderDate === null) || (activeForm === 'weekly' && !!repeatRuleError(weeklyRule))"
 						@click="confirmAndClose(close)"
 					>
 						{{ $t('misc.confirm') }}
@@ -93,6 +116,8 @@ import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
 import {formatDate} from '@/helpers/time/formatDate'
 
 import DatepickerInline from '@/components/input/DatepickerInline.vue'
+import ReminderWeekly from '@/components/tasks/partials/ReminderWeekly.vue'
+import {defaultRepeatRule, firstRepeatDate, parseRepeatRule, repeatRuleError, repeatRuleText, serializeRepeatRule} from '@/helpers/reminderRepeat'
 import ReminderPeriod from '@/components/tasks/partials/ReminderPeriod.vue'
 import Popup from '@/components/misc/Popup.vue'
 
@@ -105,11 +130,13 @@ const props = withDefaults(defineProps<{
 	clearAfterUpdate?: boolean,
 	defaultRelativeTo?: IReminderPeriodRelativeTo | null,
 	allowAbsolute?: boolean,
+	disabled?: boolean,
 }>(), {
 	modelValue: () => new TaskReminderModel() as ITaskReminder,
 	clearAfterUpdate: false,
 	defaultRelativeTo: REMINDER_PERIOD_RELATIVE_TO_TYPES.DUEDATE,
 	allowAbsolute: true,
+	disabled: false,
 })
 
 const emit = defineEmits<{
@@ -134,9 +161,12 @@ const presets = computed(() => [
 const reminderDate = ref<Date | null>(null)
 
 const isMobile = useIsMobile()
-const showFormSwitch = ref<null | 'relative' | 'absolute'>(null)
+const showFormSwitch = ref<null | 'relative' | 'absolute' | 'weekly'>(null)
+const weeklyRule = ref(defaultRepeatRule())
 
 const activeForm = computed(() => {
+	if (showFormSwitch.value) return showFormSwitch.value
+	if (reminder.value.repeatRule) return 'weekly'
 	if (props.defaultRelativeTo === null && props.allowAbsolute) {
 		return 'absolute'
 	}
@@ -152,6 +182,7 @@ const lockedRelativeTo = computed(() => {
 })
 
 const reminderText = computed(() => {
+	if (reminder.value.repeatRule) return repeatRuleText(reminder.value.repeatRule) || '周期提醒'
 	if (reminder.value.reminder !== null) {
 		return t('task.reminder.scheduledAt', {
 			date: formatDate(reminder.value.reminder, 'YYYY-MM-DD HH:mm'),
@@ -166,10 +197,12 @@ const reminderText = computed(() => {
 })
 
 watch(
-	() => props.modelValue,
-	(newReminder) => {
+	() => JSON.stringify(props.modelValue),
+	() => {
+		const newReminder = props.modelValue
 		if (newReminder) {
-			reminder.value = newReminder
+			reminder.value = new TaskReminderModel(newReminder)
+			weeklyRule.value = parseRepeatRule(newReminder.repeatRule) || defaultRepeatRule(newReminder.reminder || new Date())
 
 			if (newReminder.relativeTo === null && newReminder.reminder !== null) {
 				reminderDate.value = new Date(newReminder.reminder)
@@ -197,6 +230,7 @@ function setReminderDateAndClose(close: () => void) {
 		: new Date(reminderDate.value)
 	reminder.value.relativeTo = null
 	reminder.value.relativePeriod = 0
+	reminder.value.repeatRule = ''
 	updateDataAndMaybeCloseNow(close)
 }
 
@@ -215,6 +249,15 @@ function updateDataAndMaybeCloseNow(close: () => void) {
 }
 
 function confirmAndClose(close: () => void) {
+	if (props.disabled) return
+	if (activeForm.value === 'weekly') {
+		if (repeatRuleError(weeklyRule.value)) return
+		reminder.value = new TaskReminderModel({reminder: firstRepeatDate(weeklyRule.value), repeatRule: serializeRepeatRule(weeklyRule.value)})
+		updateData()
+		close()
+		return
+	}
+	if (activeForm.value === 'relative') reminder.value.repeatRule = ''
 	if (activeForm.value === 'absolute') {
 		setReminderDateAndClose(close)
 	} else {
@@ -287,6 +330,13 @@ function translateUnit(amount: number, unit: PeriodUnit): string {
 </script>
 
 <style lang="scss" scoped>
+.reminder-modes {
+	display: flex;
+	gap: .5rem;
+	padding: .5rem;
+	border-block-end: 1px solid var(--grey-200);
+}
+
 .options {
 	display: flex;
 	flex-direction: column;
@@ -294,7 +344,7 @@ function translateUnit(amount: number, unit: PeriodUnit): string {
 }
 
 .reminder-options-popup {
-	inline-size: 310px;
+	inline-size: min(370px, calc(100vw - 2rem));
 	z-index: 99;
 
 	.bottom-sheet & {

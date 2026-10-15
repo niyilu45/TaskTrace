@@ -2138,6 +2138,19 @@ func updateDone(oldTask *Task, newTask *Task) (updateDoneAt bool) {
 // Set the absolute trigger dates for Reminders with relative period
 func updateRelativeReminderDates(task *Task) (err error) {
 	for _, reminder := range task.Reminders {
+		if reminder.RepeatRule != "" {
+			rule, ruleErr := parseReminderRepeatRule(reminder.RepeatRule)
+			if ruleErr != nil {
+				return ruleErr
+			}
+			if reminder.RelativeTo != "" || reminder.RelativePeriod != 0 {
+				return errReminderRepeat("Weekly reminders cannot use a relative time")
+			}
+			reminder.RepeatRule, ruleErr = rule.canonical()
+			if ruleErr != nil {
+				return ruleErr
+			}
+		}
 		relativeDuration := time.Duration(reminder.RelativePeriod) * time.Second
 		if reminder.RelativeTo != "" {
 			reminder.Reminder = time.Time{}
@@ -2186,9 +2199,9 @@ func (t *Task) updateReminders(s *xorm.Session, task *Task) (err error) {
 	}
 
 	// Resolve duplicates and sort them
-	reminderMap := make(map[int64]*TaskReminder, len(task.Reminders))
+	reminderMap := make(map[string]*TaskReminder, len(task.Reminders))
 	for _, reminder := range task.Reminders {
-		reminderMap[reminder.Reminder.UTC().Unix()] = reminder
+		reminderMap[reminder.Reminder.UTC().Format(time.RFC3339)+"|"+reminder.RepeatRule] = reminder
 	}
 
 	t.Reminders = make([]*TaskReminder, 0, len(reminderMap))
@@ -2199,7 +2212,8 @@ func (t *Task) updateReminders(s *xorm.Session, task *Task) (err error) {
 			TaskID:         t.ID,
 			Reminder:       r.Reminder,
 			RelativePeriod: r.RelativePeriod,
-			RelativeTo:     r.RelativeTo}
+			RelativeTo:     r.RelativeTo,
+			RepeatRule:     r.RepeatRule}
 		_, err = s.Insert(taskReminder)
 		if err != nil {
 			return err

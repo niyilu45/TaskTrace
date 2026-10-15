@@ -741,7 +741,7 @@ func taskTraceTeamOutstandingItems(body string) (map[string]string, []string) {
 // peers that copied only inner HTML; the normal list always uses LI attributes.
 func taskTraceTeamOutstandingStateAttributes(node *html.Node) string {
 	var state strings.Builder
-	for _, key := range []string{"data-done", "data-completed-at", "data-reminder", "data-progress"} {
+	for _, key := range []string{"data-done", "data-completed-at", "data-reminder", "data-reminder-repeat", "data-progress"} {
 		value := taskTraceAttribute(node, key)
 		if value == "" || (key == "data-done" && value != "true") {
 			continue

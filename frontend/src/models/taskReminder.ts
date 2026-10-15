@@ -5,6 +5,7 @@ import type {IReminderPeriodRelativeTo} from '@/types/IReminderPeriodRelativeTo'
 
 export default class TaskReminderModel extends AbstractModel<ITaskReminder> implements ITaskReminder {
 	reminder: Date | null
+	repeatRule = ''
 	relativePeriod = 0
 	relativeTo: IReminderPeriodRelativeTo | null = null
 

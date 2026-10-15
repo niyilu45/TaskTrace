@@ -40,7 +40,7 @@ const list = vi.mocked(taskCommentsList)
 const shared = (items: string) => `<h3>TaskTrace 遗留事项清单</h3><ul>${items}</ul>`
 
 async function open(disabled = false) {
-	wrapper = mount(SharedOutstanding, {props: {taskId: 42, disabled}, attachTo: root})
+	wrapper = mount(SharedOutstanding, {props: {taskId: 42, disabled}, attachTo: root, global: {stubs: {ReminderDetail: true}}})
 	await flushPromises()
 }
 
@@ -128,7 +128,7 @@ describe('outstanding item images', () => {
 		await click('编辑')
 		expect(wrapper.find('.mock-note-editor').exists()).toBe(false)
 		await wrapper.get('textarea').setValue('Renamed')
-		await wrapper.get('select').setValue('3')
+		await wrapper.get('.outstanding-priority-select').setValue('3')
 		await click('保存修改')
 		expect(history[0].comment).toContain('Renamed')
 		expect(history[0].comment).toContain('data-priority="3"')

@@ -94,7 +94,7 @@ internal sealed partial class FloatingWindow {
             var leaf=node.Tag as OutstandingLeaf;
             var task=node as TaskNode;
             return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,task==null?0:task.ReminderCount,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
-                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Completion,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt};
+                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Completion,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt,leaf.RepeatRule};
         }).ToArray();
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
@@ -249,7 +249,6 @@ internal sealed partial class FloatingWindow {
         ApplyLocalAppearance(nodes,parents);
         NumberTasks(roots,all);
         int groupCount=roots.Count;
-        UpdateReminderTargets(all,reminderSharedLists);
         foreach(var pair in nodes) {SharedList owned;reminderSharedLists.TryGetValue(pair.Key,out owned);var taskNode=pair.Value as TaskNode;if(taskNode!=null)taskNode.ReminderCount=DirectTaskReminderCount(all[pair.Key],owned);}
         if(!TaskLoadCurrent(version,context,background))return false;
         if(singleLine.Checked){

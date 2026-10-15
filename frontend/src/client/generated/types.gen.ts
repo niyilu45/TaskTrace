@@ -2666,6 +2666,7 @@ export type TaskReminder = {
     relative_period?: number;
     relative_to?: string;
     reminder?: string;
+    repeat_rule?: string;
 };
 
 export type TaskTraceBackupList = {

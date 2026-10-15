@@ -62,9 +62,9 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public string LocalColorKey="",EffectiveColorKey=""; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
     sealed class PendingItem {
-        public string Id, Html, NoteHtml, CompletedAt, ReminderAt; public int Number, Completion; public bool Done; public int Priority=7;
+        public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule; public int Number, Completion; public bool Done; public int Priority=7;
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
@@ -369,7 +369,7 @@ internal sealed partial class FloatingWindow : Form {
                 string content=match.Body;var note=OutstandingNotePattern.Match(content);
                 list.Items.Add(new PendingItem {Id=id,Html=OutstandingNotePattern.Replace(content,""),NoteHtml=note.Success?note.Groups["note"].Value:"",
                     Done=String.Equals(OutstandingAttribute(tag,"data-done"),"true",StringComparison.OrdinalIgnoreCase),
-                    CompletedAt=OutstandingAttribute(tag,"data-completed-at"),ReminderAt=OutstandingAttribute(tag,"data-reminder"),
+                    CompletedAt=OutstandingAttribute(tag,"data-completed-at"),ReminderAt=OutstandingAttribute(tag,"data-reminder"),RepeatRule=OutstandingAttribute(tag,"data-reminder-repeat"),
                     Completion=ManualCompletion(OutstandingAttribute(tag,"data-progress")),Priority=Math.Max(0,Math.Min(9,value))});
             }
         } else {
@@ -383,7 +383,7 @@ internal sealed partial class FloatingWindow : Form {
         return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
+        string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+(String.IsNullOrWhiteSpace(item.RepeatRule)?"":" data-reminder-repeat=\""+WebUtility.HtmlEncode(item.RepeatRule)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);
     }

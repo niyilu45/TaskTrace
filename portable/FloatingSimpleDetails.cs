@@ -178,7 +178,7 @@ internal sealed partial class FloatingWindow {
         if(leaves.Count!=shared.Items.Count)return false;
         for(int index=0;index<leaves.Count;index++) {
             var leaf=leaves[index];var item=shared.Items[index];
-            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.NoteHtml!=item.NoteHtml || leaf.Done!=item.Done || leaf.CompletedAt!=item.CompletedAt || leaf.Priority!=item.Priority || leaf.Completion!=item.Completion || leaf.ReminderAt!=item.ReminderAt)return false;
+            if(leaf.TaskId!=(long)node.Tag || leaf.Id!=item.Id || leaf.Html!=item.Html || leaf.NoteHtml!=item.NoteHtml || leaf.Done!=item.Done || leaf.CompletedAt!=item.CompletedAt || leaf.Priority!=item.Priority || leaf.Completion!=item.Completion || leaf.ReminderAt!=item.ReminderAt || leaf.RepeatRule!=item.RepeatRule)return false;
         }
         return true;
     }
@@ -224,7 +224,7 @@ internal sealed partial class FloatingWindow {
         int number=index+1;
         string current=number+". "+"[P"+item.Priority+"] "+(showCompletion.Checked?CompletionStatus(item.Done?"完成":"待办",item.Completion,item.Done):"")+OutstandingText(item.Html);
         string localColor=LocalOutstandingAppearance(taskId,item.Id);string inherited=EffectiveTaskAppearance(taskId,taskParents);
-        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,Priority=item.Priority,Completion=item.Completion,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
+        var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,RepeatRule=item.RepeatRule,Priority=item.Priority,Completion=item.Completion,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
         var leaf=new TreeNode(current+path){Tag=state,Checked=item.Done,
             ForeColor=item.Done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
             ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};

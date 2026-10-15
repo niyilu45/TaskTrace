@@ -16,6 +16,7 @@ export type OutstandingItem = {
 	completion?: number
 	completedAt?: string
 	reminderAt?: string
+	repeatRule?: string
 }
 
 const outstandingNoteSelector = 'aside[data-tasktrace-outstanding-note]'
@@ -70,6 +71,7 @@ export function sharedOutstanding(history: TaskComment[]): {id: number | undefin
 					completion: manualCompletion(li.getAttribute('data-progress')),
 					completedAt: li.getAttribute('data-completed-at') || undefined,
 					reminderAt: li.getAttribute('data-reminder') || undefined,
+					...(li.getAttribute('data-reminder-repeat') ? {repeatRule: li.getAttribute('data-reminder-repeat')!} : {}),
 				}
 			}),
 		}
@@ -110,7 +112,7 @@ export async function changeOutstanding(taskId: number, change: (items: Outstand
 	const comment = `<h3 ${outstandingTypeAttribute}="${outstandingType}">${sharedHeading}</h3><ul>${items.map(item => {
 		const completedAt = item.completedAt ? ` data-completed-at="${attribute(item.completedAt)}"` : ''
 		const reminderAt = item.reminderAt ? ` data-reminder="${attribute(item.reminderAt)}"` : ''
-		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY))}" data-progress="${manualCompletion(item.completion)}"${completedAt}${reminderAt}>${item.html}${serializeOutstandingNote(item.note)}</li>`
+		return `<li data-id="${item.id.replace(/[^a-zA-Z0-9-]/g, '')}" data-done="${item.done ? 'true' : 'false'}" data-priority="${priority(String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY))}" data-progress="${manualCompletion(item.completion)}"${completedAt}${reminderAt}${item.repeatRule ? ` data-reminder-repeat="${attribute(item.repeatRule)}"` : ''}>${item.html}${serializeOutstandingNote(item.note)}</li>`
 	}).join('')}</ul>`
 	if (current.id) await taskCommentsUpdate({path: {task: taskId, commentid: current.id}, body: {comment}, headers})
 	else await taskCommentsCreate({path: {task: taskId}, body: {comment}, headers})

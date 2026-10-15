@@ -42,6 +42,21 @@
 					</div>
 				</div>
 				<div class="outstanding-actions">
+					<ReminderDetail
+						:model-value="itemReminder(entry.item)"
+						:default-relative-to="null"
+						:disabled="blocked"
+						@update:modelValue="setItemReminder(entry.item, $event)"
+					/>
+					<button
+						v-if="entry.item.reminderAt"
+						class="button is-small"
+						type="button"
+						:disabled="blocked"
+						@click="setItemReminder(entry.item, undefined)"
+					>
+						移除提醒
+					</button>
 					<label>填写完成度
 						<select
 							:value="manualCompletion(entry.item.completion)"
@@ -110,6 +125,21 @@
 					</div>
 				</div>
 				<div class="outstanding-actions">
+					<ReminderDetail
+						:model-value="itemReminder(entry.item)"
+						:default-relative-to="null"
+						:disabled="blocked"
+						@update:modelValue="setItemReminder(entry.item, $event)"
+					/>
+					<button
+						v-if="entry.item.reminderAt"
+						class="button is-small"
+						type="button"
+						:disabled="blocked"
+						@click="setItemReminder(entry.item, undefined)"
+					>
+						移除提醒
+					</button>
 					<label>填写完成度
 						<select
 							:value="manualCompletion(entry.item.completion)"
@@ -313,7 +343,7 @@ import {COMPLETION_OPTIONS, effectiveCompletion, manualCompletion} from '@/helpe
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
-import {taskAttachmentsUpload} from '@/client/generated'
+import {taskAttachmentsUpload, tasksRead, patchTasksRead} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
@@ -323,6 +353,9 @@ import {countProgressImages, persistProgressImages, stageProgressImages} from '@
 import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import {editorContentSignature} from '@/helpers/editorContentSignature'
 import Editor from '@/components/input/AsyncEditor'
+import ReminderDetail from './ReminderDetail.vue'
+import TaskReminderModel from '@/models/taskReminder'
+import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
 
@@ -621,6 +654,36 @@ function delayCompletedItem(id: string) {
 		pending.delete(id)
 		pendingCompletionIds.value = pending
 	}, 5000))
+}
+
+function itemReminder(item: OutstandingItem) {
+	return new TaskReminderModel({reminder: item.reminderAt ? new Date(item.reminderAt) : null, repeatRule: item.repeatRule || ''})
+}
+async function setItemReminder(item: OutstandingItem, reminder: ITaskReminder | undefined) {
+	if (blocked.value) return
+	const taskId = props.taskId
+	busy.value = true
+	error.value = ''
+	try {
+		if (item.reminderAt) {
+			const task = await tasksRead({path: {task: taskId}})
+			const previous = task.data.reminders || []
+			const reminders = previous.filter(value => !(new Date(value.reminder || '').getTime() === new Date(item.reminderAt || '').getTime() && (value.repeat_rule || '') === (item.repeatRule || '')))
+			if (reminders.length !== previous.length && !items.value.some(other => other.id !== item.id && other.reminderAt === item.reminderAt && (other.repeatRule || '') === (item.repeatRule || ''))) {
+				await patchTasksRead({path: {task: taskId}, body: [{op: 'test', path: '/reminders', value: previous}, {op: 'replace', path: '/reminders', value: reminders}]})
+			}
+		}
+		const result = await changeOutstanding(taskId, existing => {
+			if (!existing.some(candidate => candidate.id === item.id)) throw new Error('这条遗留事项已被移动或删除。')
+			return existing.map(candidate => candidate.id === item.id ? {...candidate, reminderAt: reminder?.reminder?.toISOString(), repeatRule: reminder?.repeatRule || undefined} : candidate)
+		})
+		if (taskId !== props.taskId || !mounted) return
+		items.value = result
+		message.value = '提醒已保存，并同步到悬浮窗。'
+		emit('saved')
+	} catch {
+		if (taskId === props.taskId && mounted) error.value = '提醒保存失败，请重试。'
+	} finally { busy.value = false }
 }
 
 async function setCompletion(item: OutstandingItem, value: number) {

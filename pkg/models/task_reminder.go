@@ -46,8 +46,10 @@ const (
 // If RelativeTo and the assciated date field are defined, then the attribute Reminder will be computed.
 // If RelativeTo is missing, than Reminder must be given.
 type TaskReminder struct {
-	ID     int64 `xorm:"bigint autoincr not null unique pk" json:"-"`
-	TaskID int64 `xorm:"bigint not null INDEX" json:"-"`
+	// Weekly recurrence in local calendar time; an empty value is a one-time reminder.
+	RepeatRule string `xorm:"text null" json:"repeat_rule"`
+	ID         int64  `xorm:"bigint autoincr not null unique pk" json:"-"`
+	TaskID     int64  `xorm:"bigint not null INDEX" json:"-"`
 	// The absolute time when the user wants to be reminded of the task.
 	Reminder time.Time `xorm:"DATETIME not null INDEX 'reminder'" json:"reminder"`
 	Created  time.Time `xorm:"created not null" json:"-"`
@@ -257,7 +259,7 @@ func getTasksWithRemindersDueAndTheirUsers(s *xorm.Session, now time.Time, cond 
 	err = s.
 		Join("INNER", "tasks", "tasks.id = task_reminders.task_id").
 		// All reminders from -12h to +14h to include all time zones
-		Where("reminder >= ? and reminder < ?", now.Add(time.Hour*-12).Format(dbTimeFormat), nextMinute.Add(time.Hour*14).Format(dbTimeFormat)).
+		Where("(reminder >= ? and reminder < ?) OR (repeat_rule IS NOT NULL AND repeat_rule <> ?)", now.Add(time.Hour*-12).Format(dbTimeFormat), nextMinute.Add(time.Hour*14).Format(dbTimeFormat), "").
 		And("tasks.done = false").
 		And("tasks.deleted_at IS NULL").
 		Find(&reminders)
@@ -328,17 +330,30 @@ func getTasksWithRemindersDueAndTheirUsers(s *xorm.Session, now time.Time, cond 
 			}
 
 			actualReminder := r.Reminder.In(tz)
+			if r.RepeatRule != "" {
+				rule, ruleErr := parseReminderRepeatRule(r.RepeatRule)
+				if ruleErr != nil {
+					continue
+				}
+				var matches bool
+				actualReminder, matches = rule.onDate(now.In(tz), tz)
+				if !matches {
+					continue
+				}
+			}
 			if (actualReminder.After(now) && actualReminder.Before(now.Add(time.Minute))) || actualReminder.Equal(now) {
 				seen[r.TaskID][u.User.ID] = true
 
 				project := projects[u.Task.ProjectID]
 				u.Task.setIdentifier(project)
 
+				occurrence := *r
+				occurrence.Reminder = actualReminder
 				reminderNotifications = append(reminderNotifications, &ReminderDueNotification{
 					User:         u.User,
 					Task:         u.Task,
 					Project:      project,
-					TaskReminder: r,
+					TaskReminder: &occurrence,
 				})
 			}
 		}
