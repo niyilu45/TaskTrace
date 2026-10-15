@@ -236,6 +236,9 @@ internal sealed partial class FloatingWindow : Form {
         menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
         InitializeEdgeHide(menu);
         InitializeStartWithWindows(menu);
+        var quickAlarms = new FloatingQuickAlarms(data, Font, Icon);
+        menu.Items.Add(quickAlarms.Menu);
+        Disposed += delegate { quickAlarms.Dispose(); };
         menu.Items.Add("打开程序路径", null, delegate {
             try { Process.Start(new ProcessStartInfo(root) { UseShellExecute = true }); }
             catch(Exception e) { MessageBox.Show(this, "无法打开程序路径。\r\n\r\n" + e.Message, "TaskTrace", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
@@ -255,7 +258,7 @@ internal sealed partial class FloatingWindow : Form {
                 e.Cancel = true; HideToTray();
                 return;
             }
-            closing = true; timer.Stop(); DisposeReminders(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
+            closing = true; timer.Stop(); quickAlarms.Dispose(); DisposeReminders(); SaveSimpleMode(); SaveBounds(); tray.Visible = false;
         };
     }
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
