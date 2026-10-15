@@ -41,7 +41,7 @@ internal sealed class FloatingBulkImportDialog : Form {
     internal FloatingBulkImportDialog(string noun,string destination,int priority,int limit,Font font,Func<IList<FloatingBulkLine>,Action<int>,Task> saveAction) {
         save=saveAction;maxLength=limit;
         Text="批量导入"+noun;Font=font;AutoScaleMode=AutoScaleMode.Font;StartPosition=FormStartPosition.CenterParent;
-        Size=new Size(660,610);MinimumSize=new Size(500,480);ShowInTaskbar=true;MinimizeBox=true;
+        FitToWorkArea(Screen.FromPoint(Cursor.Position).WorkingArea);ShowInTaskbar=true;MinimizeBox=true;
         var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=7};
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,35));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -73,6 +73,11 @@ internal sealed class FloatingBulkImportDialog : Form {
         cancel.Click+=delegate{Close();};
         FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};
         CancelButton=cancel;Confirm.Enabled=false;
+    }
+    internal void FitToWorkArea(Rectangle area) {
+        int width=Math.Min(Math.Max(320,area.Width-32),Math.Min(1400,Math.Max(1000,(int)(area.Width*.82))));
+        int height=Math.Min(Math.Max(300,area.Height-32),Math.Min(1000,Math.Max(760,(int)(area.Height*.86))));
+        MinimumSize=new Size(Math.Min(720,width),Math.Min(560,height));Size=new Size(width,height);
     }
     internal async Task<bool> Import() {
         if(writing)return false;
@@ -119,7 +124,7 @@ internal sealed partial class FloatingWindow {
             if(parentId>0 && await TaskHierarchySpan(parentId)>=5)throw new Exception(TaskDepthMessage);
             using(BeginUndoGroup(group))await ImportBulkTasks(lines,projectId,parentId,priority,(method,path,body)=>Api(method,path,body),progress);
         })){
-            dialog.Icon=Icon;dialog.TopMost=owner.TopMost;DpiDialog(dialog);dialog.ShowDialog(owner);
+            dialog.Icon=Icon;dialog.TopMost=owner.TopMost;DpiDialog(dialog);dialog.FitToWorkArea(Screen.FromControl(owner).WorkingArea);dialog.ShowDialog(owner);
             if(dialog.HasSaved)await RefreshUndo();return dialog.HasSaved;
         }
     }

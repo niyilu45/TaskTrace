@@ -18,17 +18,30 @@ import (
 
 // TaskTracePeriodReview builds a read-only report from persisted progress and activity.
 type TaskTracePeriodReview struct {
-	ProjectIDs      []int64   `json:"-"`
-	From            time.Time `json:"-"`
-	Until           time.Time `json:"-"`
-	Filename        string    `json:"filename" readOnly:"true"`
-	Markdown        string    `json:"markdown" readOnly:"true"`
-	Warnings        []string  `json:"warnings" readOnly:"true"`
-	TaskCount       int       `json:"task_count" readOnly:"true"`
-	ChangeCount     int       `json:"change_count" readOnly:"true"`
+	ProjectIDs      []int64                  `json:"-"`
+	From            time.Time                `json:"-"`
+	Until           time.Time                `json:"-"`
+	Filename        string                   `json:"filename" readOnly:"true"`
+	Markdown        string                   `json:"markdown" readOnly:"true"`
+	Warnings        []string                 `json:"warnings" readOnly:"true"`
+	TaskCount       int                      `json:"task_count" readOnly:"true"`
+	ChangeCount     int                      `json:"change_count" readOnly:"true"`
+	Projects        []TaskTraceReviewProject `json:"projects" readOnly:"true"`
 	projects        map[int64]*Project
 	web.CRUDable    `json:"-" xorm:"-"`
 	web.Permissions `json:"-" xorm:"-"`
+}
+type TaskTraceReviewProject struct {
+	ID    int64                 `json:"id"`
+	Title string                `json:"title"`
+	Tasks []TaskTraceReviewTask `json:"tasks"`
+}
+type TaskTraceReviewTask struct {
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description" doc:"Current task description as Markdown."`
+	Progress    string `json:"progress" doc:"Daily progress changes as Markdown."`
+	Outstanding string `json:"outstanding" doc:"Changes to currently existing outstanding items as Markdown."`
 }
 type errTaskTraceReview string
 
@@ -140,7 +153,7 @@ func taskTraceReviewSnapshot(body string) (added bool, fields map[string]string,
 	})
 	return
 }
-func taskTraceReviewActivity(body string) (action, label string) {
+func taskTraceReviewActivity(body string) (action, label, id string) {
 	doc, _ := html.Parse(strings.NewReader(body))
 	taskTraceWalk(doc, func(n *html.Node) {
 		if taskTraceAttribute(n, taskTraceOutstandingTypeAttribute) != taskTraceOutstandingActivityType {
@@ -152,6 +165,7 @@ func taskTraceReviewActivity(body string) (action, label string) {
 				break
 			}
 		}
+		id = taskTraceAttribute(n, "data-item-id")
 		label = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(taskTraceText(n), action)), "："))
 	})
 	return
@@ -182,6 +196,9 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 	if err := s.In("project_id", r.ProjectIDs).Where("deleted_at IS NULL").And(builder.In("id", changed)).Asc("project_id", "id").Find(&candidates); err != nil {
 		return err
 	}
+	r.TaskCount = 0
+	r.ChangeCount = 0
+	r.Projects = []TaskTraceReviewProject{}
 	var output strings.Builder
 	start, end := r.From.Format("2006-01-02"), r.Until.Add(-time.Second).Format("2006-01-02")
 	fmt.Fprintf(&output, "# 周期回顾\n\n时间范围：%s 至 %s（含当天）\n\n", start, end)
@@ -201,7 +218,7 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		}
 		names = append(names, taskTraceReviewText(p.Title))
 	}
-	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。\n\n")
+	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
 	lastProject := int64(-1)
 	legacy := false
 	for _, task := range candidates {
@@ -233,15 +250,34 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		if lastProject != task.ProjectID {
 			fmt.Fprintf(&output, "## %s\n\n", taskTraceReviewText(r.projects[task.ProjectID].Title))
 			lastProject = task.ProjectID
+			r.Projects = append(r.Projects, TaskTraceReviewProject{ID: task.ProjectID, Title: r.projects[task.ProjectID].Title, Tasks: []TaskTraceReviewTask{}})
 		}
 		fmt.Fprintf(&output, "### %s\n\n", taskTraceReviewText(task.Title))
-		for _, e := range entries {
-			fmt.Fprintf(&output, "#### %s\n\n保存时间：%s", e.label, e.when.In(r.From.Location()).Format("2006-01-02 15:04"))
-			if e.author != "" {
-				output.WriteString(" · " + taskTraceReviewText(e.author))
-			}
-			output.WriteString("\n\n" + e.body + "\n\n")
+		description, err := convert(task.Description)
+		if err != nil {
+			return err
 		}
+		row := TaskTraceReviewTask{ID: task.ID, Title: task.Title, Description: description}
+		if description != "" {
+			output.WriteString("**任务描述**\n\n" + description + "\n\n")
+		}
+
+		for _, e := range entries {
+			var entry strings.Builder
+			fmt.Fprintf(&entry, "#### %s\n\n保存时间：%s", e.label, e.when.In(r.From.Location()).Format("2006-01-02 15:04"))
+			if e.author != "" {
+				entry.WriteString(" · " + taskTraceReviewText(e.author))
+			}
+			entry.WriteString("\n\n" + e.body + "\n\n")
+			output.WriteString(entry.String())
+			if strings.HasPrefix(e.label, "每日进展") {
+				row.Progress += entry.String()
+			} else {
+				row.Outstanding += entry.String()
+			}
+		}
+		project := &r.Projects[len(r.Projects)-1]
+		project.Tasks = append(project.Tasks, row)
 		r.TaskCount++
 		r.ChangeCount += len(entries)
 	}
@@ -260,6 +296,18 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 //nolint:gosmopolitan // Saved daily progress labels are part of the local report.
 func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert func(string) (string, error)) ([]taskTraceReviewEntry, bool, error) {
 	legacy := false
+	// The current canonical list, including changes after Until, determines existence.
+	// Operation logs remain for audit and must not resurrect deleted or moved items.
+	current, err := taskTraceParseOutstanding(append([]*TaskComment(nil), comments...))
+	if err != nil {
+		return nil, false, err
+	}
+	existing := map[string]bool{}
+	labels := map[string]bool{}
+	for _, item := range current.items {
+		existing[item.id] = true
+		labels[taskTraceOutstandingActivityLabel(item)] = true
+	}
 	// A later edit must not be mislabeled as a past version.
 	history := []*TaskComment{}
 	for _, c := range comments {
@@ -306,8 +354,8 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		if when.Before(r.From) {
 			continue
 		}
-		action, label := taskTraceReviewActivity(c.Comment)
-		if action == "" {
+		action, label, id := taskTraceReviewActivity(c.Comment)
+		if action == "" || (id != "" && !existing[id]) || (id == "" && !labels[label]) {
 			continue
 		}
 		if marker, ok := taskTraceTeamReadMarker(c.Comment); ok && marker.ID != "" {

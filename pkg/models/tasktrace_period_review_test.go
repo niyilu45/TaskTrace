@@ -38,6 +38,7 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="item"><strong>新增遗留事项</strong>：New issue</p>`+taskTraceReviewItemSnapshot(taskTraceOutstandingItem{}, false, old), from)
 	add(`<p data-tasktrace-comment-type="item-activity" data-item-id="item"><strong>修改遗留事项</strong>：New issue</p>`+taskTraceReviewItemSnapshot(old, true, updated), until.Add(-time.Second))
 	add(`<p data-tasktrace-comment-type="item-activity"><strong>完成遗留事项</strong>：irrelevant completion</p>`, from.Add(time.Hour))
+	add(`<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="item">New issue</li><li data-id="legacy">legacy item</li></ul>`, until.Add(time.Hour))
 	report := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
 	can, _, err := report.CanRead(s, actor)
 	require.NoError(t, err)
@@ -54,10 +55,6 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	require.Empty(t, report.Warnings)
 	empty := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: until, Until: until.Add(time.Second)}
 	require.NoError(t, empty.ReadOne(s, actor))
-	if empty.ChangeCount != 1 {
-		rows, queryErr := s.QueryString("SELECT comment,created,updated FROM task_comments WHERE task_id = ?", task.ID)
-		t.Logf("range=%s to=%s rows=%+v err=%v report=%s", until, until.Add(time.Second), rows, queryErr, empty.Markdown)
-	}
 	require.Equal(t, 1, empty.ChangeCount, "exclusive range boundary is included in next report")
 	for _, sample := range []struct {
 		ids     []int64
@@ -78,4 +75,57 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	require.NoError(t, report.ReadOne(s, actor))
 	require.NotEmpty(t, report.Warnings)
 	require.Contains(t, report.Markdown, "旧记录")
+}
+
+//nolint:gosmopolitan // Persisted Chinese activity fixtures cover current existence filtering.
+func TestTaskTracePeriodReviewDeleted(t *testing.T) {
+	db.LoadAndAssertFixtures(t)
+	t.Setenv("TASKTRACE_DATA_ROOT", t.TempDir())
+	s := db.NewSession()
+	defer s.Close()
+	actor := &user.User{ID: 1, Username: "user1"}
+	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	until := from.AddDate(0, 0, 7)
+	create := func(title string) *Task {
+		task := &Task{ProjectID: 1, Title: title, Description: "<p>Current context</p>"}
+		require.NoError(t, task.Create(s, actor))
+		return task
+	}
+	add := func(id int64, body string, when time.Time) {
+		_, err := s.NoAutoTime().Insert(&TaskComment{TaskID: id, AuthorID: 1, Comment: body, Created: when, Updated: when})
+		require.NoError(t, err)
+	}
+	kept := create("Existing task")
+	add(kept.ID, taskTraceTeamAddMarker(`<p data-tasktrace-comment-type="item-activity" data-item-id="gone"><strong>新增遗留事项</strong>：Same title</p>`, "add-gone", "member"), from)
+	add(kept.ID, `<p data-tasktrace-comment-type="item-activity" data-item-id="kept"><strong>新增遗留事项</strong>：Same title</p>`, from)
+	add(kept.ID, `<p data-tasktrace-comment-type="item-activity" data-item-id="gone"><strong>修改遗留事项</strong>：deleted note history</p>`, from.Add(time.Hour))
+	// No deletion log is needed: canonical state after the review period is authoritative.
+	add(kept.ID, `<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul><li data-id="kept" data-done="true">Same title</li></ul>`, until.Add(time.Hour))
+	empty := create("All items removed")
+	add(empty.ID, `<p data-tasktrace-comment-type="item-activity" data-item-id="gone"><strong>新增遗留事项</strong>：Removed item</p>`, from)
+	add(empty.ID, `<h3 data-tasktrace-comment-type="outstanding">TaskTrace 遗留事项清单</h3><ul></ul>`, until.Add(time.Hour))
+	for _, hard := range []bool{false, true} {
+		removed := create("Deleted task")
+		add(removed.ID, "<h3>每日进展 · 2026-10-10</h3><p>Deleted task progress</p>", from)
+		if hard {
+			_, err := s.Unscoped().ID(removed.ID).Delete(&Task{})
+			require.NoError(t, err)
+		} else {
+			_, err := s.ID(removed.ID).Delete(&Task{})
+			require.NoError(t, err)
+		}
+	}
+	report := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
+	require.NoError(t, report.ReadOne(s, actor))
+	require.Equal(t, 1, report.TaskCount)
+	require.Equal(t, 1, report.ChangeCount)
+	require.Len(t, report.Projects, 1)
+	require.Len(t, report.Projects[0].Tasks, 1)
+	require.Contains(t, report.Projects[0].Tasks[0].Outstanding, "Same title")
+	require.Contains(t, report.Projects[0].Tasks[0].Description, "Current context")
+	require.Contains(t, report.Markdown, "Same title")
+	for _, absent := range []string{"Deleted task", "Removed item", "All items removed", "deleted note history"} {
+		require.NotContains(t, report.Markdown, absent)
+	}
+	require.Empty(t, report.Warnings)
 }

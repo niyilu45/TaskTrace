@@ -83,7 +83,7 @@ internal static class BulkTests {
                     };
                     using(var font=new Font("Microsoft YaHei UI",9F))
                     using(var dialog=new FloatingBulkImportDialog("任务","项目验收 / 父任务",3,250,font,(lines,progress)=>FloatingWindow.ImportBulkTasks(lines,5,10,3,api,progress))){
-                        Display(dialog);dialog.Source.Text="1. 第一项任务\n---\n2. 第二项任务\n3. 暂不导入";
+                        dialog.FitToWorkArea(new Rectangle(0,0,1920,1040));Check(dialog.Width>=1200 && dialog.Height>=800,"Bulk import default remains too small");Display(dialog);dialog.Source.Text="1. 第一项任务\n---\n2. 第二项任务\n3. 暂不导入";
                         Check(dialog.Source.Lines.Length==4 && dialog.Preview.Rows.Count==3 && creates==0,"Paste wrote before confirmation");
                         dialog.Preview.Rows[0].Cells[1].Value="修改后的第一项任务";dialog.Preview.Rows.RemoveAt(2);
                         Capture(dialog,"bulk-normal");
@@ -95,11 +95,11 @@ internal static class BulkTests {
                     }
                     int saves=0;
                     using(var dialog=new FloatingBulkImportDialog("遗留事项","协作验收任务",7,250,new Font("Microsoft YaHei UI",14F),async (lines,progress)=>{saves++;await Task.Yield();foreach(var line in lines)line.Saved=true;})){
-                        Display(dialog);dialog.Size=new Size(820,720);dialog.Source.Text="1、准备技术评审材料\n2、确认协作成员反馈\n3、安排下一次联调";
+                        Display(dialog);dialog.Size=new Size(1200,900);dialog.Source.Text="1、准备技术评审材料\n2、确认协作成员反馈\n3、安排下一次联调";
                         Capture(dialog,"bulk-large-text");
                         dialog.Source.Text="---\n！！！";Check(!await dialog.Import() && saves==0,"Invalid-only text imported");
                         dialog.Source.Text=new string('长',251);Check(!await dialog.Import() && saves==0,"Overlong task silently truncated");
-                        dialog.Source.Text="保留条目";dialog.Close();Check(saves==0,"Cancel saved data");
+                        dialog.FitToWorkArea(new Rectangle(0,0,800,600));Check(dialog.Width<=800 && dialog.Height<=600 && dialog.MinimumSize.Width<=dialog.Width && dialog.MinimumSize.Height<=dialog.Height,"Dialog escapes small screen");dialog.Source.Text="保留条目";dialog.Close();Check(saves==0,"Cancel saved data");
                     }
                     using(var dialog=new FloatingBulkImportDialog("任务","项目",7,250,SystemFonts.MessageBoxFont,async (lines,progress)=>{saves++;await Task.Delay(10);foreach(var line in lines)line.Saved=true;})){
                         Display(dialog);dialog.Source.Text="并发确认";var pending=dialog.Import();Check(!await dialog.Import(),"Double confirmation accepted");dialog.Close();Check(!dialog.IsDisposed,"Closed while saving");Check(await pending && saves==1,"One save not completed");

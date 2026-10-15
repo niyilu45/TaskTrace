@@ -466,7 +466,7 @@ internal sealed partial class FloatingWindow {
                         using(var importer=new FloatingBulkImportDialog("遗留事项",TaskTitle(id),selectedPriority,10000,Font,async delegate(IList<FloatingBulkLine> lines,Action<int> progress){
                             using(BeginUndoGroup(group))await ImportBulkOutstanding(id,lines,selectedPriority,progress);
                         })){
-                            importer.Icon=Icon;importer.TopMost=dialog.TopMost;DpiDialog(importer);importer.ShowDialog(dialog);
+                            importer.Icon=Icon;importer.TopMost=dialog.TopMost;DpiDialog(importer);importer.FitToWorkArea(Screen.FromControl(dialog).WorkingArea);importer.ShowDialog(dialog);
                             if(importer.HasSaved){shared=ReadShared(await ReadHistory(id));render();loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;feedback.Text="批量遗留事项已导入；当前编辑内容保持不变。";await RefreshUndo();}
                         }
                     }catch(Exception error){feedback.Text=error.Message;}

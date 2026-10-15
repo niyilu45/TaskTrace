@@ -180,7 +180,7 @@ func TestTaskTraceOutstandingActivityContentAndPermission(t *testing.T) {
 	require.Contains(t, fields["before"], "备注")
 	require.Contains(t, fields["after"], "新备注")
 	require.Contains(t, fields["after"], "<img")
-	action, label := taskTraceReviewActivity(rows[1].Comment)
+	action, label, _ := taskTraceReviewActivity(rows[1].Comment)
 	require.Equal(t, "修改遗留事项", action)
 	require.NotContains(t, label, "备注")
 	require.False(t, taskTraceTeamIsOutstanding(rows[1].Comment))

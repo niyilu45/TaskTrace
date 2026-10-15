@@ -3013,6 +3013,7 @@ export type TaskTracePeriodReview = {
     readonly change_count?: number;
     readonly filename?: string;
     readonly markdown?: string;
+    readonly projects?: Array<TaskTraceReviewProject> | null;
     readonly task_count?: number;
     readonly warnings?: Array<string> | null;
 };
@@ -3034,6 +3035,29 @@ export type TaskTraceRecoverableBackup = {
      * User note stored with this backup.
      */
     note?: string;
+};
+
+export type TaskTraceReviewProject = {
+    id?: number;
+    tasks?: Array<TaskTraceReviewTask> | null;
+    title?: string;
+};
+
+export type TaskTraceReviewTask = {
+    /**
+     * Current task description as Markdown.
+     */
+    description?: string;
+    id?: number;
+    /**
+     * Changes to currently existing outstanding items as Markdown.
+     */
+    outstanding?: string;
+    /**
+     * Daily progress changes as Markdown.
+     */
+    progress?: string;
+    title?: string;
 };
 
 export type TaskTraceTeamBindingStatus = {
@@ -5615,6 +5639,10 @@ export type TaskTraceOutstandingMoveWritable = {
      * Destination task in the same project; may equal the source to reorder.
      */
     target_task_id?: number;
+};
+
+export type TaskTracePeriodReviewWritable = {
+    [key: string]: never;
 };
 
 export type TaskTraceRecoverableBackupWritable = {
