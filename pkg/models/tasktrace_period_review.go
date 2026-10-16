@@ -266,19 +266,15 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 			return entries[i].when.After(entries[j].when)
 		})
 		if lastProject != task.ProjectID {
-			fmt.Fprintf(&output, "## %s\n\n", taskTraceReviewText(r.projects[task.ProjectID].Title))
+			fmt.Fprintf(&output, "\n## %s\n\n| 任务名 | 任务描述 | 遗留事项 | 进展 |\n| --- | --- | --- | --- |\n", taskTraceReviewText(r.projects[task.ProjectID].Title))
 			lastProject = task.ProjectID
 			r.Projects = append(r.Projects, TaskTraceReviewProject{ID: task.ProjectID, Title: r.projects[task.ProjectID].Title, Tasks: []TaskTraceReviewTask{}})
 		}
-		fmt.Fprintf(&output, "### %s\n\n", taskTraceReviewText(task.Title))
 		description, err := convert(task.Description)
 		if err != nil {
 			return err
 		}
 		row := TaskTraceReviewTask{ID: task.ID, Title: task.Title, Description: description}
-		if description != "" {
-			output.WriteString("**任务描述**\n\n" + description + "\n\n")
-		}
 
 		itemNumber := 0
 		for _, e := range entries {
@@ -296,10 +292,11 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 			entry.WriteString("\n\n" + e.body + "\n\n")
 			row.Progress += entry.String()
 		}
-		output.WriteString(row.Progress)
-		if row.Outstanding != "" {
-			output.WriteString("**遗留事项**\n\n" + row.Outstanding)
+		line, err := taskTraceReviewMarkdownRow(row)
+		if err != nil {
+			return err
 		}
+		output.WriteString(line)
 		project := &r.Projects[len(r.Projects)-1]
 		project.Tasks = append(project.Tasks, row)
 		r.TaskCount++
@@ -477,4 +474,46 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		})
 	}
 	return entries, nil
+}
+
+// HTML inside GFM cells preserves paragraphs, lists and images without splitting
+// one task across rows. Both the table and the web view use these same row fields.
+//
+//nolint:gosmopolitan // Export labels mirror the Chinese web table.
+func taskTraceReviewMarkdownRow(row TaskTraceReviewTask) (string, error) {
+	values := []string{taskTraceReviewText(row.Title), row.Description, row.Outstanding, row.Progress}
+	fallbacks := []string{"", "暂无描述", "无符合条件的遗留事项", "期间无进展更新"}
+	cells := make([]string, len(values))
+	for i, value := range values {
+		if value == "" {
+			value = fallbacks[i]
+		}
+		body, err := richtext.MarkdownToHTML(value)
+		if err != nil {
+			return "", err
+		}
+		doc, err := html.Parse(strings.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		taskTraceWalk(doc, func(n *html.Node) {
+			if n.Data == "li" && taskTraceAttribute(n, "data-type") == "taskItem" {
+				mark := "☐ "
+				if taskTraceAttribute(n, "data-checked") == "true" {
+					mark = "☑ "
+				}
+				parent := n
+				if n.FirstChild != nil && n.FirstChild.Data == "p" {
+					parent = n.FirstChild
+				}
+				parent.InsertBefore(&html.Node{Type: html.TextNode, Data: mark}, parent.FirstChild)
+			}
+		})
+		taskTraceWalk(doc, func(n *html.Node) {
+			if n.Data == "body" {
+				cells[i] = strings.NewReplacer("|", "&#124;", "\r", "&#13;", "\n", "&#10;").Replace(taskTraceInnerHTML(n))
+			}
+		})
+	}
+	return "| " + strings.Join(cells, " | ") + " |\n", nil
 }

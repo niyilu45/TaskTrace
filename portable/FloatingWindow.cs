@@ -17,6 +17,7 @@ using System.Windows.Forms;
 
 internal sealed partial class FloatingWindow : Form {
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8388608 };
+    readonly HttpClient markdownExportHttp = new HttpClient(new HttpClientHandler { UseProxy = false }) { Timeout = TimeSpan.FromMinutes(10) };
     readonly HttpClient http = new HttpClient(new HttpClientHandler { UseProxy = false });
     readonly string root, url, data;
     string token, refresh;
@@ -489,10 +490,10 @@ internal sealed partial class FloatingWindow : Form {
         using(var request = new HttpRequestMessage(new HttpMethod(method), url + "/api/v2" + path)) {
             string requestToken = token;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", requestToken);
-            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && path != "/tasktrace/team/sync";
+            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && path != "/tasktrace/team/sync" && !path.StartsWith("/tasktrace/exports/", StringComparison.Ordinal);
             if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
-            using(var response = await (path == "/tasktrace/team/sync" ? teamSyncHttp : http).SendAsync(request)) {
+            using(var response = await (path == "/tasktrace/exports/markdown" ? markdownExportHttp : path == "/tasktrace/team/sync" ? teamSyncHttp : http).SendAsync(request)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
                     await refreshGate.WaitAsync();
                     try {
@@ -1467,5 +1468,5 @@ internal sealed partial class FloatingWindow : Form {
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
-    protected override void Dispose(bool disposing) { if(disposing) { DisposeEdgeHide(); DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if(disposing) { DisposeEdgeHide(); DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); markdownExportHttp.Dispose(); } base.Dispose(disposing); }
 }

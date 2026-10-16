@@ -46,7 +46,7 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	require.NoError(t, report.ReadOne(s, actor))
 	require.Equal(t, 1, report.TaskCount)
 	require.Equal(t, 4, report.ChangeCount)
-	for _, text := range []string{"final progress", "other member progress", "1. **【新增】** **【有改动】** Latest issue title", "latest note after period"} {
+	for _, text := range []string{"final progress", "other member progress", "Latest issue title", "latest note after period"} {
 		require.Contains(t, report.Markdown, text)
 	}
 	for _, text := range []string{"superseded draft", "exclusive end", "before range", "irrelevant completion", "data-tasktrace", "New issue", "old note", "new note", "修改前", "修改后"} {
@@ -74,7 +74,7 @@ func TestTaskTracePeriodReview(t *testing.T) {
 	report = &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
 	require.NoError(t, report.ReadOne(s, actor))
 	require.Empty(t, report.Warnings)
-	require.Contains(t, report.Markdown, "2. **【有改动】** legacy item")
+	require.Contains(t, report.Projects[0].Tasks[0].Outstanding, "2. **【有改动】** legacy item")
 	require.NotContains(t, report.Markdown, "旧记录")
 }
 
@@ -173,7 +173,10 @@ func TestTaskTracePeriodReviewLatestOutstanding(t *testing.T) {
 	for _, absent := range []string{"Old title", "保存时间", "新增遗留事项", "修改遗留事项", "修改前", "修改后"} {
 		require.NotContains(t, body, absent)
 	}
-	require.Contains(t, report.Markdown, body)
+	require.Contains(t, report.Markdown, "| 任务名 | 任务描述 | 遗留事项 | 进展 |")
+	require.Contains(t, report.Markdown, "<strong>【新增】</strong>")
+	require.Contains(t, report.Markdown, "Latest memo")
+	require.Contains(t, report.Markdown, image)
 }
 
 //nolint:gosmopolitan // Period flags are persisted Chinese UI labels.
@@ -326,5 +329,22 @@ func TestTaskTracePeriodReviewRequiresTaskActivity(t *testing.T) {
 				require.NotContains(t, entries[1].body, "【")
 			}
 		})
+	}
+}
+
+//nolint:gosmopolitan // Export table labels and flags match the web report.
+func TestTaskTracePeriodReviewMarkdownTable(t *testing.T) {
+	image := "data:image/png;base64,iVBORw0KGgo="
+	row, err := taskTraceReviewMarkdownRow(TaskTraceReviewTask{
+		Title:       "Task | title",
+		Description: "First paragraph\n\nSecond **paragraph**",
+		Outstanding: "1. **【新增】** Item\n\n   ![picture](" + image + ")\n\n2. Other item",
+		Progress:    "#### 每日进展 · 2026-10-10\n\n- [x] Done\n- [ ] Open\n\n```\ncode | value\nnext line\n```",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5, strings.Count(row, "|"), "content pipes must not split columns")
+	require.Equal(t, 1, strings.Count(row, "\n"), "one physical row per task")
+	for _, text := range []string{"Task &#124; title", "<p>First paragraph</p>", "<strong>paragraph</strong>", "<ol>", "<strong>【新增】</strong>", image, "☑ Done", "☐ Open", "code &#124; value&#10;next line"} {
+		require.Contains(t, row, text)
 	}
 }

@@ -50,10 +50,11 @@ import {ref} from 'vue'
 import {useRouter} from 'vue-router'
 import XButton from '@/components/input/Button.vue'
 import Modal from '@/components/misc/Modal.vue'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {markdownFilename, saveTaskMarkdown} from '@/helpers/taskMarkdown'
 const props = defineProps<{taskId: number, title: string}>()
 const router = useRouter()
-const hasFilePicker = 'showSaveFilePicker' in window
+const hasFilePicker = isLocalBuild || 'showSaveFilePicker' in window
 const open = ref(false), saving = ref(false), message = ref('')
 function close() {if (!saving.value) open.value = false}
 function preview() {window.open(router.resolve({name: 'task.markdown', params: {id: props.taskId}}).href, '_blank', 'noopener')}

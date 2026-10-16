@@ -1,4 +1,5 @@
-import {tasksTasktraceMarkdown} from '@/client/generated'
+import {tasksTasktraceMarkdown, tasktraceExportMarkdown} from '@/client/generated'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
 
 export function markdownFilename(title: string): string {
 	// Windows forbids control characters in filenames.
@@ -11,7 +12,20 @@ export function markdownFilename(title: string): string {
 interface MarkdownFileHandle {createWritable(): Promise<{write(data: Blob): Promise<void>, close(): Promise<void>, abort(): Promise<void>}>}
 type PickerWindow = Window & {showSaveFilePicker?: (options: {suggestedName: string, types: {description: string, accept: Record<string, string[]>}[]}) => Promise<MarkdownFileHandle>}
 
+async function saveNativeMarkdown(markdown: string, filename: string): Promise<string> {
+	const {data} = await tasktraceExportMarkdown({throwOnError: true, body: {filename, markdown}})
+	if (data.cancelled) throw new DOMException('已取消导出', 'AbortError')
+	if (data.notification) window.dispatchEvent(new CustomEvent('tasktrace-export-notification', {detail: data.notification}))
+	if (data.error) throw new Error(data.error)
+	return data.warning || ''
+}
+
 export async function saveTaskMarkdown(taskId: number, title: string) {
+	if (isLocalBuild) {
+		const {data} = await tasksTasktraceMarkdown({throwOnError: true, path: {task: taskId}})
+		const warning = await saveNativeMarkdown(data.markdown || '', data.filename || markdownFilename(title))
+		return [...(data.warnings || []), ...(warning ? [warning] : [])]
+	}
 	const picker = (window as PickerWindow).showSaveFilePicker
 	// Open the picker during the user's gesture, before the network request.
 	const handle = picker ? await picker.call(window, {suggestedName: markdownFilename(title), types: [{description: 'Markdown 文档', accept: {'text/markdown': ['.md']}}]}) : null
@@ -33,6 +47,7 @@ export async function saveTaskMarkdown(taskId: number, title: string) {
 
 // Save the already displayed report, so a later team update cannot change the export.
 export async function saveMarkdownDocument(markdown: string, filename: string) {
+	if (isLocalBuild) return saveNativeMarkdown(markdown, filename)
 	const picker = (window as PickerWindow).showSaveFilePicker
 	const handle = picker ? await picker.call(window, {suggestedName: filename, types: [{description: 'Markdown 文档', accept: {'text/markdown': ['.md']}}]}) : null
 	const blob = new Blob([markdown], {type: 'text/markdown;charset=utf-8'})
@@ -45,4 +60,5 @@ export async function saveMarkdownDocument(markdown: string, filename: string) {
 		anchor.href = href; anchor.download = filename; anchor.click()
 		setTimeout(() => URL.revokeObjectURL(href), 30_000)
 	}
+	return ''
 }

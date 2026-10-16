@@ -175,6 +175,14 @@
 									{{ getDisplayName(n.notification.doer) }}
 								</span>
 								{{ n.toText(userInfo) }}
+								<br v-if="n.name === names.EXPORT_COMPLETED">
+								<a
+									v-if="n.name === names.EXPORT_COMPLETED"
+									href="#"
+									class="team-task-link"
+									:aria-disabled="openingExport.has(n.id)"
+									@click.stop.prevent="to(n)()"
+								>打开所在文件夹</a>
 							</div>
 							<span
 								v-tooltip="formatDateLong(n.created)"
@@ -276,7 +284,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
-import {notificationsDelete, tasktraceNotificationHistoryList, type TaskTraceTeamNotification} from '@/client/generated'
+import {tasktraceExportReveal, notificationsDelete, tasktraceNotificationHistoryList, type TaskTraceTeamNotification} from '@/client/generated'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
 
@@ -301,6 +309,7 @@ const totalPages = ref(1)
 const loadingMore = ref(false)
 const deleting = ref(new Set<string>())
 const openingTeamNotification = ref(false)
+const openingExport = ref(new Set<number>())
 const deletedNotificationIds = new Set<number>()
 let initialReadFinished = false
 
@@ -387,6 +396,7 @@ onMounted(() => {
 	void refreshNotifications(true).catch(e => console.warn('Failed to load initial notifications:', e))
 
 	document.addEventListener('click', hidePopup)
+	window.addEventListener('tasktrace-export-notification', receiveExportNotification)
 
 	// Subscribe to real-time notifications
 	unsubscribeWs = subscribe('notification.created', (msg) => {
@@ -413,9 +423,18 @@ watch(wsConnected, (isConnected, wasConnected) => {
 
 onUnmounted(() => {
 	document.removeEventListener('click', hidePopup)
+	window.removeEventListener('tasktrace-export-notification', receiveExportNotification)
 	unsubscribeWs?.()
 	disposed = true
 })
+
+function receiveExportNotification(event: Event) {
+	const notice = new NotificationModel((event as CustomEvent).detail as Partial<INotification>)
+	if (!allNotifications.value.some(item => item.id === notice.id) && !deletedNotificationIds.has(notice.id)) {
+		notificationsRevision++
+		allNotifications.value = [notice, ...allNotifications.value]
+	}
+}
 
 function openUpdateDetails() {
 	showNotifications.value = false
@@ -582,24 +601,37 @@ function notificationHasRoute(n: INotification): boolean {
 	return getNotificationRoute(n) !== null
 }
 
+async function markNotificationRead(n: INotification) {
+	notificationsRevision++
+	n.read = true
+	if (allNotifications.value.some(item => item.id === n.id)) {
+		const notificationService = new NotificationService()
+		const saved = await notificationService.update(n)
+		notificationsRevision++
+		const current = allNotifications.value.find(item => item.id === n.id)
+		if (current) Object.assign(current, saved)
+		const reading = readingNotifications.value.find(item => item.id === n.id)
+		if (reading) Object.assign(reading, saved)
+	}
+}
+
 function to(n: INotification) {
 	return async () => {
+		if (n.name === names.EXPORT_COMPLETED) {
+			if (openingExport.value.has(n.id)) return
+			openingExport.value.add(n.id)
+			try {
+				await tasktraceExportReveal({throwOnError: true, path: {notification: n.id}})
+				await markNotificationRead(n)
+			} catch (cause) { showError(cause) }
+			finally { openingExport.value.delete(n.id) }
+			return
+		}
 		const route = getNotificationRoute(n)
 		if (route === null) return
-		
 		const failure = await router.push(route)
 		if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-
-		notificationsRevision++
-		n.read = true
-		if (allNotifications.value.some(item => item.id === n.id)) {
-			const notificationService = new NotificationService()
-			const saved = await notificationService.update(n)
-			notificationsRevision++
-			const current = allNotifications.value.find(item => item.id === n.id)
-			if (current) Object.assign(current, saved)
-		}
-
+		await markNotificationRead(n)
 		showNotifications.value = false
 	}
 }

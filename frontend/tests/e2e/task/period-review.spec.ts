@@ -1,4 +1,4 @@
-import {readFile} from 'node:fs/promises'
+import {marked} from 'marked'
 import {test, expect} from '../../support/fixtures'
 import {ProjectFactory} from '../../factories/project'
 import {createDefaultViews} from '../project/prepareProjects'
@@ -96,18 +96,33 @@ test('overview period review filters projects and exports the displayed changes'
 	await report.screenshot({path: testInfo.outputPath('review-report-mobile.png')})
 	await report.locator('article ul').filter({hasText: '已完成清单项'}).first().screenshot({path: testInfo.outputPath('review-checklist.png')})
 	await expect.poll(() => report.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-	const downloadEvent = report.waitForEvent('download')
-	await report.getByRole('button', {name: '导出 Markdown'}).click()
-	const download = await downloadEvent, path = await download.path()
-	expect(download.suggestedFilename()).toMatch(/^周期回顾_.*\.md$/)
-	const markdown = await readFile(path!, 'utf8')
+ let markdown = '', filename = ''
+ await report.route('**/api/v2/tasktrace/exports/markdown', route => {
+  const request = route.request().postDataJSON()
+  markdown = request.markdown; filename = request.filename
+  return route.fulfill({json: {cancelled: false, path: 'D:/reports/' + filename}})
+ })
+ await report.getByRole('button', {name: '导出 Markdown'}).click()
+ await expect(report.locator('main.period-review').getByRole('status')).toContainText('Markdown 文件已保存')
+ expect(filename).toMatch(/^周期回顾_.*\.md$/)
 	expect(markdown).toContain('# 周期回顾'); expect(markdown).not.toContain('**修改前**'); expect(markdown).toContain('新备注：改为周一确认')
 	expect(markdown).not.toContain('此项目应被排除')
 	expect(markdown).not.toContain('原备注：周五确认')
-	expect(markdown).toContain('1. **【新增】** **【有改动】** 等待客户确认'); expect(markdown).toContain('2. **【新增】** 确认交付日期')
+	expect(markdown).toContain('| 任务名 | 任务描述 | 遗留事项 | 进展 |')
 	expect(markdown.match(/等待客户确认/g)).toHaveLength(1)
 	expect(markdown).not.toContain('已删除任务不可展示'); expect(markdown).not.toContain('已删除遗留不可展示')
-	expect(markdown).toContain('- [x] 已完成清单项'); expect(markdown).toContain('- [ ] 未完成清单项')
+	expect(markdown).toContain('☑ 已完成清单项'); expect(markdown).toContain('☐ 未完成清单项')
+ const renderedExport = await report.context().newPage()
+ await renderedExport.setViewportSize({width: 1280, height: 1000})
+ await renderedExport.setContent(await marked.parse(markdown, {gfm: true}))
+ await expect(renderedExport.locator('table')).toHaveCount(1)
+ await expect(renderedExport.getByRole('columnheader')).toHaveText(['任务名', '任务描述', '遗留事项', '进展'])
+ const webRows = await report.locator('article tbody tr').evaluateAll(rows => rows.map(row => [...row.children].map(cell => cell.textContent?.replace(/\s+/g, ' ').trim())))
+ const exportedRows = await renderedExport.locator('tbody tr').evaluateAll(rows => rows.map(row => [...row.children].map(cell => cell.textContent?.replace(/\s+/g, ' ').trim())))
+ expect(exportedRows).toEqual(webRows)
+ await renderedExport.addStyleTag({content: 'body{font:16px system-ui;padding:24px;color:#1f2328}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d1d9e0;padding:12px;vertical-align:top;text-align:left}p{margin:0 0 12px}img{max-width:100%}'})
+ await renderedExport.screenshot({path: testInfo.outputPath('review-export-table.png')})
+ await renderedExport.close()
 	await report.reload(); await expect(report.locator('article')).toContainText('本周完成了接口联调')
 	// A valid empty historical period is a readable report, not a failed request.
 	const url = new URL(report.url()); url.searchParams.set('from', '2000-01-01T00:00:00Z'); url.searchParams.set('until', '2000-01-02T00:00:00Z')

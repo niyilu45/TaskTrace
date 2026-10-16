@@ -232,8 +232,8 @@ async function load() {
 async function save() {
 	if (!report.value || saving.value) return
 	saving.value = true; saveMessage.value = ''
-	try {await saveMarkdownDocument(report.value.markdown || '', report.value.filename || '周期回顾.md'); saveMessage.value = 'Markdown 文件已保存。'}
-	catch (error) {saveMessage.value = error instanceof Error && error.name === 'AbortError' ? '已取消导出。' : '导出失败，请重试。'}
+	try {const warning = await saveMarkdownDocument(report.value.markdown || '', report.value.filename || '周期回顾.md'); saveMessage.value = warning || 'Markdown 文件已保存。'}
+	catch (error) {saveMessage.value = error instanceof Error && error.name === 'AbortError' ? '已取消导出。' : `导出失败：${error instanceof Error ? error.message : '请重试。'}`}
 	finally {saving.value = false}
 }
 watch(() => [route.query.projects, route.query.from, route.query.until], load, {immediate: true})

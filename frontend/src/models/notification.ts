@@ -85,6 +85,10 @@ export default class NotificationModel extends AbstractModel<INotification> impl
 		let who: string
 
 		switch (this.name) {
+			case NOTIFICATION_NAMES.EXPORT_FAILED:
+				return `导出失败：${(this.notification as {filename: string}).filename}。${(this.notification as {error?: string}).error || '请重新选择保存位置后重试。'}`
+			case NOTIFICATION_NAMES.EXPORT_COMPLETED:
+				return `导出成功：${(this.notification as {filename: string}).filename}`
 			case NOTIFICATION_NAMES.TASK_COMMENT:
 				return `commented on ${this.notification.task.getTextIdentifier()}`
 			case NOTIFICATION_NAMES.TASK_ASSIGNED:
@@ -112,7 +116,7 @@ export default class NotificationModel extends AbstractModel<INotification> impl
 			case NOTIFICATION_NAMES.TASK_REMINDER:
 				return `Reminder for ${this.notification.task.getTextIdentifier()} ${this.notification.task.title} (${this.notification.project.title})`
 			case NOTIFICATION_NAMES.TASK_MENTIONED:
-				return `${getDisplayName(this.notification.doer)} mentioned you on ${this.notification.task.getTextIdentifier()}`
+				return `${this.notification.doer ? getDisplayName(this.notification.doer) : ''} mentioned you on ${this.notification.task.getTextIdentifier()}`
 		}
 
 		return ''

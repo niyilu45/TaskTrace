@@ -55,6 +55,7 @@
 				>
 					{{ entry.model.notification.doer ? getDisplayName(entry.model.notification.doer) : '' }}
 					{{ entry.model.toText(userInfo) }}
+					<span v-if="entry.model.name === 'tasktrace.export.completed'"> · 打开所在文件夹</span>
 				</button>
 				<time :datetime="entry.archived_at">收纳于 {{ formatDate(entry.archived_at) }}</time>
 			</li>

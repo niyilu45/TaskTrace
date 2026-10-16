@@ -13,13 +13,19 @@ internal sealed partial class FloatingWindow {
             var row=new FlowLayoutPanel{Dock=DockStyle.Bottom,Height=45,Padding=new Padding(8),FlowDirection=FlowDirection.RightToLeft};
             var save=new Button{Text="导出",AutoSize=true};var preview=new Button{Text="预览",AutoSize=true};var cancel=new Button{Text="取消",AutoSize=true};row.Controls.Add(save);row.Controls.Add(preview);row.Controls.Add(cancel);dialog.Controls.Add(label);dialog.Controls.Add(row);cancel.Click+=delegate{dialog.Close();};
             save.Click+=async delegate{
-                using(var picker=new SaveFileDialog{Title="导出 Markdown",Filter="Markdown 文档|*.md",FileName=SafeMarkdownName(taskTitle),DefaultExt="md",AddExtension=true,OverwritePrompt=true}) {
-                    if(picker.ShowDialog(dialog)!=DialogResult.OK)return;
-                    save.Enabled=preview.Enabled=false;label.Text="正在导出…";
-                    try {var result=await Api("GET","/tasks/"+taskId+"/markdown",null);File.WriteAllText(picker.FileName,Convert.ToString(result["markdown"]),new UTF8Encoding(false));label.Text="已保存："+picker.FileName;if(result.ContainsKey("warnings")){var warnings=result["warnings"] as System.Collections.IEnumerable;if(warnings!=null)foreach(var warning in warnings)label.Text+="\n"+Convert.ToString(warning);}}
-                    catch(Exception error){label.Text="导出失败："+error.Message;}
-                    finally{if(!dialog.IsDisposed)save.Enabled=preview.Enabled=true;}
-                }
+                save.Enabled=preview.Enabled=cancel.Enabled=false;label.Text="正在准备导出，请选择保存位置…";
+                try {
+                    var result=await Api("GET","/tasks/"+taskId+"/markdown",null);
+                    var saved=await Api("POST","/tasktrace/exports/markdown",new System.Collections.Generic.Dictionary<string,object>{{"filename",SafeMarkdownName(taskTitle)},{"markdown",Convert.ToString(result["markdown"])}});
+                    if(saved.ContainsKey("error")&&!String.IsNullOrWhiteSpace(Convert.ToString(saved["error"])))throw new Exception(Convert.ToString(saved["error"]));
+                    if(saved.ContainsKey("cancelled")&&Convert.ToBoolean(saved["cancelled"]))label.Text="已取消导出。";
+                    else {
+                        label.Text="已保存："+Convert.ToString(saved["path"])+"\n可在网页通知中打开所在文件夹。";
+                        if(saved.ContainsKey("warning"))label.Text+="\n"+Convert.ToString(saved["warning"]);
+                        if(result.ContainsKey("warnings")){var warnings=result["warnings"] as System.Collections.IEnumerable;if(warnings!=null)foreach(var warning in warnings)label.Text+="\n"+Convert.ToString(warning);}
+                    }
+                } catch(Exception error){label.Text="导出失败："+error.Message;}
+                finally{if(!dialog.IsDisposed)save.Enabled=preview.Enabled=cancel.Enabled=true;}
             };
             preview.Click+=async delegate{preview.Enabled=false;try{string session=await PrepareBrowserSession();Process.Start(new ProcessStartInfo(url+"/tasks/"+taskId+"/markdown#tasktrace-local="+Uri.EscapeDataString(session)){UseShellExecute=true});}catch(Exception error){label.Text="预览打开失败："+error.Message;}finally{if(!dialog.IsDisposed)preview.Enabled=true;}};
             await ShowEditorWindowAsync(dialog,owner);

@@ -13,6 +13,8 @@ export const NOTIFICATION_NAMES = {
 	'TASK_REMINDER': 'task.reminder',
 	'PROJECT_CREATED': 'project.created',
 	'TEAM_MEMBER_ADDED': 'team.member.added',
+	'EXPORT_FAILED': 'tasktrace.export.failed',
+	'EXPORT_COMPLETED': 'tasktrace.export.completed',
 	'TASK_MENTIONED': 'task.mentioned',
 } as const
 
@@ -49,10 +51,17 @@ interface NotificationMemberAdded extends Notification {
 	team: ITeam
 }
 
+interface NotificationExport {
+	doer?: never
+	filename: string
+	path?: string
+	error?: string
+}
+
 export interface INotification extends IAbstract {
 	id: number
 	name: string
-	notification: NotificationTaskComment | NotificationTask | NotificationAssigned | NotificationCreated | NotificationMemberAdded | NotificationTaskReminder
+	notification: NotificationTaskComment | NotificationTask | NotificationAssigned | NotificationCreated | NotificationMemberAdded | NotificationTaskReminder | NotificationExport
 	read: boolean
 	readAt: Date | null
 

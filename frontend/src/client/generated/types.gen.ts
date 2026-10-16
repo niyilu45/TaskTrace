@@ -2894,6 +2894,33 @@ export type TaskTraceDraftState = {
     updated?: string;
 };
 
+export type TaskTraceExportResult = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * True when the native file picker was cancelled; no file or notification was created.
+     */
+    cancelled?: boolean;
+    /**
+     * Save failed; no success notification was created. The failure notification is returned when available.
+     */
+    error?: string;
+    /**
+     * Persistent success or failure notification for the current user.
+     */
+    notification?: DatabaseNotification;
+    /**
+     * Successfully saved local file path.
+     */
+    path?: string;
+    /**
+     * The file was saved but its notification could not be persisted.
+     */
+    warning?: string;
+};
+
 export type TaskTraceMarkdownExport = {
     /**
      * A URL to the JSON Schema for this object.
@@ -3468,6 +3495,21 @@ export type TasktraceDraftWriteRequest = {
      */
     readonly $schema?: string;
     content?: string;
+};
+
+export type TasktraceExportMarkdownRequest = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * Suggested Markdown file name; the destination is chosen in the native dialog.
+     */
+    filename?: string;
+    /**
+     * The already displayed Markdown snapshot, including embedded images.
+     */
+    markdown?: string;
 };
 
 export type TasktraceUndoCreateRequest = {
@@ -5596,6 +5638,25 @@ export type TaskTraceDraftStateWritable = {
     updated?: string;
 };
 
+export type TaskTraceExportResultWritable = {
+    /**
+     * True when the native file picker was cancelled; no file or notification was created.
+     */
+    cancelled?: boolean;
+    /**
+     * Save failed; no success notification was created. The failure notification is returned when available.
+     */
+    error?: string;
+    /**
+     * Successfully saved local file path.
+     */
+    path?: string;
+    /**
+     * The file was saved but its notification could not be persisted.
+     */
+    warning?: string;
+};
+
 export type TaskTraceMoveWritable = {
     /**
      * Insert before this sibling; zero appends to the new parent's children.
@@ -5840,6 +5901,17 @@ export type TasksTeamShareRequestWritable = {
 
 export type TasktraceDraftWriteRequestWritable = {
     content?: string;
+};
+
+export type TasktraceExportMarkdownRequestWritable = {
+    /**
+     * Suggested Markdown file name; the destination is chosen in the native dialog.
+     */
+    filename?: string;
+    /**
+     * The already displayed Markdown snapshot, including embedded images.
+     */
+    markdown?: string;
 };
 
 export type TasktraceUndoCreateRequestWritable = {
@@ -11645,6 +11717,56 @@ export type TasktraceDraftWriteResponses = {
 };
 
 export type TasktraceDraftWriteResponse = TasktraceDraftWriteResponses[keyof TasktraceDraftWriteResponses];
+
+export type TasktraceExportMarkdownData = {
+    body: TasktraceExportMarkdownRequestWritable;
+    path?: never;
+    query?: never;
+    url: '/tasktrace/exports/markdown';
+};
+
+export type TasktraceExportMarkdownErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceExportMarkdownError = TasktraceExportMarkdownErrors[keyof TasktraceExportMarkdownErrors];
+
+export type TasktraceExportMarkdownResponses = {
+    /**
+     * Created
+     */
+    201: TaskTraceExportResult;
+};
+
+export type TasktraceExportMarkdownResponse = TasktraceExportMarkdownResponses[keyof TasktraceExportMarkdownResponses];
+
+export type TasktraceExportRevealData = {
+    body?: never;
+    path: {
+        notification: number;
+    };
+    query?: never;
+    url: '/tasktrace/exports/{notification}/reveal';
+};
+
+export type TasktraceExportRevealErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasktraceExportRevealError = TasktraceExportRevealErrors[keyof TasktraceExportRevealErrors];
+
+export type TasktraceExportRevealResponses = {
+    /**
+     * Created
+     */
+    201: unknown;
+};
 
 export type TasktraceNotificationHistoryListData = {
     body?: never;
