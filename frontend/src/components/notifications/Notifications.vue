@@ -175,11 +175,14 @@
 									{{ getDisplayName(n.notification.doer) }}
 								</span>
 								{{ n.toText(userInfo) }}
-								<br v-if="n.name === names.EXPORT_COMPLETED">
+								<span
+									v-if="exportNotificationPath(n)"
+									class="export-path"
+								>保存位置：{{ exportNotificationPath(n) }}</span>
 								<a
 									v-if="n.name === names.EXPORT_COMPLETED"
 									href="#"
-									class="team-task-link"
+									class="team-task-link export-location"
 									:aria-disabled="openingExport.has(n.id)"
 									@click.stop.prevent="to(n)()"
 								>打开所在文件夹</a>
@@ -284,6 +287,7 @@ import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 import {scrollAndHighlightComment} from '@/components/tasks/partials/commentReplyContext'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {exportNotificationPath} from '@/helpers/exportNotification'
 import {tasktraceExportReveal, notificationsDelete, tasktraceNotificationHistoryList, type TaskTraceTeamNotification} from '@/client/generated'
 
 const {subscribe, connected: wsConnected} = useWebSocket()
@@ -806,6 +810,19 @@ async function clearAll() {
 					margin-inline-end: 0;
 				}
 			}
+
+            .export-path {
+                display: block;
+                margin-block: .25rem;
+                color: var(--grey-700);
+                overflow-wrap: anywhere;
+                user-select: text;
+            }
+
+            a.export-location {
+                display: inline-block;
+                color: var(--link);
+            }
 
 			.created {
 				color: var(--grey-600);

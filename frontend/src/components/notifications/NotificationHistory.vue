@@ -57,6 +57,10 @@
 					{{ entry.model.toText(userInfo) }}
 					<span v-if="entry.model.name === 'tasktrace.export.completed'"> · 打开所在文件夹</span>
 				</button>
+				<span
+					v-if="exportNotificationPath(entry.model)"
+					class="export-path"
+				>保存位置：{{ exportNotificationPath(entry.model) }}</span>
 				<time :datetime="entry.archived_at">收纳于 {{ formatDate(entry.archived_at) }}</time>
 			</li>
 		</ol>
@@ -71,6 +75,7 @@ import type {INotification} from '@/modelTypes/INotification'
 import UserModel, {getDisplayName} from '@/models/user'
 import {useAuthStore} from '@/stores/auth'
 import {getErrorText} from '@/message'
+import {exportNotificationPath} from '@/helpers/exportNotification'
 import XButton from '@/components/input/Button.vue'
 import TeamMemberIdentity from '@/components/tasks/partials/TeamMemberIdentity.vue'
 
@@ -116,6 +121,13 @@ onMounted(load)
  margin-block-start: .35rem;
  color: var(--grey-700);
  font-size: .85rem;
+}
+.export-path {
+ display: block;
+ margin-block: .25rem;
+ color: var(--grey-700);
+ overflow-wrap: anywhere;
+ user-select: text;
 }
 .history-link {
  border: 0;

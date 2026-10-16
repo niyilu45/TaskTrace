@@ -6,10 +6,15 @@ package tasktraceexport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 const Supported = true
@@ -49,15 +54,34 @@ func choosePath(ctx context.Context, filename string) (string, error) {
 	}
 	return result.Path, nil
 }
+
+var exportShell = windows.NewLazySystemDLL("shell32.dll")
+var parseExportPath = exportShell.NewProc("SHParseDisplayName")
+var openExportFolder = exportShell.NewProc("SHOpenFolderAndSelectItems")
+
 func reveal(path string) error {
-	// Explorer must outlive the HTTP request and remains under the user's control.
-	cmd := exec.Command("explorer.exe") //nolint:noctx
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		CmdLine:    "explorer.exe /select," + syscall.EscapeArg(path),
+	// Shell operations require COM on the same OS thread through cleanup.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED); err != nil && !errors.Is(err, syscall.Errno(1)) {
+		return fmt.Errorf("初始化文件夹窗口失败：%w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("无法打开文件夹：%w", err)
+	defer windows.CoUninitialize()
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return fmt.Errorf("导出路径无效：%w", err)
 	}
-	return cmd.Process.Release()
+	var item unsafe.Pointer
+	result, _, _ := parseExportPath.Call(uintptr(unsafe.Pointer(name)), 0, uintptr(unsafe.Pointer(&item)), 0, 0)
+	if result != 0 {
+		return fmt.Errorf("无法定位导出文件（Windows 错误 0x%08X）", result)
+	}
+	defer windows.CoTaskMemFree(item)
+	// A full file PIDL with cidl=0 opens its parent and selects the file. Avoid
+	// inherited hidden-window flags and command-line quoting of user file names.
+	result, _, _ = openExportFolder.Call(uintptr(item), 0, 0, 0)
+	if result != 0 {
+		return fmt.Errorf("无法打开所在文件夹（Windows 错误 0x%08X）", result)
+	}
+	return nil
 }
