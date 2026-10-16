@@ -47,13 +47,14 @@ foreach ($case in $cases) {
         try {
             $stdout = $process.StandardOutput.ReadToEndAsync()
             $stderr = $process.StandardError.ReadToEndAsync()
-            if ($code -ne 1223) { $process.StandardInput.WriteLine('x'); $process.StandardInput.Close() }
+            if ($code -eq 1) { $process.StandardInput.WriteLine('x'); $process.StandardInput.Close() }
             if (!$process.WaitForExit(15000)) { $process.Kill(); throw ('Installer entry did not exit: ' + $ending + '/' + $code) }
             $output = $stdout.Result
             $errors = $stderr.Result
             [IO.File]::WriteAllText((Join-Path $fixture ($code.ToString()+'.log')), $output + $errors, [Text.UTF8Encoding]::new($false))
             if ($process.ExitCode -ne $code -or $errors -or !$output.Contains('ENGINE_REACHED')) { throw ('Entry failed: ' + $ending + '/' + $code + ', exit=' + $process.ExitCode + "`n" + $output + $errors) }
             if ([IO.File]::ReadAllText($marker) -ne $target) { throw 'Install directory argument was damaged.' }
+            if ($code -eq 0 -and $output -match 'Press any key|按任意键') { throw 'Successful install still pauses.' }
             if ($code -eq 0 -and !$output.Contains('安装完成，可以关闭本窗口。')) { throw 'Missing completion message.' }
             if ($code -ne 0 -and $output.Contains('安装完成，可以关闭本窗口。')) { throw 'Failed/cancelled install reported success.' }
             if ($code -eq 1223 -and $output -match 'Press any key|Build failed|Installation completed|按任意键|安装完成') { throw 'Cancellation reached completion output or pause.' }

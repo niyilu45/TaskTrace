@@ -3050,7 +3050,7 @@ export type TaskTraceReviewTask = {
     description?: string;
     id?: number;
     /**
-     * Latest contents of outstanding items changed during the period, as numbered Markdown.
+     * Latest unfinished items and items completed during the period, with numbered period flags as Markdown.
      */
     outstanding?: string;
     /**

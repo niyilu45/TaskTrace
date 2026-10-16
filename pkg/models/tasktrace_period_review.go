@@ -41,7 +41,7 @@ type TaskTraceReviewTask struct {
 	Title       string `json:"title"`
 	Description string `json:"description" doc:"Current task description as Markdown."`
 	Progress    string `json:"progress" doc:"Daily progress changes as Markdown."`
-	Outstanding string `json:"outstanding" doc:"Latest contents of outstanding items changed during the period, as numbered Markdown."`
+	Outstanding string `json:"outstanding" doc:"Latest unfinished items and items completed during the period, with numbered period flags as Markdown."`
 }
 type errTaskTraceReview string
 
@@ -188,15 +188,34 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 	images := map[string]string{}
 	convert := func(body string) (string, error) { return exporter.convert(s, a, body, images) }
 	var candidates []*Task
-	// Match the UTC database DATETIME format, including exact second boundaries.
-	// Driver time values can carry an offset suffix which changes SQLite comparisons.
-	// Only load histories for tasks with activity during the requested interval.
-	changed := builder.Select("task_id").From("task_comments").Where(builder.Or(
-		builder.And(builder.Gte{"created": r.From.UTC().Format(dbTimeFormat)}, builder.Lt{"created": r.Until.UTC().Format(dbTimeFormat)}),
-		builder.And(builder.Gte{"updated": r.From.UTC().Format(dbTimeFormat)}, builder.Lt{"updated": r.Until.UTC().Format(dbTimeFormat)}),
-	))
-	if err := s.In("project_id", r.ProjectIDs).Where("deleted_at IS NULL").And(builder.In("id", changed)).Asc("project_id", "id").Find(&candidates); err != nil {
+	// Unchanged unfinished items must also be reviewed, including tasks with no
+	// activity inside the period. Tasks without comments cannot contribute entries.
+	withComments := builder.Select("task_id").From("task_comments")
+	if err := s.In("project_id", r.ProjectIDs).Where("deleted_at IS NULL").And(builder.In("id", withComments)).Asc("project_id", "id").Find(&candidates); err != nil {
 		return err
+	}
+	readable := make([]*Task, 0, len(candidates))
+	taskIDs := make([]int64, 0, len(candidates))
+	for _, task := range candidates {
+		can, _, err := task.CanRead(s, a)
+		if err != nil {
+			return err
+		}
+		if can {
+			readable = append(readable, task)
+			taskIDs = append(taskIDs, task.ID)
+		}
+	}
+	// Batch histories to avoid one author/reaction query per unchanged task.
+	commentsByTask := map[int64][]*TaskComment{}
+	for offset := 0; offset < len(taskIDs); offset += 256 {
+		comments, _, _, err := getAllCommentsForTasksWithoutPermissionCheck(s, taskIDs[offset:min(offset+256, len(taskIDs))], "", 0, -1, "desc")
+		if err != nil {
+			return err
+		}
+		for _, comment := range comments {
+			commentsByTask[comment.TaskID] = append(commentsByTask[comment.TaskID], comment)
+		}
 	}
 	r.TaskCount = 0
 	r.ChangeCount = 0
@@ -220,20 +239,10 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		}
 		names = append(names, taskTraceReviewText(p.Title))
 	}
-	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。遗留事项按期间内有改动筛选，每项只展示当前最新内容并编号。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
+	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。遗留事项展示最新内容并编号：周期内新增、完成或修改分别标注；无变化的未完成事项不加标志，周期外完成的事项不展示。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
 	lastProject := int64(-1)
-	for _, task := range candidates {
-		can, _, err := task.CanRead(s, a)
-		if err != nil {
-			return err
-		}
-		if !can {
-			continue
-		}
-		comments, _, _, err := getAllCommentsForTasksWithoutPermissionCheck(s, []int64{task.ID}, "", 0, -1, "desc")
-		if err != nil {
-			return err
-		}
+	for _, task := range readable {
+		comments := commentsByTask[task.ID]
 		entries, err := r.collectEntries(comments, convert)
 		if err != nil {
 			return err
@@ -297,7 +306,7 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		r.ChangeCount += len(entries)
 	}
 	if r.ChangeCount == 0 {
-		output.WriteString("所选项目在此时间范围内没有可回顾的进展更新或遗留事项变化。\n")
+		output.WriteString("所选项目在此时间范围内没有可回顾的进展、未完成遗留事项或周期内完成的遗留事项。\n")
 	}
 	r.Warnings = exporter.Warnings
 	r.Filename = taskTraceMarkdownFilename("周期回顾_" + start + "_" + end)
@@ -359,11 +368,13 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		}
 		entries = append(entries, taskTraceReviewEntry{when: when, id: c.ID, label: "每日进展 · " + day.date, body: body, author: taskTraceReviewAuthor(c)})
 	}
-	changed := map[string]bool{}
-	for _, c := range history {
-		if taskTraceReviewTime(c).Before(r.From) {
-			continue
-		}
+	type itemActivity struct {
+		firstAdded, lastCompleted time.Time
+		modified                  bool
+	}
+	activity := map[string]itemActivity{}
+	inPeriod := func(when time.Time) bool { return !when.IsZero() && !when.Before(r.From) && when.Before(r.Until) }
+	for _, c := range comments {
 		action, label, id := taskTraceReviewActivity(c.Comment)
 		if action == "" || action == "删除遗留事项" {
 			continue
@@ -371,15 +382,45 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		if id == "" && len(labels[label]) == 1 {
 			id = labels[label][0]
 		}
-		if id != "" {
-			changed[id] = true
-		}
-	}
-	for index, item := range current.items {
-		if !changed[item.id] {
+		if id == "" {
 			continue
 		}
-		// Activity only selects items. Never render stale snapshots or repeat an item
+		when := taskTraceReviewTime(c)
+		state := activity[id]
+		switch {
+		case action == "新增遗留事项":
+			if state.firstAdded.IsZero() || when.Before(state.firstAdded) {
+				state.firstAdded = when
+			}
+		case action == "完成遗留事项":
+			if when.After(state.lastCompleted) {
+				state.lastCompleted = when
+			}
+		case strings.HasPrefix(action, "修改"), action == "重新打开遗留事项":
+			state.modified = state.modified || inPeriod(when)
+		}
+		activity[id] = state
+	}
+	seenItems := map[string]bool{}
+	for index, item := range current.items {
+		if seenItems[item.id] {
+			continue
+		}
+		seenItems[item.id] = true
+		state := activity[item.id]
+		// A known item created after this historical period did not yet exist.
+		if !state.firstAdded.IsZero() && !state.firstAdded.Before(r.Until) {
+			continue
+		}
+		completed := taskTraceOutstandingItemAttribute(item, "data-done") == "true"
+		completedAt := state.lastCompleted
+		if stored, err := time.Parse(time.RFC3339Nano, taskTraceOutstandingItemAttribute(item, "data-completed-at")); err == nil {
+			completedAt = stored
+		}
+		if completed && !inPeriod(completedAt) {
+			continue
+		}
+		// Activity supplies flags only. Never render stale snapshots or repeat an item
 		// for each edit; use the same current list as the editors, including images.
 		title, note := taskTraceReviewItemParts(item)
 		body, err := convert(title)
@@ -393,9 +434,18 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		if memo != "" {
 			body += "\n\n**备注**\n\n" + memo
 		}
-		completed := taskTraceOutstandingItemAttribute(item, "data-done") == "true"
+		flags := []string{}
+		if inPeriod(state.firstAdded) {
+			flags = append(flags, "**【新增】**")
+		}
 		if completed {
-			body = "**已完成** " + body
+			flags = append(flags, "**【已完成】**")
+		}
+		if state.modified {
+			flags = append(flags, "**【有改动】**")
+		}
+		if len(flags) > 0 {
+			body = strings.Join(flags, " ") + " " + body
 		}
 		entries = append(entries, taskTraceReviewEntry{outstanding: true, completed: completed, itemOrder: index, body: body})
 	}

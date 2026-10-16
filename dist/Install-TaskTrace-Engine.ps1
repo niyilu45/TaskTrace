@@ -19,6 +19,7 @@ $targetInstallLock = $null
 $issues = New-Object 'System.Collections.Generic.List[string]'
 $hints = New-Object 'System.Collections.Generic.List[string]'
 $stage = '检查构建环境'
+$installationSucceeded = $false
 
 function Write-InstallLine([string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray) {
     Write-Host $Text -ForegroundColor $Color
@@ -40,6 +41,28 @@ function Show-InstallResult([string]$Title, [string]$Message, [bool]$IsError = $
         [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
     } catch {
         Write-InstallLine ('无法显示结果窗口：' + $_.Exception.Message) Yellow
+    }
+}
+
+function Confirm-LaunchInstalledApplication([string]$Title, [string]$Message) {
+    Add-Type -AssemblyName System.Windows.Forms
+    return [System.Windows.Forms.MessageBox]::Show($Message, $Title, [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information, [System.Windows.Forms.MessageBoxDefaultButton]::Button2) -eq [System.Windows.Forms.DialogResult]::Yes
+}
+
+function Complete-Installation([string]$Directory, [string]$Title, [string]$Message) {
+    if (!$Interactive) { return }
+    try {
+        $question = $Message + [Environment]::NewLine + [Environment]::NewLine + '是否现在打开 TaskTrace？选择后安装窗口将自动关闭。'
+        if (!(Confirm-LaunchInstalledApplication $Title $question)) { return }
+        $launcher = Join-Path $Directory 'TaskTrace.exe'
+        if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) { throw ('找不到启动程序：' + $launcher) }
+        Start-Process -FilePath $launcher -WorkingDirectory $Directory -WindowStyle Hidden -ErrorAction Stop
+    } catch {
+        # Installation is already committed. A launch/prompt failure is not a
+        # failed install and must never run deployment rollback or leave a pause.
+        $message = '程序已安装成功，但未能自动打开。请从安装目录双击 TaskTrace.exe。' + [Environment]::NewLine + $_.Exception.Message
+        Write-InstallLine $message Yellow
+        Show-InstallResult 'TaskTrace：安装成功' $message $true
     }
 }
 
@@ -921,8 +944,8 @@ try {
     Write-InstallLine '安装完成，可以关闭本窗口。' Green
     $archiveSummary = if ($copyArchive) { '同时生成安全复制包：' + [Environment]::NewLine + $copyArchive } else { $archiveWarning + [Environment]::NewLine + '程序已经安装成功；请勿使用旧复制包更新其他电脑。' }
     $resultTitle = if ($copyArchive) { 'TaskTrace：安装成功' } else { 'TaskTrace：安装成功，复制包未生成' }
-    Show-InstallResult $resultTitle ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
-    exit 0
+    $resultMessage = ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
+    $installationSucceeded = $true
 } catch {
     if ($_.Exception -is [OperationCanceledException]) {
         Write-InstallLine $_.Exception.Message Yellow
@@ -946,4 +969,11 @@ try {
         if ($null -ne $installLock) { try { $installLock.ReleaseMutex() } finally { $installLock.Dispose() } }
     }
     if (![string]::IsNullOrWhiteSpace($buildStagingRoot)) { Remove-Item -LiteralPath $buildStagingRoot -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# The new program is launched only after all installation locks are released
+# and staging files are cleaned up. Check-only/cancel/failure exits never reach it.
+if ($installationSucceeded) {
+    Complete-Installation $outputDirectory $resultTitle $resultMessage
+    exit 0
 }
