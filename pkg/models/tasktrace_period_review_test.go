@@ -224,15 +224,107 @@ func TestTaskTracePeriodReviewFlagsAndUnchangedItems(t *testing.T) {
 		`<li data-id="reopened">Reopened title</li><li data-id="future">Future item hidden</li></ul>`, until.Add(time.Hour))
 	report := &TaskTracePeriodReview{ProjectIDs: []int64{1}, From: from, Until: until}
 	require.NoError(t, report.ReadOne(s, actor))
-	require.Equal(t, 2, report.TaskCount)
-	require.Equal(t, 6, report.ChangeCount)
+	require.Equal(t, 1, report.TaskCount)
+	require.Equal(t, 5, report.ChangeCount)
 	rows := report.Projects[0].Tasks
-	require.Equal(t, "1. Still open\n\n", rows[0].Outstanding, "no activity task is included without a badge")
-	body := rows[1].Outstanding
+	require.Len(t, rows, 1)
+	require.Equal(t, task.ID, rows[0].ID)
+	require.NotContains(t, report.Markdown, unchanged.Title)
+	require.NotContains(t, report.Markdown, "Still open")
+	body := rows[0].Outstanding
 	for _, text := range []string{"1. **【有改动】** Edited title", "2. **【新增】** New title", "3. **【有改动】** Reopened title", "4. **【新增】** **【已完成】** **【有改动】** All flags", "5. **【已完成】** Completion timestamp only"} {
 		require.Contains(t, body, text)
 	}
 	for _, absent := range []string{"Old completion hidden", "Later completion hidden", "Unknown old completion hidden", "Future item hidden", "Duplicate canonical item"} {
 		require.NotContains(t, report.Markdown, absent)
+	}
+}
+
+//nolint:gosmopolitan // Persisted document labels are part of the period filter.
+func TestTaskTracePeriodReviewRequiresTaskActivity(t *testing.T) {
+	from := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	report := &TaskTracePeriodReview{
+		From:  from,
+		Until: from.AddDate(0, 0, 7),
+	}
+	list := `<h3 data-tasktrace-comment-type="outstanding">list</h3><ul><li data-id="quiet">Unchanged item</li></ul>`
+	comment := func(id int64, body string, when time.Time) *TaskComment {
+		return &TaskComment{
+			ID:       id,
+			AuthorID: 1,
+			Comment:  body,
+			Created:  when,
+			Updated:  when,
+		}
+	}
+	for _, sample := range []struct {
+		name     string
+		body     string
+		when     time.Time
+		included bool
+		count    int
+	}{
+		{
+			name: "no changes",
+			when: from.Add(-time.Second),
+		},
+		{
+			name: "recent normal comment does not count",
+			body: "Ordinary discussion",
+			when: from,
+		},
+		{
+			name: "old progress does not count",
+			body: "<h3>每日进展 · 2026-10-09</h3><p>Old progress</p>",
+			when: from.Add(-time.Second),
+		},
+		{
+			name: "old item change does not count",
+			body: `<p data-tasktrace-comment-type="item-activity" data-item-id="quiet"><strong>修改遗留事项</strong>：Unchanged item</p>`,
+			when: from.Add(-time.Second),
+		},
+		{
+			name:     "new progress retains unchanged item",
+			body:     "<h3>每日进展 · 2026-10-10</h3><p>New progress</p>",
+			when:     from,
+			included: true,
+			count:    2,
+		},
+		{
+			name:     "item change alone includes task",
+			body:     `<p data-tasktrace-comment-type="item-activity" data-item-id="quiet"><strong>修改遗留事项</strong>：Unchanged item</p>`,
+			when:     from,
+			included: true,
+			count:    1,
+		},
+		{
+			name: "end boundary excluded",
+			body: `<p data-tasktrace-comment-type="item-activity" data-item-id="quiet"><strong>修改遗留事项</strong>：Unchanged item</p>`,
+			when: report.Until,
+		},
+		{
+			name: "deleted item activity does not include task",
+			body: `<p data-tasktrace-comment-type="item-activity" data-item-id="deleted"><strong>新增遗留事项</strong>：Removed item</p>`,
+			when: from,
+		},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			comments := []*TaskComment{comment(1, list, from.Add(-time.Hour))}
+			if sample.body != "" {
+				comments = append(comments, comment(2, sample.body, sample.when))
+			}
+			convertedUnchanged := false
+			entries, err := report.collectEntries(comments, func(body string) (string, error) {
+				convertedUnchanged = convertedUnchanged || strings.Contains(body, "Unchanged item")
+				return body, nil
+			})
+			require.NoError(t, err)
+			require.Len(t, entries, sample.count)
+			require.Equal(t, sample.included, convertedUnchanged, "inactive tasks should not export unchanged content or images")
+			if sample.name == "new progress retains unchanged item" {
+				require.Contains(t, entries[1].body, "Unchanged item")
+				require.NotContains(t, entries[1].body, "【")
+			}
+		})
 	}
 }

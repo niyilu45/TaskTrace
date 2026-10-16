@@ -188,8 +188,8 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 	images := map[string]string{}
 	convert := func(body string) (string, error) { return exporter.convert(s, a, body, images) }
 	var candidates []*Task
-	// Unchanged unfinished items must also be reviewed, including tasks with no
-	// activity inside the period. Tasks without comments cannot contribute entries.
+	// Read full histories so activity flags and unchanged items accompanying a
+	// changed task are resolved against the same canonical list.
 	withComments := builder.Select("task_id").From("task_comments")
 	if err := s.In("project_id", r.ProjectIDs).Where("deleted_at IS NULL").And(builder.In("id", withComments)).Asc("project_id", "id").Find(&candidates); err != nil {
 		return err
@@ -239,7 +239,7 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		}
 		names = append(names, taskTraceReviewText(p.Title))
 	}
-	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。遗留事项展示最新内容并编号：周期内新增、完成或修改分别标注；无变化的未完成事项不加标志，周期外完成的事项不展示。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
+	output.WriteString("项目范围：" + strings.Join(names, "、") + "\n\n仅展示周期内每日进展或遗留事项有变化的任务。按实际保存或修改时间汇总；每日进展按日期及填写人保留区间内最后一版。遗留事项展示最新内容并编号：周期内新增、完成或修改分别标注；无变化的未完成事项不加标志，周期外完成的事项不展示。已删除任务和遗留事项不展示；任务描述为当前内容。\n\n")
 	lastProject := int64(-1)
 	for _, task := range readable {
 		comments := commentsByTask[task.ID]
@@ -306,7 +306,7 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 		r.ChangeCount += len(entries)
 	}
 	if r.ChangeCount == 0 {
-		output.WriteString("所选项目在此时间范围内没有可回顾的进展、未完成遗留事项或周期内完成的遗留事项。\n")
+		output.WriteString("所选项目在此时间范围内没有可回顾的每日进展或遗留事项变化。\n")
 	}
 	r.Warnings = exporter.Warnings
 	r.Filename = taskTraceMarkdownFilename("周期回顾_" + start + "_" + end)
@@ -401,6 +401,14 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		}
 		activity[id] = state
 	}
+	type reviewItem struct {
+		item      taskTraceOutstandingItem
+		index     int
+		completed bool
+		flags     []string
+	}
+	items := []reviewItem{}
+	hasPeriodChanges := len(entries) > 0
 	seenItems := map[string]bool{}
 	for index, item := range current.items {
 		if seenItems[item.id] {
@@ -420,9 +428,33 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		if completed && !inPeriod(completedAt) {
 			continue
 		}
+		flags := []string{}
+		if inPeriod(state.firstAdded) {
+			flags = append(flags, "**【新增】**")
+		}
+		if completed {
+			flags = append(flags, "**【已完成】**")
+		}
+		if state.modified {
+			flags = append(flags, "**【有改动】**")
+		}
+		hasPeriodChanges = hasPeriodChanges || len(flags) > 0
+		items = append(items, reviewItem{
+			item:      item,
+			index:     index,
+			completed: completed,
+			flags:     flags,
+		})
+	}
+	// Unchanged items accompany active tasks, but cannot include a task on their
+	// own. Filter before exporting their images to avoid unnecessary reads/warnings.
+	if !hasPeriodChanges {
+		return nil, nil
+	}
+	for _, selected := range items {
 		// Activity supplies flags only. Never render stale snapshots or repeat an item
 		// for each edit; use the same current list as the editors, including images.
-		title, note := taskTraceReviewItemParts(item)
+		title, note := taskTraceReviewItemParts(selected.item)
 		body, err := convert(title)
 		if err != nil {
 			return nil, err
@@ -434,20 +466,15 @@ func (r *TaskTracePeriodReview) collectEntries(comments []*TaskComment, convert 
 		if memo != "" {
 			body += "\n\n**备注**\n\n" + memo
 		}
-		flags := []string{}
-		if inPeriod(state.firstAdded) {
-			flags = append(flags, "**【新增】**")
+		if len(selected.flags) > 0 {
+			body = strings.Join(selected.flags, " ") + " " + body
 		}
-		if completed {
-			flags = append(flags, "**【已完成】**")
-		}
-		if state.modified {
-			flags = append(flags, "**【有改动】**")
-		}
-		if len(flags) > 0 {
-			body = strings.Join(flags, " ") + " " + body
-		}
-		entries = append(entries, taskTraceReviewEntry{outstanding: true, completed: completed, itemOrder: index, body: body})
+		entries = append(entries, taskTraceReviewEntry{
+			outstanding: true,
+			completed:   selected.completed,
+			itemOrder:   selected.index,
+			body:        body,
+		})
 	}
 	return entries, nil
 }
