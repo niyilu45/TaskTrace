@@ -156,7 +156,7 @@ internal sealed partial class FloatingWindow {
         using(var dialog=DpiDialog(new Form {Text="TaskTrace · 检查更新失败",Size=new System.Drawing.Size(620,300),MinimumSize=new System.Drawing.Size(500,260),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=4};
             layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,26));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
-            var details=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text=error,AccessibleName="检查更新失败原因"};
+            var details=new TextBox {Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text="作者:z00613980\r\n\r\n"+error,AccessibleName="检查更新失败原因"};
             var hint=new Label {Dock=DockStyle.Fill,Text="自动检查失败时，可以从下面的 GitHub Releases 页面手动下载免安装包：",TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
             var address=new TextBox {Dock=DockStyle.Fill,ReadOnly=true,BackColor=System.Drawing.SystemColors.Window,Text=UpdateReleasesUrl,AccessibleName="TaskTrace 手动下载网址"};
             var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
@@ -168,7 +168,7 @@ internal sealed partial class FloatingWindow {
 
     async Task ShowInteractiveUpdateResult(Dictionary<string,object> state) {
         if(!Bool(state, "available")) {
-            MessageBox.Show("当前已是最新版本。\r\n\r\n当前版本：" + CurrentPackageVersion(), "TaskTrace · 检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("当前已是最新版本。\r\n\r\n当前版本：" + CurrentPackageVersion()+"\r\n作者:z00613980", "TaskTrace · 检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         string version = UpdateText(state, "latest_version");
@@ -183,16 +183,16 @@ internal sealed partial class FloatingWindow {
     }
 
     bool ShowUpdateAvailableDialog(string version,string published,string notes) {
-        using(var dialog=DpiDialog(new Form {Text="TaskTrace · 发现新版本",Size=new System.Drawing.Size(640,330),MinimumSize=new System.Drawing.Size(520,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+        using(var dialog=DpiDialog(new Form {Text="TaskTrace · 发现新版本",Size=new System.Drawing.Size(640,352),MinimumSize=new System.Drawing.Size(520,322),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(16),ColumnCount=1,RowCount=5};
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,40));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,80));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,0));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
             var heading=new Label{Dock=DockStyle.Fill,Text="发现新版本 "+version,Font=new System.Drawing.Font(Font,System.Drawing.FontStyle.Bold),TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
-            var range=new Label{Dock=DockStyle.Fill,Text="本地版本："+CurrentPackageVersion()+"\r\n最新版本："+version+"    发布日期："+published,TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
+            var range=new Label{Dock=DockStyle.Fill,Text="作者:z00613980\r\n本地版本："+CurrentPackageVersion()+"\r\n最新版本："+version+"    发布日期："+published,TextAlign=System.Drawing.ContentAlignment.MiddleLeft};
             var toggle=new Button{Text="查看版本改动",AutoSize=true,Anchor=AnchorStyles.Left};
             var changes=new TextBox{Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,ScrollBars=ScrollBars.Vertical,BackColor=System.Drawing.SystemColors.Window,Text=notes==""?"本次发布未填写更新内容。":notes,AccessibleName="版本改动"};
             var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
             var install=new Button{Text="开始更新",AutoSize=true,DialogResult=DialogResult.Yes};var later=new Button{Text="暂不更新",AutoSize=true,DialogResult=DialogResult.No};
-            bool expanded=false;toggle.Click+=delegate{expanded=!expanded;layout.RowStyles[3].Height=expanded?150:0;toggle.Text=expanded?"收起版本改动":"查看版本改动";dialog.Height=expanded?480:330;};
+            bool expanded=false;toggle.Click+=delegate{expanded=!expanded;layout.RowStyles[3].Height=expanded?150:0;toggle.Text=expanded?"收起版本改动":"查看版本改动";dialog.Height=expanded?502:352;};
             actions.Controls.Add(install);actions.Controls.Add(later);layout.Controls.Add(heading);layout.Controls.Add(range);layout.Controls.Add(toggle);layout.Controls.Add(changes);layout.Controls.Add(actions);dialog.Controls.Add(layout);dialog.AcceptButton=install;dialog.CancelButton=later;
             return dialog.ShowDialog(Form.ActiveForm??this)==DialogResult.Yes;
         }

@@ -1,6 +1,7 @@
 <template>
 	<div class="version-changes">
 		<dl class="version-range">
+			<div><dt>作者:</dt><dd>z00613980</dd></div>
 			<div><dt>本地版本</dt><dd>{{ currentVersion || '未知' }}</dd></div>
 			<div><dt>最新版本</dt><dd>{{ latestVersion || currentVersion || '未知' }}</dd></div>
 		</dl>

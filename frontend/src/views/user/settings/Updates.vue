@@ -43,6 +43,7 @@
 		class="mts-4"
 	>
 		<dl class="version-details">
+			<div><dt>作者:</dt><dd>z00613980</dd></div>
 			<div><dt>当前版本</dt><dd>{{ updateStore.state.current_version || '未知' }}</dd></div>
 			<div><dt>最近检查</dt><dd>{{ displayDate(updateStore.state.checked_at) }}</dd></div>
 			<div v-if="updateStore.state.error">
@@ -140,7 +141,7 @@ async function check() {
 	try {
 		await updateStore.checkNow()
 		if (updateStore.available) showUpdateModal.value = true
-		else success({message: '当前已是最新版本。'})
+		else success({message: '当前已是最新版本。作者:z00613980'})
 	} catch (cause) {
 		showError(cause)
 	}
