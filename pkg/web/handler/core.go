@@ -23,6 +23,10 @@ import (
 	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/web"
+
+	"xorm.io/builder"
+	"xorm.io/xorm"
+	"xorm.io/xorm/schemas"
 )
 
 // DoCreate runs the permission check + model Create + commit pipeline for a
@@ -35,6 +39,11 @@ func DoCreate(ctx context.Context, obj CObject, a web.Auth) error {
 			log.Errorf("Could not close session: %s", err)
 		}
 	}()
+
+	if err := lockSQLiteMutation(s); err != nil {
+		_ = s.Rollback()
+		return err
+	}
 
 	if err := web.LockMutationUndo(ctx, s, a, "create", obj); err != nil {
 		_ = s.Rollback()
@@ -164,6 +173,11 @@ func DoUpdate(ctx context.Context, obj CObject, a web.Auth) error {
 		}
 	}()
 
+	if err := lockSQLiteMutation(s); err != nil {
+		_ = s.Rollback()
+		return err
+	}
+
 	if err := web.LockMutationUndo(ctx, s, a, "update", obj); err != nil {
 		_ = s.Rollback()
 		events.CleanupPending(s)
@@ -224,6 +238,11 @@ func DoDelete(ctx context.Context, obj CObject, a web.Auth) error {
 		}
 	}()
 
+	if err := lockSQLiteMutation(s); err != nil {
+		_ = s.Rollback()
+		return err
+	}
+
 	if err := web.LockMutationUndo(ctx, s, a, "delete", obj); err != nil {
 		_ = s.Rollback()
 		events.CleanupPending(s)
@@ -271,4 +290,15 @@ func DoDelete(ctx context.Context, obj CObject, a web.Auth) error {
 
 	events.DispatchPending(ctx, s)
 	return nil
+}
+
+// Reserve SQLite's writer before permission/snapshot reads. Upgrading an old WAL
+// read snapshot after another writer commits fails immediately, ignoring busy_timeout.
+func lockSQLiteMutation(s *xorm.Session) error {
+	if s.Engine().Dialect().URI().DBType != schemas.SQLITE {
+		return nil
+	}
+	// The empty ID set changes no rows but reserves the transaction's write lock.
+	_, err := s.Table("users").Where(builder.In("id", []int64{})).Update(map[string]any{"id": int64(0)})
+	return err
 }
