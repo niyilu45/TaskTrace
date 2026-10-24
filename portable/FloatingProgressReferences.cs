@@ -71,7 +71,7 @@ internal sealed partial class FloatingWindow {
     static string ProgressSnapshotHtml(string html,long taskId) {
         html=SplitProgressReferences(html).Body;
         html=TaskDescriptionEditorHtml(html);
-        var output=new StringBuilder();int cursor=0;
+        var output=new StringBuilder();int cursor=0;var attachmentLinks=new Stack<bool>();
         foreach(Match token in ProgressTags.Matches(html)) {
             output.Append(html.Substring(cursor,token.Index-cursor));cursor=token.Index+token.Length;
             var tag=Regex.Match(token.Value,@"^<\s*(/?)\s*([a-z0-9]+)\b",RegexOptions.IgnoreCase);if(!tag.Success)continue;
@@ -80,6 +80,12 @@ internal sealed partial class FloatingWindow {
                 string src=ReferenceAttribute(token.Value,"data-src")??ReferenceAttribute(token.Value,"src")??"";
                 var path=Regex.Match(src,@"^/api/v([12])/tasks/([1-9][0-9]*)/attachments/([1-9][0-9]*)$");long imageTask,imageId;
                 if(path.Success && Int64.TryParse(path.Groups[2].Value,out imageTask) && imageTask==taskId && Int64.TryParse(path.Groups[3].Value,out imageId) && imageId<=9007199254740991L)output.Append("<img src=\"").Append(WebUtility.HtmlEncode(src)).Append("\">");
+                continue;
+            }
+            if(name=="a") {
+                if(closing){if(attachmentLinks.Count>0 && attachmentLinks.Pop())output.Append("</a>");continue;}
+                string href=ReferenceAttribute(token.Value,"href");
+                bool allowed=EditorAttachmentHref(href);attachmentLinks.Push(allowed);if(allowed)output.Append("<a href=\"").Append(WebUtility.HtmlEncode(href)).Append("\" download=\"").Append(WebUtility.HtmlEncode(ReferenceAttribute(token.Value,"download")??"附件")).Append("\">");
                 continue;
             }
             if(Regex.IsMatch(name,@"^h[1-6]$"))name="div";

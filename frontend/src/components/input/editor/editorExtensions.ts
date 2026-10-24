@@ -1,10 +1,11 @@
-import {cleanPastedFormatting, PasteIndentation} from './pasteFormatting'
+import {cleanPastedFormatting, PasteIndentation, isClipboardFileUrl, portableClipboardHTML} from './pasteFormatting'
 import {nextTick, toValue, type MaybeRefOrGetter, type Ref} from 'vue'
 
 import StarterKit from '@tiptap/starter-kit'
 import {createNodeFromContent, Extension, mergeAttributes, type Editor, type Extensions} from '@tiptap/core'
 import {Plugin, PluginKey} from '@tiptap/pm/state'
-import {Fragment} from '@tiptap/pm/model'
+import {DOMSerializer, Fragment} from '@tiptap/pm/model'
+import {error as clipboardError} from '@/message'
 import {marked} from 'marked'
 
 import Link from '@tiptap/extension-link'
@@ -75,6 +76,9 @@ const CustomTableCell = TableCell.extend({
 
 // prevent links from extending after space
 const NonInclusiveLink = Link.extend({
+	addAttributes() {
+		return {...this.parent?.(), download: {default: null}}
+	},
 	inclusive() {
 		return false
 	},
@@ -175,37 +179,37 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 				new Plugin({
 					key: new PluginKey('pasteHandler'),
 					props: {
+						handleDOMEvents: {
+							copy: (view, event) => {
+								const holder = document.createElement('div')
+								holder.append(DOMSerializer.fromSchema(view.state.schema).serializeFragment(view.state.selection.content().content))
+								if (!holder.querySelector('img, a[href*="/attachments/"], a[href^="data:application/octet-stream;"]')) return false
+								const text = view.state.doc.textBetween(view.state.selection.from, view.state.selection.to, '\n')
+								event.clipboardData?.setData('text/html', holder.innerHTML)
+								event.clipboardData?.setData('text/plain', text)
+								if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+									const html = portableClipboardHTML(holder.innerHTML).then(value => new Blob([value], {type: 'text/html'}))
+									void navigator.clipboard.write([new ClipboardItem({'text/html': html, 'text/plain': new Blob([text], {type: 'text/plain'})})]).catch(clipboardError)
+								}
+								event.preventDefault()
+								return true
+							},
+						},
 						clipboardParser: createClipboardParser(this.editor.schema),
 						transformPastedHTML: cleanPastedFormatting,
 						transformPasted: slice => repairSliceContent(slice),
 
 						handlePaste: (view, event) => {
 
-							// Rich HTML must retain interleaved text/images rather than paste only its first bitmap.
-							const clipboardHtml = event.clipboardData?.getData('text/html')
-							if (clipboardHtml) {
-								const files = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'))
-								const pasted = new DOMParser().parseFromString(cleanPastedFormatting(clipboardHtml), 'text/html')
-								if (toValue(uploadCallback) && files.length && (pasted.querySelector('img:not([src])') || !pasted.querySelector('img'))) {
-									uploadAndInsertFiles(files, clipboardHtml)
-									return true
-								}
-								return false
+							const clipboardHtml = event.clipboardData?.getData('text/html') || ''
+							let files = Array.from(event.clipboardData?.files || [])
+							if (!files.length) files = Array.from(event.clipboardData?.items || []).flatMap(item => item.kind === 'file' && item.getAsFile() ? [item.getAsFile()!] : [])
+							const media = new DOMParser().parseFromString(clipboardHtml, 'text/html').querySelector('img, a[download], a[href^="data:application/octet-stream;"]')
+							if (toValue(uploadCallback) && (files.length || media)) {
+								uploadAndInsertFiles(files, clipboardHtml)
+								return true
 							}
-
-							// Handle images pasted from clipboard
-							if (typeof toValue(uploadCallback) !== 'undefined' && event.clipboardData?.items?.length) {
-
-								for (const item of event.clipboardData.items) {
-									if (item.kind === 'file' && item.type.startsWith('image/')) {
-										const file = item.getAsFile()
-										if (file) {
-											uploadAndInsertFiles([file])
-											return true
-										}
-									}
-								}
-							}
+							if (clipboardHtml) return false
 
 							const text = event.clipboardData?.getData('text/plain') || ''
 							if (!text) {
@@ -285,6 +289,7 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 		Underline,
 		NonInclusiveLink.configure({
 			openOnClick: false,
+			isAllowedUri: (url, context) => isClipboardFileUrl(url) || /^blob:/.test(url) || context.defaultValidate(url),
 			validate: (href) => (new RegExp(
 				`^(https?|${additionalLinkProtocols.join('|')}):\\/\\/`,
 				'i',

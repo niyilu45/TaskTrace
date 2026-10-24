@@ -32,9 +32,17 @@ describe('progress editor images', () => {
 		vi.mocked(taskAttachmentsUpload).mockResolvedValue({data: {success: [{id: 44}], errors: []}} as never)
 		const html = await persistProgressImages('<p>text</p><img src="data:image/png;base64,AQID"><p>end</p>', 8)
 		expect(html).toBe('<p>text</p><img src="/api/v1/tasks/8/attachments/44"><p>end</p>')
-		const file = vi.mocked(taskAttachmentsUpload).mock.calls[0][0].body.files[0]
+		const file = vi.mocked(taskAttachmentsUpload).mock.calls[0][0].body.files[0] as File
 		expect(file.name.startsWith(PROGRESS_IMAGE_PREFIX)).toBe(true)
 		expect(isProgressImageAttachment({file: {name: file.name}} as never)).toBe(true)
 		expect(isProgressImageAttachment({file: {name: 'report.png'}} as never)).toBe(false)
 	})
+	it('persists pasted files as attachment links while keeping images inline', async () => {
+		vi.mocked(taskAttachmentsUpload).mockResolvedValueOnce({data: {success: [{id: 45}], errors: []}} as never)
+		const html = await persistProgressImages('<p>前<a download="报告.txt" href="data:application/octet-stream;base64,AQID">报告.txt</a>后</p>', 8)
+		expect(html).toBe('<p>前<a download="报告.txt" href="/api/v1/tasks/8/attachments/45">报告.txt</a>后</p>')
+		expect(countProgressImages(html)).toBe(0)
+		expect(taskAttachmentsUpload).toHaveBeenCalledOnce()
+	})
+
 })

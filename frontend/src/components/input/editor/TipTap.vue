@@ -223,7 +223,6 @@ import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
 import inputPrompt from '@/helpers/inputPrompt'
 import {setLinkInEditor} from '@/components/input/editor/setLinkInEditor'
 import {saveEditorDraft, loadEditorDraft, clearEditorDraft} from '@/helpers/editorDraftStorage'
-import {stripEditorUploadPlaceholders} from '@/helpers/editorUploadPlaceholder'
 import {error} from '@/message'
 
 const props = withDefaults(defineProps<{
@@ -279,10 +278,6 @@ type Mode = 'edit' | 'preview'
 const internalMode = ref<Mode>('preview')
 const isEditing = computed(() => props.isEditEnabled && (props.alwaysEditing || internalMode.value === 'edit'))
 const contentHasChanged = ref<boolean>(false)
-
-// TipTap crashes when inserting an image into an empty editor.
-// To work around this, we're inserting an element first, then insert the image, then remove the element.
-const UPLOAD_PLACEHOLDER_ELEMENT = '<p>UPLOAD_PLACEHOLDER</p>'
 
 let lastSavedState = ''
 
@@ -494,48 +489,11 @@ function uploadAndInsertFiles(files: File[] | FileList, html?: string) {
 		throw new Error('Can\'t add files here')
 	}
 
-	if (html && liveEditor()) {
-		setUploading(1)
-		void insertClipboardHTMLImages(liveEditor()!, html, Array.from(files), props.uploadCallback)
-			.then(() => bubbleNow()).catch(e => error(e)).finally(() => setUploading(-1))
-		return
-	}
-
-	// The server reports failed uploads (quota, disk full) in the response body,
-	// so a rejection here is a message for the user, not a bug to report.
+	const target = liveEditor()
+	if (!target) return
 	setUploading(1)
-	props.uploadCallback(files).then(async urls => {
-		urls?.forEach(url => {
-			if (liveEditor()?.isEmpty) {
-				liveEditor()
-					?.chain()
-					.focus()
-					.insertContent(UPLOAD_PLACEHOLDER_ELEMENT)
-					.run()
-			}
-			liveEditor()
-				?.chain()
-				.focus()
-				.setImage({src: url})
-				.run()
-		})
-
-		const html = stripEditorUploadPlaceholders(liveEditor()?.getHTML() ?? '')
-
-		liveEditor()?.commands.setContent(html, {
-			...defaultSetContentOptions,
-			emitUpdate: false,
-		})
-
-		bubbleNow()
-
-		// Prompt for alt text right after insertion. setContent above resets node
-		// positions, so reliably locating each image is fragile for multi-uploads —
-		// prompt only when a single image was inserted.
-		if (urls?.length === 1) {
-			await promptImageAlt(urls[0])
-		}
-	}).catch(e => error(e)).finally(() => setUploading(-1))
+	void insertClipboardHTMLImages(target, html || '', Array.from(files), props.uploadCallback)
+		.then(() => bubbleNow()).catch(e => error(e)).finally(() => setUploading(-1))
 }
 
 function triggerImageInput(event: Event) {

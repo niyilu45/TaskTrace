@@ -27,7 +27,7 @@ internal static class FloatingClipboard {
             IntPtr memory=GetClipboardData(RegisterClipboardFormat("HTML Format"));
             if(memory==IntPtr.Zero)return null;
             ulong size=GlobalSize(memory).ToUInt64();
-            if(size==0 || size>64*1024*1024)return null;
+            if(size==0 || size>96*1024*1024)return null;
             IntPtr pointer=GlobalLock(memory);if(pointer==IntPtr.Zero)return null;
             try{var bytes=new byte[(int)size];Marshal.Copy(pointer,bytes,0,bytes.Length);return bytes;}
             finally{GlobalUnlock(memory);}
@@ -35,7 +35,7 @@ internal static class FloatingClipboard {
     }
 
     internal static string Html() {
-        string text=null;
+        string text=null;bool files=false;
         try {
             text=Clipboard.ContainsText(TextDataFormat.UnicodeText)?Clipboard.GetText(TextDataFormat.UnicodeText):null;
             byte[] bytes=HtmlBytes();
@@ -45,10 +45,34 @@ internal static class FloatingClipboard {
                 if(Clipboard.ContainsImage())html=Regex.Replace(html,@"<img\b[^>]*>",delegate(Match match){return Regex.IsMatch(match.Value,@"(?:data:image/|/tasks/\d+/attachments/)",RegexOptions.IgnoreCase)?match.Value:ImageHtml();},RegexOptions.IgnoreCase);
                 return html;
             }
+            if(Clipboard.ContainsFileDropList()){files=true;return FilesHtml(Clipboard.GetFileDropList());}
             if(text!=null)return TextHtml(text);
             if(Clipboard.ContainsText())return TextHtml(Clipboard.GetText());
             return Clipboard.ContainsImage()?ImageHtml():"";
-        }catch{return text==null?"":TextHtml(text);}
+        }catch{if(files)throw;return text==null?"":TextHtml(text);}
+    }
+
+    internal static string FilesHtml(System.Collections.Specialized.StringCollection paths) {
+        var html=new StringBuilder();long total=0;
+        foreach(string path in paths) {
+            var file=new FileInfo(path);if(!file.Exists)continue;total+=file.Length;
+            if(total>64*1024*1024)throw new Exception("一次粘贴的文件不能超过 64 MB，请分次添加。");
+            if(Regex.IsMatch(file.Extension,@"^\.(png|jpe?g|gif|bmp)$",RegexOptions.IgnoreCase)) {
+                using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);html.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(stream.ToArray())).Append("\">");}
+            } else html.Append("<a download=\"").Append(WebUtility.HtmlEncode(file.Name)).Append("\" href=\"data:application/octet-stream;base64,").Append(Convert.ToBase64String(File.ReadAllBytes(path))).Append("\">").Append(WebUtility.HtmlEncode(file.Name)).Append("</a> ");
+        }
+        return html.ToString();
+    }
+    internal static DataObject CopyData(string html,string text) {
+        string prefix="<html><body><!--StartFragment-->",suffix="<!--EndFragment--></body></html>";
+        string format="Version:1.0\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\nStartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
+        int start=Encoding.UTF8.GetByteCount(String.Format(format,0,0,0,0)),fragment=start+Encoding.UTF8.GetByteCount(prefix),end=fragment+Encoding.UTF8.GetByteCount(html);
+        var result=new DataObject();result.SetData(DataFormats.UnicodeText,true,text??"");
+        result.SetData(DataFormats.Html,false,String.Format(format,start,end+Encoding.UTF8.GetByteCount(suffix),fragment,end)+prefix+html+suffix);
+        return result;
+    }
+    internal static bool Copy(string html,string text) {
+        try{Clipboard.SetDataObject(CopyData(html,text),true,3,100);return true;}catch{return false;}
     }
 
     internal static string TextHtml(string text) {
@@ -121,9 +145,10 @@ function cleanTaskTracePaste(html){
  var root=document.createElement('div');root.innerHTML=html;var elements=root.querySelectorAll('*');
  for(var i=elements.length-1;i>=0;i--){var el=elements[i],tag=el.tagName.toLowerCase();
   if(/^(script|style|meta|link|iframe|object|embed|svg|form|input|button)$/.test(tag)){el.parentNode.removeChild(el);continue;}
-  var indent=el.style.marginLeft||el.style.paddingLeft,first=el.style.textIndent,src=el.getAttribute('data-tasktrace-src')||el.getAttribute('src'),cols=el.getAttribute('colspan'),rows=el.getAttribute('rowspan'),start=el.getAttribute('start');
+  var indent=el.style.marginLeft||el.style.paddingLeft,first=el.style.textIndent,src=el.getAttribute('src')||el.getAttribute('data-tasktrace-src'),href=el.getAttribute('href'),download=el.getAttribute('download'),cols=el.getAttribute('colspan'),rows=el.getAttribute('rowspan'),start=el.getAttribute('start');
   while(el.attributes.length)el.removeAttribute(el.attributes[0].name);
   if(tag==='img'){if(src && /^(data:image\/(png|jpe?g|gif|bmp);base64,|\/?api\/v[12]\/tasks\/\d+\/attachments\/\d+)/i.test(src))el.setAttribute('src',src);else el.parentNode.removeChild(el);continue;}
+  if(tag==='a' && href && /^(data:application\/octet-stream;base64,|\/?api\/v[12]\/tasks\/\d+\/attachments\/\d+)/i.test(href)){el.setAttribute('href',href);if(download)el.setAttribute('download',download);}
   if(/^(strong|b|em|i|u|s|strike|font|h[1-6])$/.test(tag)){var plain=document.createElement(/^h/.test(tag)?'p':'span');while(el.firstChild)plain.appendChild(el.firstChild);el.parentNode.replaceChild(plain,el);el=plain;}
   if(indent && /^\d+(\.\d+)?(px|pt|em|rem)$/.test(indent))el.style.marginLeft=indent;
   if(first && /^-?\d+(\.\d+)?(px|pt|em|rem)$/.test(first))el.style.textIndent=first;
@@ -131,13 +156,18 @@ function cleanTaskTracePaste(html){
  }
  return root.innerHTML;
 }
+// Capture before focus changes, COM clipboard reads, or a toolbar/picker can disturb selection.
+var taskTraceSavedRange=null;
+function taskTraceInside(node){var editor=document.getElementById('progress-editor');while(node){if(node===editor)return true;node=node.parentNode;}return false;}
+function taskTraceRange(){var editor=document.getElementById('progress-editor'),selection=window.getSelection(),range=selection&&selection.rangeCount?selection.getRangeAt(0):null;return range&&taskTraceInside(range.commonAncestorContainer)?range.cloneRange():null;}
+function rememberTaskTraceRange(){var range=taskTraceRange();if(range)taskTraceSavedRange=range;}
+function restoreTaskTraceRange(range){var editor=document.getElementById('progress-editor'),selection=window.getSelection();range=range||taskTraceRange()||taskTraceSavedRange;if(!range||!taskTraceInside(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}editor.focus();selection.removeAllRanges();selection.addRange(range);return range;}
+function insertTaskTraceHtml(html,range){var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false'||!html)return false;range=restoreTaskTraceRange(range);range.deleteContents();var holder=document.createElement('div');holder.innerHTML=html;var fragment=document.createDocumentFragment(),last;while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);if(last)range.setStartAfter(last);range.collapse(true);ensureTaskTraceImageCarets();var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);rememberTaskTraceRange();window.external.NotifyPaste();return true;}
 function pasteTaskTrace(e){e=e||window.event;if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}
  var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false')return false;
- var html=cleanTaskTracePaste(window.external.PasteHtml());if(!html)return false;
- editor.focus();var selection=window.getSelection(),range=selection&&selection.rangeCount?selection.getRangeAt(0):null;
- if(!range||!editor.contains(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}
- range.deleteContents();var holder=document.createElement('div');holder.innerHTML=html;var fragment=document.createDocumentFragment(),last;while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);if(last)range.setStartAfter(last);range.collapse(true);selection.removeAllRanges();selection.addRange(range);ensureTaskTraceImageCarets();window.external.NotifyPaste();
- return false;
+ var range=taskTraceRange()||taskTraceSavedRange,html=cleanTaskTracePaste(window.external.PasteHtml());insertTaskTraceHtml(html,range);return false;
 }
+function copyTaskTrace(e,cut){var editor=document.getElementById('progress-editor'),range=taskTraceRange();if(!range||range.collapsed)return true;var holder=document.createElement('div');holder.appendChild(range.cloneContents());var images=holder.getElementsByTagName('img');for(var i=0;i<images.length;i++)images[i].removeAttribute('data-tasktrace-src');var html=holder.innerHTML.replace(/\u200b/g,''),text=(holder.innerText||holder.textContent||'').replace(/\u200b/g,'');if(!window.external.CopyHtml(html,text))return true;if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}if(cut&&editor.getAttribute('contenteditable')!=='false'){range.deleteContents();rememberTaskTraceRange();window.external.NotifyPaste();}return false;}
+document.addEventListener('selectionchange',rememberTaskTraceRange);
 ";
 }

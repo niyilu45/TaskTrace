@@ -66,9 +66,10 @@ internal sealed partial class FloatingWindow : Form {
     internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
     sealed class PendingItem {
         public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule; public int Number, Completion; public bool Done; public int Priority=7;
+        public PendingItem Copy(){return (PendingItem)MemberwiseClone();}
         public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
     }
-    sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); }
+    sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); public List<PendingItem> OriginalItems; }
     sealed class SharedItemMarkup { public string Attrs, Body; }
     const string SharedHeading = "TaskTrace 遗留事项清单";
     const string SharedTypeMarker = "data-tasktrace-comment-type=\"outstanding\"";
@@ -382,12 +383,17 @@ internal sealed partial class FloatingWindow : Form {
                 foreach(string value in Regex.Split(match.Groups[1].Value, @"<br\s*/?>")) if(value.Trim()!="") list.Items.Add(new PendingItem {Id="legacy-"+latest["id"]+"-"+(index++),Html=value,Priority=defaultPriority});
             }
         }
-        return list;
+        list.OriginalItems=list.Items.Select(item=>item.Copy()).ToList();return list;
     }
     async Task WriteShared(long id, SharedList list) {
+        var gate=OutstandingWriteGate(id);await gate.WaitAsync();
+        try {
+        var latest=ReadShared(await ReadHistory(id));
+        list.Items=MergeOutstandingEdits(list.OriginalItems??new List<PendingItem>(),list.Items,latest.Items);list.CommentId=latest.CommentId;
         string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+(String.IsNullOrWhiteSpace(item.RepeatRule)?"":" data-reminder-repeat=\""+WebUtility.HtmlEncode(item.RepeatRule)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
-        list.CommentId = Convert.ToInt64(saved["id"]);
+        list.CommentId = Convert.ToInt64(saved["id"]);list.OriginalItems=list.Items.Select(item=>item.Copy()).ToList();
+        }finally{gate.Release();}
     }
     TableLayoutPanel TextFieldRow(TextBox input, string description, Control action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -618,7 +624,7 @@ internal sealed partial class FloatingWindow : Form {
         await EditProgress(id,TaskTitle(id));
     }
     async Task EditProgress(long id,string taskTitle,bool verify=false,bool expectSavedImage=false) {
-        SetBusy(true); timer.Stop();
+        if(closing)return;var editorEntry=editorWindows.Open("progress:"+id);if(editorEntry==null)return;
         try {
             var task=await Api("GET","/tasks/"+id,null);
             taskTitle=Convert.ToString(task["title"]);
@@ -668,6 +674,8 @@ internal sealed partial class FloatingWindow : Form {
                 var previewReference=new Button {Text="查看快照",AutoSize=true,Enabled=false};var removeReference=new Button {Text="移除引用",AutoSize=true,Enabled=false};
                 referenceActions.Controls.Add(previewReference);referenceActions.Controls.Add(removeReference);referenceLayout.Controls.Add(choiceRow);referenceLayout.Controls.Add(referenceList);referenceLayout.Controls.Add(referenceActions);referenceGroup.Controls.Add(referenceLayout);
                 layout.Controls.Add(descriptionPanel,0,0);layout.Controls.Add(day,0,1);layout.Controls.Add(new Label {Text="当天进展与更正 · 双击图片查看大图；选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="当天进展与更正说明"},0,2);layout.Controls.Add(progress,0,3);layout.Controls.Add(collaboratorGroup,0,4);layout.Controls.Add(referenceGroup,0,5);layout.Controls.Add(navigationRow,0,6);layout.Controls.Add(actionRow,0,7);layout.Controls.Add(feedback,0,8);var editorLayout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Margin=Padding.Empty};editorLayout.RowStyles.Add(new RowStyle(SizeType.Absolute,58));editorLayout.RowStyles.Add(new RowStyle(SizeType.Percent,100));editorLayout.Controls.Add(taskName,0,0);editorLayout.Controls.Add(layout,0,1);dialog.Controls.Add(editorLayout);
+                progress.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="粘贴失败："+error.Message;};
+                descriptionEditor.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="粘贴失败："+error.Message;};
                 int inlineImageDoubleClicks=0;
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 collaboratorProgress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"协作成员进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
@@ -798,7 +806,7 @@ internal sealed partial class FloatingWindow : Form {
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}
                 };
                 save.Click+=async delegate {await write(true);};
-                var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate {if(autoSaveEnabled && !editingOutstanding && !submitting && progressDirty())try{cacheSelectedDay();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
+                var autoTimer=new Timer {Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate {if(autoSaveEnabled && !submitting && progressDirty())try{cacheSelectedDay();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
                 Action discardTaskEditorChanges=delegate{
                     updateDiscarded=true;
                     taskName.Discard();
@@ -822,7 +830,6 @@ internal sealed partial class FloatingWindow : Form {
                     finally{if(!dialog.IsDisposed){submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}}
                 };
                 dialog.KeyPreview=true;dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !submitting && !descriptionSaving && (progress.ContainsFocus || descriptionEditor.ContainsFocus) && Clipboard.ContainsImage() && !Clipboard.ContainsText()) {e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);var target=descriptionEditor.ContainsFocus?descriptionEditor:progress;target.InsertImage(stream.ToArray());feedback.Text=target==descriptionEditor?"图片已嵌入任务描述，双击可查看大图。":"图片已嵌入进展正文，共 "+progress.ImageCount+" 张；选中图片后可按退格或 Delete 删除。";}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;if(taskName.ContainsFocus)taskName.SaveButton.PerformClick();else if(descriptionEditor.ContainsFocus)saveDescription.PerformClick();else save.PerformClick();}
                 };
                 Exception verificationError=null;
@@ -904,10 +911,10 @@ internal sealed partial class FloatingWindow : Form {
                     else {feedback.Text="任务名、任务描述或进展未能全部保存，窗口已保留，请检查后重试。";autoTimer.Start();}
                 };
                 using(var updateRegistration=RegisterUnsavedUpdateEditor("任务名、任务描述或每日进展编辑窗口",delegate{stash();return taskName.Dirty || drafts.Count>0 || descriptionDirty();},async delegate{if(submitting || descriptionSaving || taskName.Saving)return false;stash();bool nameSaved=!taskName.Dirty || await taskName.Save();bool descriptionSaved=nameSaved && (!descriptionDirty() || await writeDescription());return descriptionSaved && await saveAllDrafts();},discardTaskEditorChanges))
-                try{await ShowEditorWindowAsync(dialog,this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
+                try{editorEntry.Attach(dialog);await ShowEditorWindowAsync(dialog,this);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();}
                 if(taskDeleted){await LoadTasks();status.Text="任务已删除，可按 Ctrl+Z 撤销。";}
             }
-        }catch(Exception e){if(verify)throw;Error(e);}finally{SetBusy(false);timer.Start();}
+        }catch(Exception e){if(verify)throw;Error(e);}finally{editorEntry.Dispose();}
     }
     const string TaskDepthMessage = "任务最多支持 5 级（顶层任务为第 1 级），无法继续添加子任务。";
     async Task<int> TaskHierarchySpan(long id, int level = 1) {

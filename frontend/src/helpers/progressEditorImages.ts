@@ -57,5 +57,13 @@ export async function persistProgressImages(html: string, taskId: number) {
 		image.removeAttribute('data-src')
 		image.removeAttribute('id')
 	}
+	for (const link of doc.querySelectorAll<HTMLAnchorElement>('a[href^="data:application/octet-stream;base64,"]')) {
+		const name = link.getAttribute('download') || link.textContent || '附件'
+		const file = await dataUrlAsFile(link.getAttribute('href')!, name, 'application/octet-stream')
+		const result = await taskAttachmentsUpload({path: {task: taskId}, body: {files: [file]}})
+		const id = result.data.success?.[0]?.id
+		if (!id || result.data.errors?.length) throw new Error('附件上传失败，请重试。')
+		link.setAttribute('href', `/api/v1/tasks/${taskId}/attachments/${id}`)
+	}
 	return deduplicateHtmlImages(doc.body.innerHTML)
 }

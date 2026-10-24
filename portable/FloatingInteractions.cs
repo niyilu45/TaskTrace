@@ -129,7 +129,7 @@ internal sealed partial class FloatingWindow {
     Dictionary<long,long> taskParents = new Dictionary<long,long>();
     Dictionary<long,double> taskOrder = new Dictionary<long,double>();
     long taskViewId;
-    bool dragging, editingOutstanding;
+    bool dragging;
     TreeNode dropHover;
     DateTime dropHoverSince, scrollSince;
     sealed class DropPlan { public long TaskId, ParentId, BeforeId, TargetId; public string ItemId, BeforeItemId, Message; }
@@ -406,7 +406,7 @@ internal sealed partial class FloatingWindow {
     async void ShowOutstanding(long id,bool nested=false){ await EditOutstanding(id,nested,false); }
     async void ShowOutstandingItem(long id,string itemId){ await EditOutstanding(id,false,false,itemId); }
     async Task EditOutstanding(long id,bool nested,bool verify,string selectedItemId=null){
-        if(editingOutstanding || (busy && !nested)||closing)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;SetBusy(true);timer.Stop();editingOutstanding=true;
+        if((busy && !nested)||closing)return;var editorEntry=editorWindows.Open(FloatingEditorWindows.OutstandingKey(id,selectedItemId));if(editorEntry==null)return;var owner=Form.ActiveForm??this;bool editParentRequested=false;
         try {
             var shared=ReadShared(await ReadHistory(id));
             using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true,KeyPreview=true})){
@@ -426,6 +426,7 @@ internal sealed partial class FloatingWindow {
                 var bulk=new Button{Text="批量导入…",Dock=DockStyle.Fill,Margin=Padding.Empty,AccessibleName="批量导入遗留事项"};var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
+                noteEditor.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="粘贴失败："+error.Message;};
                 int noteImageDoubleClicks=0;
                 noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(mode,0,0);modeRow.Controls.Add(bulk,1,0);
@@ -454,9 +455,9 @@ internal sealed partial class FloatingWindow {
                     if(MessageBox.Show(dialog,"当前修改尚未保存，是否放弃？\r\n\r\n放弃后再次打开会显示最近一次正式保存的内容。","遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Question)!=DialogResult.Yes)return false;
                     DeleteDraftCache("outstanding",id,draftKey());return true;
                 };
-                Func<PendingItem,Task> edit=async delegate(PendingItem item){loading=true;try{editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalNoteHtml=item==null?"":item.NoteHtml??"";originalPriority=item==null?defaultPriority:item.Priority;originalAppearance=item==null?"":LocalOutstandingAppearance(id,item.Id);originalDone=item!=null&&item.Done;originalCompletedAt=item==null?null:item.CompletedAt;originalReminderAt=item==null?null:item.ReminderAt;originalText=OutstandingEditorText(originalHtml);input.Text=originalText;noteEditor.Html=await PrepareOutstandingNoteEditorHtml(id,originalNoteHtml);originalNoteEditorHtml=noteEditor.Html;originalNoteVersion=noteEditor.ChangeVersion;noteDraftRestored=false;priority.SelectedIndex=originalPriority;SelectAppearance(appearance,originalAppearance);pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;reminder.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){string cachedText=cached.Text??"",cachedNote=cached.NoteHtml??originalNoteEditorHtml,cachedAppearance=NormalizeAppearance(cached.Appearance??"");int cachedPriority=Math.Max(0,Math.Min(9,cached.Priority));var cachedPictures=cached.Pictures??new List<PastedImage>();bool emptyNew=item==null && String.IsNullOrWhiteSpace(cachedText) && SameProgressEditorContent(cachedNote,"") && cachedAppearance=="" && cachedPictures.Count==0;bool unchanged=(emptyNew || (cachedText==originalText && cachedPriority==originalPriority && cachedAppearance==originalAppearance && SameProgressEditorContent(cachedNote,originalNoteEditorHtml))) && cachedPictures.Count==0 && !cached.RemoveExistingImages;if(unchanged){DeleteDraftCache("outstanding",id,draftKey());lastCached="";}else{input.Text=cachedText;noteEditor.Html=cachedNote;noteDraftRestored=true;draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=cachedPriority;SelectAppearance(appearance,cachedAppearance);pictures=cachedPictures;removeExistingImages=cached.RemoveExistingImages;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}}else lastCached="";renderPreviews();}finally{loading=false;}};
+                Func<PendingItem,Task> edit=async delegate(PendingItem item){if(!editorEntry.ChangeKey(FloatingEditorWindows.OutstandingKey(id,item==null?null:item.Id))){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(value=>value.Id==editingId);loading=false;return;}loading=true;try{editingId=item==null?null:item.Id;draftId=Guid.NewGuid().ToString();originalHtml=item==null?"":item.Html;originalNoteHtml=item==null?"":item.NoteHtml??"";originalPriority=item==null?defaultPriority:item.Priority;originalAppearance=item==null?"":LocalOutstandingAppearance(id,item.Id);originalDone=item!=null&&item.Done;originalCompletedAt=item==null?null:item.CompletedAt;originalReminderAt=item==null?null:item.ReminderAt;originalText=OutstandingEditorText(originalHtml);input.Text=originalText;noteEditor.Html=await PrepareOutstandingNoteEditorHtml(id,originalNoteHtml);originalNoteEditorHtml=noteEditor.Html;originalNoteVersion=noteEditor.ChangeVersion;noteDraftRestored=false;priority.SelectedIndex=originalPriority;SelectAppearance(appearance,originalAppearance);pictures.Clear();removeExistingImages=false;recover.Visible=false;save.Text=item==null?"添加一条":"保存修改";remove.Enabled=item!=null;reminder.Enabled=item!=null;mode.Text=item==null?"遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）":"遗留事项内容 · 编辑第 "+item.Number+" 条（支持 Ctrl+V 粘贴图片）";var cached=ReadDraftCache<OutstandingDraftCache>("outstanding",id,draftKey());if(cached!=null){string cachedText=cached.Text??"",cachedNote=cached.NoteHtml??originalNoteEditorHtml,cachedAppearance=NormalizeAppearance(cached.Appearance??"");int cachedPriority=Math.Max(0,Math.Min(9,cached.Priority));var cachedPictures=cached.Pictures??new List<PastedImage>();bool emptyNew=item==null && String.IsNullOrWhiteSpace(cachedText) && SameProgressEditorContent(cachedNote,"") && cachedAppearance=="" && cachedPictures.Count==0;bool unchanged=(emptyNew || (cachedText==originalText && cachedPriority==originalPriority && cachedAppearance==originalAppearance && SameProgressEditorContent(cachedNote,originalNoteEditorHtml))) && cachedPictures.Count==0 && !cached.RemoveExistingImages;if(unchanged){DeleteDraftCache("outstanding",id,draftKey());lastCached="";}else{input.Text=cachedText;noteEditor.Html=cachedNote;noteDraftRestored=true;draftId=String.IsNullOrWhiteSpace(cached.DraftId)?draftId:cached.DraftId;priority.SelectedIndex=cachedPriority;SelectAppearance(appearance,cachedAppearance);pictures=cachedPictures;removeExistingImages=cached.RemoveExistingImages;lastCached=draftSnapshot();feedback.Text="已恢复 .cache 中的草稿，内容尚未保存；点击保存后才会正式提交。";}}else lastCached="";renderPreviews();}finally{loading=false;}};
                 list.SelectedIndexChanged+=async delegate{if(loading || writing)return;var selected=list.SelectedItem as PendingItem;if(selected==null || selected.Id==editingId)return;if(!mayDiscard()){loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;return;}await edit(selected);};
-                PendingItem initiallySelected=null;if(!String.IsNullOrEmpty(selectedItemId))initiallySelected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(initiallySelected!=null){loading=true;list.SelectedItem=initiallySelected;loading=false;}await edit(initiallySelected);
+                PendingItem initiallySelected=null;if(!String.IsNullOrEmpty(selectedItemId)){initiallySelected=shared.Items.FirstOrDefault(item=>item.Id==selectedItemId);if(initiallySelected==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");}if(initiallySelected!=null){loading=true;list.SelectedItem=initiallySelected;loading=false;}await edit(initiallySelected);
                 WarnIfTeamReadOnly(id,dialog,feedback);
                 bulk.Click+=async delegate{
                     if(writing)return;
@@ -474,7 +475,7 @@ internal sealed partial class FloatingWindow {
                 };
                 fresh.Click+=async delegate{if(writing || !mayDiscard())return;loading=true;list.ClearSelected();loading=false;await edit(null);input.Focus();};
                 editParent.Click+=delegate{if(writing || !mayDiscard())return;editParentRequested=true;dialog.Close();};
-                recover.Click+=delegate{if(writing)return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalCompletedAt=null;originalReminderAt=null;originalDone=false;originalPriority=defaultPriority;originalAppearance="";priority.SelectedIndex=defaultPriority;SelectAppearance(appearance,"");removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
+                recover.Click+=delegate{if(writing || !editorEntry.ChangeKey(FloatingEditorWindows.OutstandingKey(id,null)))return;editingId=null;draftId=Guid.NewGuid().ToString();originalHtml="";originalNoteHtml="";originalText="";originalNoteEditorHtml="";originalCompletedAt=null;originalReminderAt=null;originalDone=false;originalPriority=defaultPriority;originalAppearance="";priority.SelectedIndex=defaultPriority;SelectAppearance(appearance,"");removeExistingImages=false;save.Text="添加一条";mode.Text="遗留事项内容 · 另存为新事项（输入、备注和待保存图片已保留）";recover.Visible=false;loading=true;list.ClearSelected();loading=false;renderPreviews();};
                 clearImages.Click+=delegate{removeExistingImages=true;renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 files.Click+=delegate{if(writing)return;using(var picker=new OpenFileDialog{Filter="图片|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件|*.*",Multiselect=true}){if(picker.ShowDialog(dialog)!=DialogResult.OK)return;foreach(string path in picker.FileNames)try{using(var image=Image.FromFile(path))using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);pictures.Add(new PastedImage{Bytes=stream.ToArray()});}}catch{feedback.Text="部分文件无法读取，请选择 PNG、JPG、BMP 或 GIF 图片。";}renderPreviews();}};
                 gallery.Click+=async delegate{
@@ -527,7 +528,7 @@ internal sealed partial class FloatingWindow {
                 priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 appearance.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="背景色尚未保存；仅保存到本机，不会同步给协作成员。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !writing && Clipboard.ContainsImage() && !Clipboard.ContainsText()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !writing && !noteEditor.ContainsFocus && Clipboard.ContainsImage() && !Clipboard.ContainsText()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && !writing && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
@@ -535,7 +536,7 @@ internal sealed partial class FloatingWindow {
                     updateDiscarded=true;
                     autoTimer.Stop();
                     lastCached="";
-                    DeleteDraftCaches("outstanding",id);
+                    DeleteDraftCache("outstanding",id,draftKey());
                 };
                 Exception verificationError=null;
                 if(verify)dialog.Shown+=async delegate{
@@ -578,16 +579,16 @@ internal sealed partial class FloatingWindow {
                     e.Cancel=true;closeSavePending=true;autoTimer.Stop();
                     dialog.BeginInvoke(new Action(async delegate{
                         bool saved=false;try{saved=await write(false);}catch(Exception error){feedback.Text=error.Message;}
-                        if(saved){DeleteDraftCaches("outstanding",id);closeAfterSave=true;dialog.Close();return;}
+                        if(saved){DeleteDraftCache("outstanding",id,draftKey());closeAfterSave=true;dialog.Close();return;}
                         closeSavePending=false;feedback.Text="遗留事项未能保存，窗口已保留。"+(String.IsNullOrWhiteSpace(feedback.Text)?"请检查内容后重试。":"原因："+feedback.Text);autoTimer.Start();
                         MessageBox.Show(dialog,feedback.Text,"遗留事项未保存",MessageBoxButtons.OK,MessageBoxIcon.Warning);
                     }));
                 };
                 using(var updateRegistration=RegisterUnsavedUpdateEditor("遗留事项编辑窗口",dirty,async delegate{return !writing && await write(false);},discardOutstandingChanges))
-                try{await ShowEditorWindowAsync(dialog,owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
+                try{editorEntry.Attach(dialog);await ShowEditorWindowAsync(dialog,owner);if(verificationError!=null)throw verificationError;}finally{autoTimer.Stop();autoTimer.Dispose();disposePreviews();}
             }
             await LoadTasks();
-        }catch(Exception e){if(verify)throw;Error(e);}finally{editingOutstanding=false;if(!nested){SetBusy(false);timer.Start();}}
+        }catch(Exception e){if(verify)throw;Error(e);}finally{editorEntry.Dispose();}
         if(editParentRequested && !closing)await EditProgress(id,TaskTitle(id));
     }
 
@@ -775,7 +776,7 @@ internal sealed partial class FloatingWindow {
                 var pictureLeaf=leaf(b,"drag-image");node(b).Expand();pictureLeaf.EnsureVisible();tasks.SelectedNode=pictureLeaf;
                 if(SelectedTaskId()!=b || tasks.SimpleImageBounds(pictureLeaf).IsEmpty)throw new Exception("Direct outstanding image link or owner is unavailable in this layout");
                 await ShowSelectedImages();await ShowImageGallery(b,null,this);
-                await EditOutstanding(b,false,true);if(editingOutstanding)throw new Exception("Outstanding editor did not resume auto-save");
+                await EditOutstanding(b,false,true);
             }
             SetSimpleMode(false);
             foreach(var item in moved.Items)if(String.IsNullOrEmpty(OutstandingText(item.Html)))throw new Exception("Image-only outstanding title missing");
