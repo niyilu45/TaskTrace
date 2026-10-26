@@ -7,7 +7,7 @@ $packageRoot = if ([IO.Path]::IsPathRooted($PackageDirectory)) {
     [IO.Path]::GetFullPath((Join-Path $repoRoot $PackageDirectory))
 }
 . (Join-Path $PSScriptRoot 'DependencyBootstrap.ps1')
-if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Version must be a semantic version such as v0.1.0-beta.11.' }
+if ($Version -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') { throw 'Version must be a semantic version such as v1.0.0, v1.0.0+source.20261026030000 or v0.1.0-beta.11.' }
 function Assert-Exit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step failed with exit code $LASTEXITCODE" }
 }

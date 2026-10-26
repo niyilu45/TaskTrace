@@ -77,7 +77,11 @@ function Select-TaskTraceLatestReleaseVersionFromFeed([string]$Content, [string]
 function New-TaskTraceSourceBuildVersion([string]$ReleaseVersion, [DateTime]$BuiltAtUtc = [DateTime]::UtcNow, [string]$Commit = '') {
     $base = $ReleaseVersion.Trim()
     if (!$base.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { $base = 'v' + $base }
-    $suffix = '.source.' + $BuiltAtUtc.ToUniversalTime().ToString('yyyyMMddHHmmss')
+    # Stable builds use metadata; a fourth core version segment is invalid SemVer.
+    $metadata = $base.IndexOf('+')
+    if ($metadata -ge 0) { $base = $base.Substring(0, $metadata) }
+    $separator = if ($base.Contains('-')) { '.source.' } else { '+source.' }
+    $suffix = $separator + $BuiltAtUtc.ToUniversalTime().ToString('yyyyMMddHHmmss')
     if ($Commit -match '^[0-9a-fA-F]{7,40}$') { $suffix += '.g' + $Commit.Substring(0, [Math]::Min(12, $Commit.Length)).ToLowerInvariant() }
     return $base + $suffix
 }
