@@ -103,7 +103,8 @@ internal sealed class ProgressHtmlEditor : UserControl {
     string observedHtml = "";
     int changeVersion;
     int imageDoubleClickCount;
-    bool ready, changing, readOnly;
+    bool ready, changing, readOnly, notifying;
+    readonly Timer changeTimer=new Timer{Interval=35};
     public event EventHandler HtmlChanged;
     internal event EventHandler<ProgressClipboardErrorEventArgs> ClipboardFailed;
     public event EventHandler<ProgressEditorImageEventArgs> ImageDoubleClicked;
@@ -115,7 +116,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         bridge.ReadClipboardHtml=readClipboardHtml;bridge.WriteClipboardHtml=writeClipboardHtml;
         bridge.PasteCompleted=delegate(int id,string html){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{if(!IsDisposed && ready && browser.Document!=null)browser.Document.InvokeScript("completeTaskTracePaste",new object[]{id,html});}));};
         bridge.ClipboardError=delegate(string message){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{var handler=ClipboardFailed;if(!IsDisposed && handler!=null)handler(this,new ProgressClipboardErrorEventArgs(message));}));};
-        bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(NotifyChanged));};browser.ObjectForScripting=bridge;
+        bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(QueueChanged));};browser.ObjectForScripting=bridge;
         browser.ClipboardShortcut=HandleClipboardShortcut;
         Controls.Add(browser);
         clipboardMenu.Items.AddRange(new ToolStripItem[]{copyImageMenu,imageCopySeparator,copyTextMenu,cutTextMenu,pasteTextMenu});
@@ -124,7 +125,8 @@ internal sealed class ProgressHtmlEditor : UserControl {
         copyTextMenu.Click+=delegate{browser.Document.InvokeScript("copyTaskTrace",new object[]{null,false});};
         cutTextMenu.Click+=delegate{browser.Document.InvokeScript("copyTaskTrace",new object[]{null,true});};
         pasteTextMenu.Click+=delegate{browser.Document.InvokeScript("pasteTaskTrace",new object[]{null});};
-        Disposed+=delegate{clipboardMenu.Dispose();};
+        changeTimer.Tick+=delegate{NotifyChanged();};
+        Disposed+=delegate{changeTimer.Dispose();clipboardMenu.Dispose();};
         browser.Navigating+=delegate(object sender,WebBrowserNavigatingEventArgs e){if(ready)e.Cancel=true;};
         browser.DocumentCompleted += delegate {
             if(browser.Document == null || browser.Document.GetElementById("progress-editor") == null) return;
@@ -140,13 +142,14 @@ internal sealed class ProgressHtmlEditor : UserControl {
             ApplyHtml();
             SetReadOnly(readOnly);
         };
-        browser.DocumentText = "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var range=taskTraceRange()||taskTraceSavedRange;insertTaskTraceHtml('<img src=\"'+src+'\">',range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>".Replace("</head>","<script>"+FloatingClipboard.Script+"</script></head>").Replace("contenteditable=\"true\"", "contenteditable=\"true\" onpaste=\"return pasteTaskTrace(event)\" onmousedown=\"return selectTaskTraceImage(event)\" onmouseup=\"return finishTaskTraceImageSelection(event)\" onkeyup=\"rememberTaskTraceRange()\"");
+        browser.DocumentText = "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var range=taskTraceRange()||taskTraceSavedRange;insertTaskTraceHtml('<img src=\"'+src+'\">',range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>".Replace("</head>","<script>"+FloatingClipboard.Script+FloatingEditorHistory.Script+"</script></head>").Replace("contenteditable=\"true\"", "contenteditable=\"true\" onpaste=\"return pasteTaskTrace(event)\" onmousedown=\"return selectTaskTraceImage(event)\" onmouseup=\"return finishTaskTraceImageSelection(event)\" onkeyup=\"rememberTaskTraceRange()\"");
     }
 
     bool HandleClipboardShortcut(Keys keyData) {
         if(!ready || browser.Document==null)return false;
         if(keyData==(Keys.Control|Keys.A) || keyData==(Keys.Alt|Keys.A)){browser.Document.InvokeScript("selectAllTaskTrace");return true;}
         if(keyData==(Keys.Control|Keys.C) || keyData==(Keys.Control|Keys.X))return !Convert.ToBoolean(browser.Document.InvokeScript("copyTaskTrace",new object[]{null,keyData==(Keys.Control|Keys.X)}));
+        if(keyData==(Keys.Control|Keys.Z) || keyData==(Keys.Control|Keys.Y) || keyData==(Keys.Control|Keys.Shift|Keys.Z)){browser.Document.InvokeScript(keyData==(Keys.Control|Keys.Z)?"undoTaskTrace":"redoTaskTrace");NotifyChanged();return true;}
         return false;
     }
 
@@ -164,7 +167,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         if(IsDisposed || !IsHandleCreated)return;
         BeginInvoke(new Action(delegate {
             if(IsDisposed)return;imageDoubleClickCount++;var handler=ImageDoubleClicked;
-            int version=changeVersion;
+            int version=ChangeVersion;
             var image=new ProgressEditorImageEventArgs(source,retainedSource,delegate(bool finished){if(IsDisposed || !ready || browser.Document==null)return;if(version==changeVersion)browser.Document.InvokeScript("restoreTaskTraceImageView",new object[]{view,finished});else if(finished)browser.Document.InvokeScript("discardTaskTraceImageView",new object[]{view});});
             if(handler!=null)handler(this,image);
             image.RestoreEditorView(handler==null);
@@ -172,42 +175,45 @@ internal sealed class ProgressHtmlEditor : UserControl {
     }
 
     static string CleanHtml(string value) {
-        return Regex.Replace((value ?? "").Replace("\u200b", ""), @"&#(?:8203|x200b);", "", RegexOptions.IgnoreCase);
+        value=value??"";if(value.IndexOf('\u200b')>=0)value=value.Replace("\u200b","");
+        return value.IndexOf("&#",StringComparison.Ordinal)<0?value:Regex.Replace(value,@"&#(?:8203|x200b);","",RegexOptions.IgnoreCase);
     }
 
     void AttachChangeEvents() {
         var editor = browser.Document.GetElementById("progress-editor");
         if(editor == null) return;
-        EventHandler changed = delegate { NotifyChanged(); };
+        EventHandler changed = delegate { QueueChanged(); };
         editor.AttachEventHandler("oninput", changed);
-        editor.AttachEventHandler("onkeyup", changed);
-        editor.AttachEventHandler("oncut", changed);
-        editor.AttachEventHandler("onpaste", changed);
     }
 
     void ApplyHtml() {
         if(!ready || browser.Document == null) return;
         var editor = browser.Document.GetElementById("progress-editor");
         if(editor == null) return;
-        changing = true;
+        changing = true;changeTimer.Stop();
         editor.InnerHtml = pendingHtml ?? "";
         browser.Document.InvokeScript("eval",new object[]{"taskTraceSavedRange=null;resetTaskTraceImageViews();resetTaskTracePastes();window.getSelection().removeAllRanges();"});
         browser.Document.InvokeScript("ensureTaskTraceImageCarets");
+        browser.Document.InvokeScript("resetTaskTraceHistory");
         observedHtml = CleanHtml(editor.InnerHtml);
         changing = false;
     }
 
+    void QueueChanged(){if(IsDisposed || changing || !ready)return;changeTimer.Stop();changeTimer.Start();}
+
     void NotifyChanged() {
-        if(changing || !ready || browser.Document == null)return;
+        changeTimer.Stop();
+        if(notifying || changing || !ready || browser.Document == null)return;
         var editor=browser.Document.GetElementById("progress-editor");
         string current=editor==null?CleanHtml(pendingHtml):CleanHtml(editor.InnerHtml);
         if(String.Equals(current,observedHtml,StringComparison.Ordinal))return;
         observedHtml=current;changeVersion++;
-        if(HtmlChanged != null)HtmlChanged(this,EventArgs.Empty);
+        notifying=true;try{if(HtmlChanged != null)HtmlChanged(this,EventArgs.Empty);}finally{notifying=false;}
     }
 
     public string Html {
         get {
+            if(notifying)return observedHtml;
             if(!ready || browser.Document == null) return pendingHtml ?? "";
             var editor = browser.Document.GetElementById("progress-editor");
             return editor == null ? CleanHtml(pendingHtml) : CleanHtml(editor.InnerHtml);
@@ -216,8 +222,8 @@ internal sealed class ProgressHtmlEditor : UserControl {
     }
 
     internal bool IsPastePending {get{return ready && browser.Document!=null && Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"taskTracePasteOrder.length>0"}));}}
-    public int ImageCount { get { return Regex.Matches(Html ?? "", @"<img\b", RegexOptions.IgnoreCase).Count; } }
-    public int ChangeVersion { get { return changeVersion; } }
+    public int ImageCount { get { return !ready || browser.Document==null?Regex.Matches(pendingHtml??"",@"<img\b",RegexOptions.IgnoreCase).Count:browser.Document.Images.Count; } }
+    public int ChangeVersion { get { if(changeTimer.Enabled)NotifyChanged();return changeVersion; } }
     internal int ImageDoubleClickCountForTest { get { return imageDoubleClickCount; } }
 
     public void InsertImage(byte[] bytes) {

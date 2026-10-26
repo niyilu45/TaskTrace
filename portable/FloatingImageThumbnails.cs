@@ -78,7 +78,7 @@ internal sealed partial class FloatingWindow {
     async Task LoadImageThumbnail(PictureBox box,GalleryImage item) {
         try {
             byte[] bytes=item.Bytes??await DownloadImage(item.Source);
-            var thumbnail=ThumbnailImage(bytes,88,58);
+            var thumbnail=await Task.Run(()=>ThumbnailImage(bytes,88,58));
             if(box.IsDisposed){thumbnail.Dispose();return;}
             var previous=box.Image;box.Image=thumbnail;if(previous!=null)previous.Dispose();
         } catch {if(!box.IsDisposed){box.BackColor=Color.MistyRose;box.AccessibleDescription="图片缩略图加载失败";}}

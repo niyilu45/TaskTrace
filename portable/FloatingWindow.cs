@@ -760,7 +760,7 @@ internal sealed partial class FloatingWindow : Form {
                 };
                 Task dateSwitchTask=Task.FromResult(0);
                 await loadDay();day.ValueChanged+=delegate {if(!submitting && !switchingDay)dateSwitchTask=switchDay();};
-                progress.HtmlChanged+=delegate{if(!loadingDay && !submitting && progressDirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
+                progress.HtmlChanged+=delegate{if(!loadingDay && !submitting)feedback.Text="进展编辑仅缓存到 .cache；点击保存后才会正式提交。";};
                 toggleReferences.LinkClicked+=delegate{referenceExpanded=!referenceExpanded;refreshReferences();};
                 referenceList.SelectedIndexChanged+=delegate{previewReference.Enabled=removeReference.Enabled=referenceList.SelectedIndex>=0;};
                 Func<bool,Task> selectReferences=async delegate(bool verifyPicker) {

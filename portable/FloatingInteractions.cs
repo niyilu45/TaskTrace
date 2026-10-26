@@ -378,6 +378,7 @@ internal sealed partial class FloatingWindow {
         return Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase).Cast<Match>().Select(match=>ReferenceAttribute(match.Value,"data-tasktrace-src")??ReferenceAttribute(match.Value,"data-src")??ReferenceAttribute(match.Value,"src")??"").ToList();
     }
     static bool SameProgressEditorContent(string left,string right) {
+        if(String.Equals(left,right,StringComparison.Ordinal))return true;
         Func<string,string> layout=value=>ProgressSnapshotHtml(Regex.Replace(value??"",@"<img\b[^>]*>","",RegexOptions.IgnoreCase),0).Replace("\r\n","\n").Replace("\r","\n");
         return layout(left)==layout(right) && ProgressEditorImageKeys(left).SequenceEqual(ProgressEditorImageKeys(right),StringComparer.Ordinal);
     }
@@ -426,12 +427,11 @@ internal sealed partial class FloatingWindow {
                 noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(mode,0,0);modeRow.Controls.Add(bulk,1,0);
                 layout.Controls.Add(list);layout.Controls.Add(modeRow);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,originalAppearance="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0,renderedNoteImageCount=-1;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,noteDraftRestored=false,updateDiscarded=false;
+                var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,originalAppearance="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,noteDraftRestored=false,updateDiscarded=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();
                     if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog,null,delegate(string message){feedback.Text=message;});}
-                    var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注图片");foreach(var image in noteImages)AddImageThumbnail(previews,image,dialog,null,delegate(string message){feedback.Text=message;});renderedNoteImageCount=noteEditor.ImageCount;
                     foreach(var picture in pictures.ToList()){
                         var image=new GalleryImage{Bytes=picture.Bytes,Caption="待保存的遗留事项图片"};
                         AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}},delegate(string message){feedback.Text=message;});
@@ -520,7 +520,7 @@ internal sealed partial class FloatingWindow {
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
                 input.TextChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
-                noteEditor.HtmlChanged+=delegate{if(loading || writing)return;if(noteEditor.ImageCount!=renderedNoteImageCount)renderPreviews();if(dirty())feedback.Text="备注尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
+                noteEditor.HtmlChanged+=delegate{if(loading || writing)return;feedback.Text="备注编辑仅缓存到 .cache；点击保存后才会正式提交。";};
                 priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 appearance.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="背景色尚未保存；仅保存到本机，不会同步给协作成员。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
