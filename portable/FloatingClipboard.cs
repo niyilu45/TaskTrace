@@ -46,9 +46,9 @@ internal static class FloatingClipboard {
                 return html;
             }
             if(Clipboard.ContainsFileDropList()){files=true;return FilesHtml(Clipboard.GetFileDropList());}
-            if(text!=null)return TextHtml(text);
-            if(Clipboard.ContainsText())return TextHtml(Clipboard.GetText());
-            return Clipboard.ContainsImage()?ImageHtml():"";
+            if(!String.IsNullOrEmpty(text))return TextHtml(text);
+            if(Clipboard.ContainsText() && !String.IsNullOrEmpty(Clipboard.GetText()))return TextHtml(Clipboard.GetText());
+            return ImageHtml();
         }catch{if(files)throw;return text==null?"":TextHtml(text);}
     }
 
@@ -69,11 +69,33 @@ internal static class FloatingClipboard {
         int start=Encoding.UTF8.GetByteCount(String.Format(format,0,0,0,0)),fragment=start+Encoding.UTF8.GetByteCount(prefix),end=fragment+Encoding.UTF8.GetByteCount(html);
         var result=new DataObject();result.SetData(DataFormats.UnicodeText,true,text??"");
         result.SetData(DataFormats.Html,false,String.Format(format,start,end+Encoding.UTF8.GetByteCount(suffix),fragment,end)+prefix+html+suffix);
+        var images=Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase);
+        if(images.Count==1 && String.IsNullOrWhiteSpace(text)) {
+            var match=Regex.Match(images[0].Value,@"\bsrc\s*=\s*['""](?<src>data:image/(?:png|jpe?g|gif|bmp);base64,[A-Za-z0-9+/=\s]+)['""]",RegexOptions.IgnoreCase);
+            if(match.Success)try{string value=match.Groups["src"].Value;AddImageFormats(result,Convert.FromBase64String(value.Substring(value.IndexOf(',')+1)));}catch(ArgumentException){}catch(FormatException){}
+        }
         return result;
     }
-    internal static bool Copy(string html,string text) {
-        try{Clipboard.SetDataObject(CopyData(html,text),true,3,100);return true;}catch{return false;}
+    internal static byte[] PngBytes(Image image){if(image==null)return null;using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);return stream.ToArray();}}
+    static void AddImageFormats(DataObject data,byte[] bytes) {
+        using(var stream=new MemoryStream(bytes))using(var original=Image.FromStream(stream)) {
+            var png=PngBytes(original);data.SetData("PNG",false,new MemoryStream(png,false));data.SetData(DataFormats.Bitmap,true,new Bitmap(original));
+        }
     }
+    internal static DataObject CopyImageData(byte[] bytes){using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream)){return CopyData("<img src=\"data:image/png;base64,"+Convert.ToBase64String(PngBytes(image))+"\">","");}}
+    internal static void DisposeCopyData(DataObject data){foreach(string format in new[]{"PNG",DataFormats.Bitmap}){var value=data.GetData(format,false) as IDisposable;if(value!=null)value.Dispose();}}
+    static bool WriteCopyData(DataObject data){try{Clipboard.SetDataObject(data,true,3,100);return true;}catch{return false;}finally{DisposeCopyData(data);}}
+    internal static bool Copy(string html,string text){return WriteCopyData(CopyData(html,text));}
+    internal static bool CopyImage(byte[] bytes){return WriteCopyData(CopyImageData(bytes));}
+    internal static byte[] ImageBytes(IDataObject data) {
+        if(data==null)return null;
+        var png=data.GetData("PNG",false) as Stream;
+        if(png!=null){long position=png.CanSeek?png.Position:0;try{if(png.CanSeek)png.Position=0;using(var bytes=new MemoryStream()){png.CopyTo(bytes);return bytes.ToArray();}}finally{if(png.CanSeek)png.Position=position;}}
+        var bitmap=data.GetData(DataFormats.Bitmap,true) as Image;return PngBytes(bitmap);
+    }
+    internal static byte[] ImageOnlyBytes(IDataObject data){string text=data==null?null:Convert.ToString(data.GetData(DataFormats.UnicodeText,true));return String.IsNullOrWhiteSpace(text)?ImageBytes(data):null;}
+    internal static string BitmapHtml(IDataObject data){var bytes=ImageBytes(data);return bytes==null?"":"<img src=\"data:image/png;base64,"+Convert.ToBase64String(bytes)+"\">";}
+
 
     internal static string TextHtml(string text) {
         // Keep tabs, repeated spaces and empty lines without inheriting source fonts.
@@ -139,7 +161,7 @@ internal static class FloatingClipboard {
         int first=html.IndexOf('<');return first<0?"":html.Substring(first);
     }
 
-    static string ImageHtml(){using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);return "<img src=\"data:image/png;base64,"+Convert.ToBase64String(stream.ToArray())+"\">";}}
+    static string ImageHtml(){return BitmapHtml(Clipboard.GetDataObject());}
     internal const string Script=@"
 function cleanTaskTracePaste(html){
  var root=document.createElement('div');root.innerHTML=html;var elements=root.querySelectorAll('*');
@@ -159,7 +181,7 @@ function cleanTaskTracePaste(html){
 // Capture before focus changes, COM clipboard reads, or a toolbar/picker can disturb selection.
 var taskTraceSavedRange=null;
 function taskTraceInside(node){var editor=document.getElementById('progress-editor');while(node){if(node===editor)return true;node=node.parentNode;}return false;}
-function taskTraceRange(){var editor=document.getElementById('progress-editor'),selection=window.getSelection(),range=selection&&selection.rangeCount?selection.getRangeAt(0):null;return range&&taskTraceInside(range.commonAncestorContainer)?range.cloneRange():null;}
+function taskTraceRange(){var editor=document.getElementById('progress-editor'),selection=window.getSelection(),range=selection&&selection.rangeCount?selection.getRangeAt(0):null;if(range&&taskTraceInside(range.commonAncestorContainer))return range.cloneRange();if(document.selection&&document.selection.type==='Control'){var control=document.selection.createRange();if(control.length===1&&taskTraceInside(control.item(0))){range=document.createRange();range.selectNode(control.item(0));return range;}}return null;}
 function rememberTaskTraceRange(){var range=taskTraceRange();if(range)taskTraceSavedRange=range;}
 function restoreTaskTraceRange(range){var editor=document.getElementById('progress-editor'),selection=window.getSelection();range=range||taskTraceRange()||taskTraceSavedRange;if(!range||!taskTraceInside(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}editor.focus();selection.removeAllRanges();selection.addRange(range);return range;}
 function insertTaskTraceHtml(html,range){var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false'||!html)return false;range=restoreTaskTraceRange(range);range.deleteContents();var holder=document.createElement('div');holder.innerHTML=html;var fragment=document.createDocumentFragment(),last;while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);if(last)range.setStartAfter(last);range.collapse(true);ensureTaskTraceImageCarets();var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);rememberTaskTraceRange();window.external.NotifyPaste();return true;}
@@ -167,7 +189,10 @@ function pasteTaskTrace(e){e=e||window.event;if(e){if(e.preventDefault)e.prevent
  var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false')return false;
  var range=taskTraceRange()||taskTraceSavedRange,html=cleanTaskTracePaste(window.external.PasteHtml());insertTaskTraceHtml(html,range);return false;
 }
-function copyTaskTrace(e,cut){var editor=document.getElementById('progress-editor'),range=taskTraceRange();if(!range||range.collapsed)return true;var holder=document.createElement('div');holder.appendChild(range.cloneContents());var images=holder.getElementsByTagName('img');for(var i=0;i<images.length;i++)images[i].removeAttribute('data-tasktrace-src');var html=holder.innerHTML.replace(/\u200b/g,''),text=(holder.innerText||holder.textContent||'').replace(/\u200b/g,'');if(!window.external.CopyHtml(html,text))return true;if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}if(cut&&editor.getAttribute('contenteditable')!=='false'){range.deleteContents();rememberTaskTraceRange();window.external.NotifyPaste();}return false;}
+function copyTaskTrace(e,cut){var editor=document.getElementById('progress-editor'),range=taskTraceRange()||taskTraceSavedRange;if(!range||range.collapsed)return true;var holder=document.createElement('div');holder.appendChild(range.cloneContents());var images=holder.getElementsByTagName('img');for(var i=0;i<images.length;i++)images[i].removeAttribute('data-tasktrace-src');var html=holder.innerHTML.replace(/\u200b/g,''),text=(holder.innerText||holder.textContent||'').replace(/\u200b/g,'');if(!window.external.CopyHtml(html,text)){if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}return false;}if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}if(cut&&editor.getAttribute('contenteditable')!=='false'){range.deleteContents();rememberTaskTraceRange();window.external.NotifyPaste();}return false;}
+function selectTaskTraceImage(e){e=e||window.event;var image=e.srcElement||e.target;if(!image||String(image.tagName).toLowerCase()!=='img'||e.button===2)return true;document.getElementById('progress-editor').focus();var range=document.createRange(),selection=window.getSelection();range.selectNode(image);var saved=range.cloneRange();selection.removeAllRanges();selection.addRange(range);taskTraceSavedRange=saved;if(e.preventDefault)e.preventDefault();e.returnValue=false;return false;}
+function selectAllTaskTrace(){var editor=document.getElementById('progress-editor'),range=document.createRange(),selection=window.getSelection();range.selectNodeContents(editor);selection.removeAllRanges();selection.addRange(range);rememberTaskTraceRange();}
+function taskTraceHasSelection(){var range=taskTraceRange()||taskTraceSavedRange;return !!range&&!range.collapsed;}
 document.addEventListener('selectionchange',rememberTaskTraceRange);
 ";
 }

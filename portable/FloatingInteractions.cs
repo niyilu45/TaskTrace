@@ -426,7 +426,7 @@ internal sealed partial class FloatingWindow {
                 var bulk=new Button{Text="批量导入…",Dock=DockStyle.Fill,Margin=Padding.Empty,AccessibleName="批量导入遗留事项"};var save=new Button{Text="添加一条",AutoSize=true};var fresh=new Button{Text="新增事项",AutoSize=true};var editParent=new Button{Text="编辑所属任务",AutoSize=true,Visible=!nested};var remove=new Button{Text="删除此遗留事项",AutoSize=true,Enabled=false};var reminder=new Button{Text="设置提醒",AutoSize=true,Enabled=false};var files=new Button{Text="添加图片…",AutoSize=true};var gallery=new Button{Text="查看图片",AutoSize=true};var clearImages=new Button{Text="移除已有图片",AutoSize=true};var recover=new Button{Text="另存为新事项",AutoSize=true,Visible=false};
                 buttons.Controls.AddRange(new Control[]{save,fresh,editParent,reminder,files,gallery,remove,clearImages,recover});
                 var feedback=new Label{Text="选择一条可编辑；拖动归属和顺序请返回悬浮窗。",Dock=DockStyle.Fill};
-                noteEditor.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="粘贴失败："+error.Message;};
+                noteEditor.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="剪贴板操作失败："+error.Message;};
                 int noteImageDoubleClicks=0;
                 noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(mode,0,0);modeRow.Controls.Add(bulk,1,0);
@@ -435,11 +435,11 @@ internal sealed partial class FloatingWindow {
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{
                     disposePreviews();
-                    if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog);}
-                    var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注图片");foreach(var image in noteImages)AddImageThumbnail(previews,image,dialog);renderedNoteImageCount=noteEditor.ImageCount;
+                    if(!removeExistingImages){var existingImages=new List<GalleryImage>();CollectImages(existingImages,originalHtml,"遗留事项图片");foreach(var image in existingImages)AddImageThumbnail(previews,image,dialog,null,delegate(string message){feedback.Text=message;});}
+                    var noteImages=new List<GalleryImage>();CollectImages(noteImages,noteEditor.Html,"遗留事项备注图片");foreach(var image in noteImages)AddImageThumbnail(previews,image,dialog,null,delegate(string message){feedback.Text=message;});renderedNoteImageCount=noteEditor.ImageCount;
                     foreach(var picture in pictures.ToList()){
                         var image=new GalleryImage{Bytes=picture.Bytes,Caption="待保存的遗留事项图片"};
-                        AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}});
+                        AddImageThumbnail(previews,image,dialog,delegate{if(!writing){pictures.Remove(picture);renderPreviews();feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";}},delegate(string message){feedback.Text=message;});
                     }
                     int existing=removeExistingImages?0:Regex.Matches(originalHtml,@"<img\b",RegexOptions.IgnoreCase).Count;
                     previews.AccessibleName="遗留事项图片缩略图，点击查看大图";clearImages.Enabled=!writing && existing>0;
@@ -528,7 +528,9 @@ internal sealed partial class FloatingWindow {
                 priority.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="内容尚未保存；自动保存只缓存到 .cache，点击保存后才会正式提交。";};
                 appearance.SelectedIndexChanged+=delegate{if(!loading && !writing && dirty())feedback.Text="背景色尚未保存；仅保存到本机，不会同步给协作成员。";};
                 dialog.KeyDown+=delegate(object sender,KeyEventArgs e){
-                    if(e.Control && e.KeyCode==Keys.V && !writing && !noteEditor.ContainsFocus && Clipboard.ContainsImage() && !Clipboard.ContainsText()){e.SuppressKeyPress=true;try{using(var image=Clipboard.GetImage())using(var stream=new MemoryStream()){image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);if(noteEditor.ContainsFocus){noteEditor.InsertImage(stream.ToArray());feedback.Text="图片已嵌入备注正文，共 "+noteEditor.ImageCount+" 张；选中后可按退格或 Delete 删除。";}else{pictures.Add(new PastedImage{Bytes=stream.ToArray()});renderPreviews();feedback.Text="已粘贴遗留事项图片，点击缩略图查看大图；使用缩略图右上角 × 可移除。";}}}catch{feedback.Text="剪贴板读取失败，请重试。";}}
+                    if(e.Control && e.KeyCode==Keys.V && !writing && !noteEditor.ContainsFocus) {
+                        try{var bytes=FloatingClipboard.ImageOnlyBytes(Clipboard.GetDataObject());if(bytes!=null){e.SuppressKeyPress=true;pictures.Add(new PastedImage{Bytes=bytes});renderPreviews();feedback.Text="已粘贴遗留事项图片，可右击缩略图复制原图。";}}catch{feedback.Text="剪贴板读取失败，请重试。";}
+                    }
                     if(e.Control && e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;save.PerformClick();}
                 };
                 var autoTimer=new Timer{Interval=autoSaveSeconds*1000};autoTimer.Tick+=delegate{if(autoSaveEnabled && !writing && dirty())try{cacheOutstanding();}catch(Exception e){feedback.Text="草稿缓存失败："+e.Message+"；内容仍在当前窗口中。";}};autoTimer.Start();
@@ -664,7 +666,8 @@ internal sealed partial class FloatingWindow {
                 if(gallery.IsDisposed)return;
                 var card=new Panel{Width=Math.Max(340,flow.ClientSize.Width-38),Height=330,Margin=new Padding(0,0,0,18)};
                 var label=new Label{Text=(++loaded)+". "+item.Caption,Dock=DockStyle.Top,Height=34,AutoEllipsis=true};
-                var box=new PictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.White};card.Controls.Add(box);card.Controls.Add(label);flow.Controls.Add(card);
+                var box=new ClipboardPictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.White};card.Controls.Add(box);card.Controls.Add(label);flow.Controls.Add(card);
+                new FloatingImageCopy(box,async delegate{return item.Bytes??await DownloadImage(item.Source);},delegate(string message){heading.Text=message;});
                 box.DoubleClick+=async delegate{try{await ShowImagePreview(item,gallery);}catch(Exception error){heading.Text="图片预览失败："+error.Message;}};
                 try{
                     byte[] bytes=item.Bytes??await DownloadImage(item.Source);if(gallery.IsDisposed)return;

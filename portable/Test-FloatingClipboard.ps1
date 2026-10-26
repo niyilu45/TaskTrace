@@ -57,8 +57,8 @@ static class FloatingClipboardTests {
         Console.WriteLine("PASS UTF-8/GBK/UTF-16, byte offsets, Unicode fallback, reversible mojibake, entities, fragment markers, blank lines and indentation.");
     }
     static async Task EditorCases(Form host) {
-        string payload="",copiedHtml="",copiedText="";bool disturbSelection=false;WebBrowser currentBrowser=null;
-        using(var editor=new ProgressHtmlEditor(()=>{if(disturbSelection && currentBrowser!=null)currentBrowser.Document.InvokeScript("eval",new object[]{"var r=document.createRange();r.selectNodeContents(document.body);r.collapse(false);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"});return payload;},(html,text)=>{var exported=FloatingClipboard.CopyData(html,text);copiedHtml=FloatingClipboard.PrepareHtml(null,(string)exported.GetData(DataFormats.Html),text,936);copiedText=(string)exported.GetData(DataFormats.UnicodeText);return true;}){Dock=DockStyle.Fill}) {
+        string payload="",copiedHtml="",copiedText="";DataObject copiedData=null;bool disturbSelection=false;WebBrowser currentBrowser=null;
+        using(var editor=new ProgressHtmlEditor(()=>{if(disturbSelection && currentBrowser!=null)currentBrowser.Document.InvokeScript("eval",new object[]{"var r=document.createRange();r.selectNodeContents(document.body);r.collapse(false);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"});return payload;},(html,text)=>{if(copiedData!=null)FloatingClipboard.DisposeCopyData(copiedData);var exported=copiedData=FloatingClipboard.CopyData(html,text);copiedHtml=FloatingClipboard.PrepareHtml(null,(string)exported.GetData(DataFormats.Html),text,936);copiedText=(string)exported.GetData(DataFormats.UnicodeText);return true;}){Dock=DockStyle.Fill}) {
             host.Controls.Add(editor);var browser=(WebBrowser)editor.Controls[0];currentBrowser=browser;
             for(int i=0;i<100 && (browser.Document==null || browser.Document.GetElementById("progress-editor")==null);i++)await Task.Delay(40);
             Require(browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Editor did not load");
@@ -104,6 +104,17 @@ static class FloatingClipboardTests {
                 Require(pasted.IndexOf("目标开头")<pasted.IndexOf("图前") && pasted.IndexOf("图后")<pasted.IndexOf("目标结尾"),"Cross-window paste changed the caret position or interleaved layout");
                 host.Controls.Remove(destination);
             }
+            editor.Html="<p>备注前<img src='"+picture+"'>备注后</p>";int beforeCopy=editor.ChangeVersion;string beforeHtml=editor.Html;
+            browser.Document.InvokeScript("eval",new object[]{"var image=document.getElementById('progress-editor').getElementsByTagName('img')[0],mouse=document.createEvent('MouseEvents');mouse.initMouseEvent('mousedown',true,true,window,1,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(mouse);"});
+            Require(Convert.ToBoolean(browser.Document.InvokeScript("taskTraceHasSelection")),"Clicking a note image left a collapsed selection: "+Convert.ToString(browser.Document.InvokeScript("eval",new object[]{"String(document.getElementById('progress-editor').getAttribute('onmousedown'))+' range='+window.getSelection().rangeCount+' saved='+(taskTraceSavedRange?taskTraceSavedRange.collapsed:'none')"})));
+            browser.Document.InvokeScript("eval",new object[]{"var copy=document.createEvent('Event');copy.initEvent('copy',true,true);document.getElementById('progress-editor').getElementsByTagName('img')[0].dispatchEvent(copy);"});
+            Require(copiedData!=null && copiedData.GetDataPresent("PNG",false) && copiedData.GetDataPresent(DataFormats.Bitmap,false),"Copying a selected inline image did not publish PNG and bitmap formats");
+            Require(!copiedHtml.Contains("备注前") && !copiedHtml.Contains("备注后"),"A single-image copy unexpectedly copied adjacent note text");
+            Require(editor.Html==beforeHtml && editor.ChangeVersion==beforeCopy,"Selecting/copying an inline image changed the saved note or dirty state");
+            editor.SetReadOnly(true);Require(editor.CopyFirstImageForTest(),"Read-only image context menu could not copy an image");
+            Require(copiedData.GetDataPresent("PNG",false) && editor.Html==beforeHtml,"Read-only image copy lost its native image formats or modified the document");
+            editor.SetReadOnly(false);
+            FloatingClipboard.DisposeCopyData(copiedData);copiedData=null;
             string folder=Path.Combine(Path.GetDirectoryName(Application.ExecutablePath),"clipboard-files");Directory.CreateDirectory(folder);
             string filePath=Path.Combine(folder,"检查记录.txt"),imagePath=Path.Combine(folder,"截图.png");File.WriteAllBytes(filePath,new byte[]{1,2,3,4});File.WriteAllBytes(imagePath,Convert.FromBase64String(picture.Substring(picture.IndexOf(',')+1)));
             var paths=new StringCollection();paths.Add(filePath);paths.Add(imagePath);string fileHtml=FloatingClipboard.FilesHtml(paths);
@@ -118,6 +129,38 @@ static class FloatingClipboardTests {
         }
         Console.WriteLine("PASS actual editor Unicode/image paste, formatting cleanup, existing text, draft change, roundtrip, read-only and empty clipboard.");
     }
+    static async Task ImageCopyCases(Form host) {
+        byte[] bytes;using(var original=new Bitmap(640,480)){using(var graphics=Graphics.FromImage(original))graphics.Clear(Color.FromArgb(120,40,120,200));bytes=FloatingClipboard.PngBytes(original);}
+        using(var imageData=new CopyDataLease(FloatingClipboard.CopyImageData(bytes))) {
+            var data=imageData.Value;Require(data.GetDataPresent("PNG",false) && data.GetDataPresent(DataFormats.Bitmap,false) && data.GetDataPresent(DataFormats.Html,false),"Image copy omitted a native PNG, bitmap, or HTML format");
+            byte[] roundtrip=FloatingClipboard.ImageOnlyBytes(data);Require(roundtrip!=null,"Empty Unicode text incorrectly hid the copied bitmap");
+            using(var stream=new MemoryStream(roundtrip))using(var image=Image.FromStream(stream))Require(image.Width==640 && image.Height==480,"Copied only the thumbnail or clipped window, not the original image");
+            var onlyPng=new DataObject();onlyPng.SetData("PNG",false,new MemoryStream(roundtrip));Require(FloatingClipboard.ImageOnlyBytes(onlyPng)!=null && FloatingClipboard.BitmapHtml(onlyPng).Contains("data:image/png;base64,"),"PNG-only clipboard from another application could not be pasted");
+            onlyPng.SetData(DataFormats.UnicodeText,"保留文字");Require(FloatingClipboard.ImageOnlyBytes(onlyPng)==null,"Image detection swallowed a normal text paste");
+        }
+        DataObject copied=null;string feedback="";int writes=0,reads=0;
+        Func<byte[],bool> writer=delegate(byte[] content){if(copied!=null)FloatingClipboard.DisposeCopyData(copied);copied=FloatingClipboard.CopyImageData(content);writes++;return true;};
+        using(var picture=new ClipboardPictureBox{Size=new Size(88,58)})using(var action=new FloatingImageCopy(picture,delegate{reads++;return Task.FromResult(bytes);},message=>feedback=message,writer)) {
+            host.Controls.Add(picture);((ToolStripMenuItem)picture.ContextMenuStrip.Items[0]).PerformClick();await action.Pending;
+            Require(reads==1 && writes==1 && feedback.Contains("已复制"),"Outstanding thumbnail context copy did not read/write the original image");
+            picture.CopyShortcutForTest();await action.Pending;Require(writes==2,"Thumbnail Ctrl+C did not copy the image");
+            using(var bitmap=(Image)copied.GetData(DataFormats.Bitmap,false))Require(bitmap.Width==640,"Thumbnail shortcut copied the reduced preview");
+            host.Controls.Remove(picture);
+        }
+        using(var zoom=new ZoomableImagePreview(writer){Size=new Size(160,100)}) {
+            host.Controls.Add(zoom);using(var stream=new MemoryStream(bytes))using(var original=Image.FromStream(stream))zoom.SetPreviewImage(new Bitmap(original));
+            zoom.CopyFeedback=message=>feedback=message;zoom.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);zoom.CopyShortcutForTest();await zoom.ImageCopy.Pending;
+            Require(writes==3 && copied.GetDataPresent("PNG",false),"Zoomed preview Ctrl+C failed");
+            byte[] full=FloatingClipboard.ImageOnlyBytes(copied);using(var stream=new MemoryStream(full))using(var original=Image.FromStream(stream))Require(original.Width==640 && original.Height==480,"Zoomed preview copied its visible viewport instead of the complete original image");
+            host.Controls.Remove(zoom);zoom.ClearPreviewImage();
+        }
+        using(var target=new ClipboardPictureBox())using(var action=new FloatingImageCopy(target,delegate{return Task.FromResult(bytes);},message=>feedback=message,delegate{return false;})) {
+            await action.Copy();Require(feedback.Contains("失败") && ((ToolStripMenuItem)target.ContextMenuStrip.Items[0]).Enabled,"Clipboard failure was not reported or left copy disabled");
+        }
+        if(copied!=null)FloatingClipboard.DisposeCopyData(copied);
+        Console.WriteLine("PASS native PNG/bitmap/HTML formats, PNG-only import, empty-text handling, original-resolution thumbnail/zoom menu and Ctrl+C, read-only inline copy, and clipboard error recovery.");
+    }
+    sealed class CopyDataLease : IDisposable {internal readonly DataObject Value;internal CopyDataLease(DataObject value){Value=value;}public void Dispose(){FloatingClipboard.DisposeCopyData(Value);}}
     static async Task WindowCases(Form host) {
         var registry=new FloatingEditorWindows();
         using(var first=registry.Open("progress:1"))using(var second=registry.Open("outstanding:1:item-a"))
@@ -137,7 +180,7 @@ static class FloatingClipboardTests {
         }
         Console.WriteLine("PASS simultaneous modeless editors, enabled/movable parent, per-item identity, minimized restore, collision handling and independent close/reopen.");
     }
-    [STAThread] static int Main(){Console.OutputEncoding=Encoding.UTF8;int code=0;Application.EnableVisualStyles();using(var host=new Form{Opacity=0,ShowInTaskbar=false}){host.Shown+=async delegate{try{DecodeCases();await EditorCases(host);await WindowCases(host);FloatingWindow.TestOutstandingEditorMerge();await FloatingWindow.TestEditorAttachments();}catch(Exception error){code=1;Console.Error.WriteLine(error);}finally{host.Close();}};Application.Run(host);}return code;}
+    [STAThread] static int Main(){Console.OutputEncoding=Encoding.UTF8;int code=0;Application.EnableVisualStyles();using(var host=new Form{Opacity=0,ShowInTaskbar=false}){host.Shown+=async delegate{try{DecodeCases();await EditorCases(host);await ImageCopyCases(host);await WindowCases(host);FloatingWindow.TestOutstandingEditorMerge();await FloatingWindow.TestEditorAttachments();}catch(Exception error){code=1;Console.Error.WriteLine(error);}finally{host.Close();}};Application.Run(host);}return code;}
 }
 internal sealed partial class FloatingWindow {
     internal FloatingWindow(HttpMessageHandler handler){http=new HttpClient(handler);url="http://127.0.0.1:1";}

@@ -13,13 +13,18 @@ internal sealed class ZoomableImagePreview : Control {
     Point panStart;
     float panStartX,panStartY;
     internal event EventHandler ZoomChanged;
+    internal Action CopyRequested;
+    internal Action<string> CopyFeedback;
+    internal readonly FloatingImageCopy ImageCopy;
     internal float Zoom {get{return zoom;}}
-    internal ZoomableImagePreview() {
+    internal ZoomableImagePreview(Func<byte[],bool> writeClipboard=null) {
         DoubleBuffered=true;BackColor=Color.FromArgb(30,30,30);TabStop=true;
         AccessibleName="大图预览";AccessibleDescription="使用鼠标滚轮缩放，放大后按住鼠标拖动查看";
         SetStyle(ControlStyles.ResizeRedraw|ControlStyles.Selectable,true);
-        var copyMenu=new ContextMenuStrip();copyMenu.Items.Add("复制图片",null,delegate{if(image!=null)Clipboard.SetImage(image);});ContextMenuStrip=copyMenu;Disposed+=delegate{copyMenu.Dispose();};
+        ImageCopy=new FloatingImageCopy(this,delegate{return Task.FromResult(FloatingClipboard.PngBytes(image));},delegate(string message){if(CopyFeedback!=null)CopyFeedback(message);},writeClipboard);
     }
+    protected override bool ProcessCmdKey(ref Message message,Keys keyData){if(keyData==(Keys.Control|Keys.C)){if(CopyRequested!=null)CopyRequested();return true;}return base.ProcessCmdKey(ref message,keyData);}
+    internal void CopyShortcutForTest(){var message=new Message();ProcessCmdKey(ref message,Keys.Control|Keys.C);}
     internal void SetPreviewImage(Image value) {if(image!=null&&!Object.ReferenceEquals(image,value))image.Dispose();image=value;zoom=1f;panX=panY=0;Invalidate();}
     internal void ClearPreviewImage() {if(image!=null)image.Dispose();image=null;Invalidate();}
     SizeF FitSize() {
@@ -78,22 +83,23 @@ internal sealed partial class FloatingWindow {
             var previous=box.Image;box.Image=thumbnail;if(previous!=null)previous.Dispose();
         } catch {if(!box.IsDisposed){box.BackColor=Color.MistyRose;box.AccessibleDescription="图片缩略图加载失败";}}
     }
-    void AddImageThumbnail(FlowLayoutPanel panel,GalleryImage item,Form owner,Action remove=null) {
+    void AddImageThumbnail(FlowLayoutPanel panel,GalleryImage item,Form owner,Action remove=null,Action<string> feedback=null) {
         var card=new Panel{Width=98,Height=66,Margin=new Padding(0,0,8,0),BackColor=Color.FromArgb(245,247,250)};
-        var box=new PictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.CenterImage,BackColor=Color.White,Cursor=Cursors.Hand,AccessibleName="图片缩略图",AccessibleDescription="点击查看大图"};
+        var box=new ClipboardPictureBox{Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.CenterImage,BackColor=Color.White,Cursor=Cursors.Hand,AccessibleName="图片缩略图",AccessibleDescription="点击查看大图"};
         box.Click+=async delegate{await ShowImagePreview(item,owner);};card.Controls.Add(box);
+        new FloatingImageCopy(box,async delegate{return item.Bytes??await DownloadImage(item.Source);},feedback??delegate(string message){status.Text=message;});
         if(remove!=null) {
             var close=new Button{Text="×",Width=24,Height=24,Location=new Point(card.Width-24,0),Anchor=AnchorStyles.Top|AnchorStyles.Right,FlatStyle=FlatStyle.Flat,BackColor=Color.White,ForeColor=Color.Firebrick,TabStop=true,AccessibleName="移除待保存图片"};
             close.FlatAppearance.BorderColor=Color.FromArgb(210,214,220);close.Click+=delegate{remove();};card.Controls.Add(close);close.BringToFront();
         }
         panel.Controls.Add(card);box.Tag=LoadImageThumbnail(box,item);
     }
-    Task ShowImagePreview(GalleryImage item,Form owner,bool verify=false) {
+    async Task ShowImagePreview(GalleryImage item,Form owner,bool verify=false) {
         bool loaded=false;Exception failure=null;
         using(var preview=DpiDialog(new Form{Text="查看大图 · "+(item.Caption??"图片"),Size=new Size(900,700),MinimumSize=new Size(420,320),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             string caption=item.Caption??"图片";
             var heading=new Label{Dock=DockStyle.Top,Height=40,Padding=new Padding(12,10,12,0),Text=caption+" · 滚轮缩放 · 100%",AutoEllipsis=true};
-            var box=new ZoomableImagePreview{Dock=DockStyle.Fill};
+            var box=new ZoomableImagePreview{Dock=DockStyle.Fill};box.CopyFeedback=delegate(string message){heading.Text=message;};
             box.ZoomChanged+=delegate{heading.Text=caption+" · 滚轮缩放 · "+Math.Round(box.Zoom*100)+"%";};
             preview.Controls.Add(box);preview.Controls.Add(heading);preview.Shown+=async delegate {
                 try {
@@ -109,13 +115,12 @@ internal sealed partial class FloatingWindow {
                         box.SetPreviewImage(new Bitmap(original));
                     }
                     loaded=true;
-                    if(verify||selfTest){box.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);if(box.Zoom<=1f)throw new Exception("Image preview wheel zoom failed");using(var bitmap=new Bitmap(preview.Width,preview.Height)){preview.DrawToBitmap(bitmap,new Rectangle(Point.Empty,preview.Size));bitmap.Save(Path.Combine(data,"floating-image-preview-test.png"));}preview.Close();}
+                    if(verify||selfTest){if(preview.Modal || preview.Owner!=null || (owner!=null && !owner.Enabled))throw new Exception("Image preview disabled another editor");box.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);if(box.Zoom<=1f)throw new Exception("Image preview wheel zoom failed");using(var bitmap=new Bitmap(preview.Width,preview.Height)){preview.DrawToBitmap(bitmap,new Rectangle(Point.Empty,preview.Size));bitmap.Save(Path.Combine(data,"floating-image-preview-test.png"));}preview.Close();}
                 } catch(Exception error){failure=error;heading.Text="图片读取失败："+error.Message;if(verify||selfTest)preview.Close();}
             };
             preview.FormClosed+=delegate{box.ClearPreviewImage();};
-            preview.ShowDialog(owner);
+            await ShowEditorWindowAsync(preview,owner);
             if((verify||selfTest) && (!loaded||failure!=null))throw new Exception("Image preview did not load",failure);
         }
-        return Task.FromResult(0);
     }
 }
