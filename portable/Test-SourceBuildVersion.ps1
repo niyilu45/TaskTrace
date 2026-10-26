@@ -76,9 +76,9 @@ foreach ($invalidVersion in @('v1.0.0.source.20261026030000', 'v1.0.0+', 'v1.0.0
 $savedRoot = $root
 $root = $testRoot
 try {
-    function Invoke-RestMethod { param($Uri, $Headers, $TimeoutSec, $ErrorAction, $Proxy, $ProxyUseDefaultCredentials) return @([pscustomobject]@{tag_name='v1.0.0';draft=$false}) }
+    function Invoke-RestMethod { param($Uri, $Headers, $TimeoutSec, $ErrorAction, $Proxy, $ProxyUseDefaultCredentials) return @([pscustomobject]@{tag_name=$TaskTraceSourceFallbackVersion;draft=$false}) }
     $resolved = Resolve-TaskTraceSourceBuildVersion '' 'unused/repository'
-    Assert-Version ($resolved -is [string] -and $resolved -match '^v1\.0\.0\+source\.[0-9]{14}$') 'ZIP source resolution produced an invalid version or an array.'
+    Assert-Version ($resolved -is [string] -and $resolved -match ('^' + [regex]::Escape($TaskTraceSourceFallbackVersion) + '\+source\.[0-9]{14}$')) 'ZIP source resolution produced an invalid version or an array.'
     Assert-BuildVersionAccepted $resolved $true
     function Invoke-RestMethod { throw 'isolated API failure' }
     function Invoke-WebRequest { param($Uri, $Headers, $TimeoutSec, $UseBasicParsing, $ErrorAction, $Proxy, $ProxyUseDefaultCredentials) return [pscustomobject]@{Content='<entry><link href="https://github.com/unused/repository/releases/tag/v1.0.1" /></entry>'} }
@@ -87,7 +87,7 @@ try {
     Assert-BuildVersionAccepted $resolved $true
     function Invoke-WebRequest { throw 'isolated offline failure' }
     $resolved = Resolve-TaskTraceSourceBuildVersion '' 'unused/repository'
-    Assert-Version ($resolved -match '^v1\.0\.0\+source\.[0-9]{14}$') 'Offline bundled stable baseline produced an invalid source version.'
+    Assert-Version ($resolved -match ('^' + [regex]::Escape($TaskTraceSourceFallbackVersion) + '\+source\.[0-9]{14}$')) 'Offline bundled stable baseline produced an invalid source version.'
     Assert-BuildVersionAccepted $resolved $true
 } finally { $root = $savedRoot; Remove-Item Function:Invoke-RestMethod, Function:Invoke-WebRequest -ErrorAction SilentlyContinue }
 Write-Output 'PASS stable/prerelease SemVer; actual build argument validation; Git-free ZIP API/feed/offline fallback; future Release ordering.'
