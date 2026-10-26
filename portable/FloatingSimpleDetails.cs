@@ -119,13 +119,13 @@ internal sealed partial class FloatingWindow {
         tasks.SimpleImageAvailable=delegate(TreeNode node) {
             var leaf=node.Tag as OutstandingLeaf;
             if(leaf==null)return false;
-            var images=new List<GalleryImage>();CollectImages(images,leaf.Html,"");return images.Count>0;
+            return OutstandingImageCount(leaf)>0;
         };
         tasks.SimpleImageClicked=async delegate(TreeNode node) {
             var leaf=node.Tag as OutstandingLeaf;
             if(busy || closing || dragging || leaf==null || node.TreeView!=tasks)return;
             ShowSimpleModeRestore();hoverTimer.Stop();progressTip.Hide(tasks);
-            try {await ShowImageGallery(leaf.TaskId,leaf.Html,this);}catch(Exception error){Error(error);}
+            try {await ShowImageGallery(leaf.TaskId,OutstandingImageHtml(leaf),this);}catch(Exception error){Error(error);}
         };
         tasks.AfterCollapse+=delegate(object sender,TreeViewEventArgs e){if(!rendering && !singleLine.Checked && e.Node.Tag is long)simpleCollapsedDuringRead.Add((long)e.Node.Tag);};
         tasks.AfterExpand+=delegate(object sender,TreeViewEventArgs e){if(!rendering && !singleLine.Checked && e.Node.Tag is long)simpleCollapsedDuringRead.Remove((long)e.Node.Tag);};
@@ -222,12 +222,13 @@ internal sealed partial class FloatingWindow {
     }
     TreeNode CreateOutstandingNode(long taskId,PendingItem item,int index,string path="") {
         int number=index+1;
-        string current=number+". "+"[P"+item.Priority+"] "+(showCompletion.Checked?CompletionStatus(item.Done?"完成":"待办",item.Completion,item.Done):"")+OutstandingText(item.Html);
+        string summary=OutstandingText(item.Html,item.NoteHtml,url);
+        string current=number+". "+"[P"+item.Priority+"] "+(showCompletion.Checked?CompletionStatus(item.Done?"完成":"待办",item.Completion,item.Done):"")+summary;
         string localColor=LocalOutstandingAppearance(taskId,item.Id);string inherited=EffectiveTaskAppearance(taskId,taskParents);
         var state=new OutstandingLeaf{TaskId=taskId,Id=item.Id,Html=item.Html,NoteHtml=item.NoteHtml,Done=item.Done,CompletedAt=item.CompletedAt,ReminderAt=item.ReminderAt,RepeatRule=item.RepeatRule,Priority=item.Priority,Completion=item.Completion,CurrentTextLength=current.Length,LocalColorKey=localColor,EffectiveColorKey=localColor!=""?localColor:inherited};
         var leaf=new TreeNode(current+path){Tag=state,Checked=item.Done,
             ForeColor=item.Done && grayCompleted?Color.FromArgb(100,110,125):ForeColor,
-            ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+OutstandingText(item.Html)+" · 优先级 "+item.Priority};
+            ToolTipText=(item.Done?"已完成 · ":"未完成 · ")+summary+" · 优先级 "+item.Priority};
         tasks.ReserveSimpleImageSpace(leaf);return leaf;
     }
     bool ApplySimpleOutstanding(TreeNode node,SharedList shared) {

@@ -37,6 +37,21 @@ describe('progress editor images', () => {
 		expect(isProgressImageAttachment({file: {name: file.name}} as never)).toBe(true)
 		expect(isProgressImageAttachment({file: {name: 'report.png'}} as never)).toBe(false)
 	})
+
+	it('classifies only generated legacy outstanding image names as inline media', () => {
+		for (const name of [
+			'outstanding-0123456789abcdef0123456789abcdef.png',
+			'OUTSTANDING-0123456789ABCDEF0123456789ABCDEF.PNG',
+		]) expect(isProgressImageAttachment({file: {name}} as never)).toBe(true)
+		for (const name of [
+			'outstanding-report.png',
+			'outstanding-0123456789abcdef0123456789abcde.png',
+			'outstanding-0123456789abcdef0123456789abcdefg.png',
+			'outstanding-0123456789abcdef0123456789abcdef.jpg',
+			'outstanding-0123456789abcdef0123456789abcdef.png.backup',
+		]) expect(isProgressImageAttachment({file: {name}} as never)).toBe(false)
+	})
+
 	it('persists pasted files as attachment links while keeping images inline', async () => {
 		vi.mocked(taskAttachmentsUpload).mockResolvedValueOnce({data: {success: [{id: 45}], errors: []}} as never)
 		const html = await persistProgressImages('<p>前<a download="报告.txt" href="data:application/octet-stream;base64,AQID">报告.txt</a>后</p>', 8)

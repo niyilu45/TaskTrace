@@ -224,7 +224,7 @@ internal sealed partial class FloatingWindow {
             var filtered=new SharedList{CommentId=saved.CommentId};
             foreach(var item in saved.Items) {
                 if(HideCompletedOutstanding(id,item,ref nextCompletionRefreshUtc) || !MatchesPriority(item))continue;
-                if(!titleMatch && OutstandingText(item.Html).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
+                if(!titleMatch && OutstandingText(item.Html,item.NoteHtml,url).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
                 filtered.Items.Add(item);
             }
             sharedLists[id]=filtered;

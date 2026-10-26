@@ -63,11 +63,12 @@ internal sealed partial class FloatingWindow : Form {
     readonly Timer hoverTimer = new Timer { Interval = 400 };
     TreeNode hoverNode;
     internal sealed class TaskNode : TreeNode { public int CurrentTextLength, ReminderCount; public string LocalColorKey="",EffectiveColorKey=""; public TaskNode(string text) : base(text) {} }
-    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule, LocalColorKey="", EffectiveColorKey=""; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
+    internal sealed class OutstandingLeaf { public long TaskId; public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule, LocalColorKey="", EffectiveColorKey=""; public string ImageSummaryHtml,ImageSummaryNote; public int CachedImageCount=-1; public bool Done; public int Priority=7, Completion, CurrentTextLength; }
     sealed class PendingItem {
         public string Id, Html, NoteHtml, CompletedAt, ReminderAt, RepeatRule; public int Number, Completion; public bool Done; public int Priority=7;
         public PendingItem Copy(){return (PendingItem)MemberwiseClone();}
-        public override string ToString() { return Number + ". [P"+Priority+"] " + OutstandingText(Html) + (Done?"（已完成）":""); }
+        public string DisplayText(string origin) { return Number + ". [P"+Priority+"] " + OutstandingText(Html,NoteHtml,origin) + (Done?"（已完成）":""); }
+        public override string ToString() { return DisplayText(null); }
     }
     sealed class SharedList { public long CommentId; public List<PendingItem> Items = new List<PendingItem>(); public List<PendingItem> OriginalItems; }
     sealed class SharedItemMarkup { public string Attrs, Body; }

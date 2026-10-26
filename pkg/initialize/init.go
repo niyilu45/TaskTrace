@@ -141,6 +141,7 @@ func FullInit() {
 	models.RegisterUserDeletionCron()
 	models.RegisterTaskCleanupCron()
 	models.RegisterOldExportCleanupCron()
+	models.RegisterTaskTraceImageCleanupCron()
 	migrationmodule.RegisterImportUploadCleanupCron()
 	models.RegisterAddTaskToFilterViewCron()
 	user.RegisterTokenCleanupCron()

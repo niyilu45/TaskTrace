@@ -13,7 +13,8 @@ function extensionFor(file: File) {
 }
 
 export function isProgressImageAttachment(attachment: Pick<IAttachment, 'file'>) {
-	return attachment.file.name.toLowerCase().startsWith(PROGRESS_IMAGE_PREFIX)
+	const name = attachment.file.name.toLowerCase()
+	return name.startsWith(PROGRESS_IMAGE_PREFIX) || /^outstanding-[0-9a-f]{32}\.png$/.test(name)
 }
 
 export async function stageProgressImages(files: File[] | FileList) {

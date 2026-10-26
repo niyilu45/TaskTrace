@@ -134,12 +134,6 @@ internal sealed partial class FloatingWindow {
     DateTime dropHoverSince, scrollSince;
     sealed class DropPlan { public long TaskId, ParentId, BeforeId, TargetId; public string ItemId, BeforeItemId, Message; }
 
-    static string OutstandingText(string html) {
-        string text = Plain(html).Replace("\r\n"," ");
-        int count = Regex.Matches(html ?? "", @"<img\b", RegexOptions.IgnoreCase).Count;
-        if(count > 0) text += (text.Length == 0 ? "" : " · ") + count + " 张图片";
-        return text;
-    }
     static int PriorityNumber(Dictionary<string,object> task) {
         object value; long raw = task.TryGetValue("priority",out value) ? Convert.ToInt64(value) : 0;
         return raw >= 1 && raw <= 10 ? 10-(int)raw : 9;
@@ -344,7 +338,7 @@ internal sealed partial class FloatingWindow {
         Point viewport=tasks.NativeScrollPosition();bool saved=false;SetBusy(true);timer.Stop();
         try {
             var current=leaf==null?await Api("GET","/tasks/"+id,null):null;
-            string title=leaf==null?(string)current["title"]:OutstandingText(leaf.Html);int selectedPriority=leaf==null?PriorityNumber(current):leaf.Priority;
+            string title=leaf==null?(string)current["title"]:OutstandingText(leaf.Html,leaf.NoteHtml,url);int selectedPriority=leaf==null?PriorityNumber(current):leaf.Priority;
             using(var dialog=DpiDialog(new Form{Text="优先级 · "+title,Size=new Size(350,210),MinimumSize=new Size(350,210),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=3};
                 layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,36));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -412,7 +406,8 @@ internal sealed partial class FloatingWindow {
             using(var dialog=DpiDialog(new Form{Text="遗留事项 · 所有日期共享",Size=new Size(660,820),MinimumSize=new Size(540,680),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true,KeyPreview=true})){
                 var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(12),ColumnCount=1,RowCount=9};
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,70));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,52));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,66));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,68));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,76));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,44));
-                var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,AccessibleName="遗留事项清单"};
+                var list=new ListBox{Dock=DockStyle.Fill,HorizontalScrollbar=true,FormattingEnabled=true,AccessibleName="遗留事项清单"};
+                list.Format+=delegate(object sender,ListControlConvertEventArgs args){var item=args.ListItem as PendingItem;if(item!=null)args.Value=item.DisplayText(url);};
                 var mode=new Label{Text="遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项内容说明"};
                 var input=new TextBox{Dock=DockStyle.Fill,Multiline=true,ScrollBars=ScrollBars.Vertical,AccessibleName="遗留事项内容",AccessibleDescription="遗留事项内容"};
                 var noteMode=new Label{Text="备注 · 仅在编辑窗口显示；双击图片查看大图，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="遗留事项备注说明"};
@@ -596,30 +591,8 @@ internal sealed partial class FloatingWindow {
     }
 
     sealed class GalleryImage {public string Source,Caption;public byte[] Bytes;}
-    string AttachmentPath(string source){
-        string value=WebUtility.HtmlDecode(source??"");Uri address;
-        if(!value.StartsWith("/api/",StringComparison.Ordinal)){
-            if(!Uri.TryCreate(value,UriKind.Absolute,out address))return null;
-            var origin=new Uri(url);if(address.Scheme!=origin.Scheme || address.Host!=origin.Host || address.Port!=origin.Port)return null;value=address.AbsolutePath;
-        }
-        var match=Regex.Match(value,@"^/api/v[12]/tasks/([0-9]+)/attachments/([0-9]+)(?:\?.*)?$");
-        return match.Success?"/api/v2/tasks/"+match.Groups[1].Value+"/attachments/"+match.Groups[2].Value:null;
-    }
-    void CollectImages(List<GalleryImage> images,string html,string caption){
-        foreach(Match match in Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase)){
-            string retained=ReferenceAttribute(match.Value,"data-tasktrace-src")??ReferenceAttribute(match.Value,"data-src")??"";
-            string raw=retained!=""?retained:ReferenceAttribute(match.Value,"src")??"";
-            string source=AttachmentPath(raw);
-            if(source!=null){if(!images.Any(image=>image.Source==source))images.Add(new GalleryImage{Source=source,Caption=caption});continue;}
-            var dataImage=Regex.Match(raw,@"^data:image/(?:png|jpe?g|gif|bmp);base64,(?<data>[A-Za-z0-9+/=\s]+)$",RegexOptions.IgnoreCase);
-            if(!dataImage.Success)continue;
-            try{
-                byte[] bytes=Convert.FromBase64String(Regex.Replace(dataImage.Groups["data"].Value,@"\s",""));
-                string key="data:"+Convert.ToBase64String(bytes);
-                if(!images.Any(image=>image.Source==key))images.Add(new GalleryImage{Source=key,Bytes=bytes,Caption=caption});
-            }catch{}
-        }
-    }
+    string AttachmentPath(string source){return ImageAttachmentPath(source,url);}
+    void CollectImages(List<GalleryImage> images,string html,string caption){CollectImages(images,html,caption,url);}
     async Task<List<GalleryImage>> GatherImages(long taskId,string onlyHtml,Form gallery,string scopeLabel=null){
         var images=new List<GalleryImage>();
         if(onlyHtml!=null){CollectImages(images,onlyHtml,TaskTitle(taskId)+" · "+(scopeLabel??"遗留事项"));return images;}
@@ -650,7 +623,7 @@ internal sealed partial class FloatingWindow {
     }
     async Task ShowSelectedImages(){
         if(busy || closing)return;long id=SelectedTaskId();if(id==0){status.Text="请先选中任务或遗留事项。";return;}
-        var leaf=tasks.SelectedNode.Tag as OutstandingLeaf;await ShowImageGallery(id,leaf==null?null:(leaf.Html??"")+(leaf.NoteHtml??""),this);
+        var leaf=tasks.SelectedNode.Tag as OutstandingLeaf;await ShowImageGallery(id,leaf==null?null:OutstandingImageHtml(leaf),this);
     }
     async Task ShowImageGallery(long id,string onlyHtml,Form owner,string scopeLabel=null){
         var gallery=DpiDialog(new Form{Text="查看图片 · "+TaskTitle(id),Size=new Size(800,650),MinimumSize=new Size(400,300),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false});

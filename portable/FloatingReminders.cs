@@ -95,7 +95,7 @@ internal sealed partial class FloatingWindow {
         if(sharedLists!=null)foreach(var pair in sharedLists)foreach(var item in pair.Value.Items) {
             DateTimeOffset due;if(!TryReminderTime(item.ReminderAt,out due))continue;
             HashSet<string> values;if(!owned.TryGetValue(pair.Key,out values)){values=new HashSet<string>();owned[pair.Key]=values;}values.Add(ReminderIdentity(due,item.RepeatRule));
-            AddReminderDefinition(next,"outstanding:"+pair.Key+":"+item.Id,pair.Key,item.Id,OutstandingText(item.Html),"遗留事项",due,item.RepeatRule);
+            AddReminderDefinition(next,"outstanding:"+pair.Key+":"+item.Id,pair.Key,item.Id,OutstandingText(item.Html,item.NoteHtml,url),"遗留事项",due,item.RepeatRule);
         }
         if(all!=null)foreach(var pair in all)foreach(var value in TaskReminderValues(pair.Value)) {
             DateTimeOffset due;if(!TryReminderTime(value["reminder"],out due))continue;string rule=RepeatValue(value);
@@ -266,7 +266,7 @@ internal sealed partial class FloatingWindow {
     async Task<bool> ShowReminderEditor(long taskId,string itemId,Form owner) {
         var task=await Api("GET","/tasks/"+taskId,null);var values=new List<Dictionary<string,object>>();string title=Convert.ToString(task["title"]);SharedList shared=null;PendingItem outstanding=null;
         if(itemId==null)values=TaskReminderValues(task);
-        else {shared=ReadShared(await ReadHistory(taskId));outstanding=shared.Items.FirstOrDefault(item=>item.Id==itemId);if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");title=OutstandingText(outstanding.Html);DateTimeOffset existing;if(TryReminderTime(outstanding.ReminderAt,out existing)){var reminder=AbsoluteReminder(existing.LocalDateTime);reminder["repeat_rule"]=outstanding.RepeatRule??"";values.Add(reminder);}}
+        else {shared=ReadShared(await ReadHistory(taskId));outstanding=shared.Items.FirstOrDefault(item=>item.Id==itemId);if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");title=OutstandingText(outstanding.Html,outstanding.NoteHtml,url);DateTimeOffset existing;if(TryReminderTime(outstanding.ReminderAt,out existing)){var reminder=AbsoluteReminder(existing.LocalDateTime);reminder["repeat_rule"]=outstanding.RepeatRule??"";values.Add(reminder);}}
         bool saved=false;
         using(var dialog=DpiDialog(new Form{Text="设置提醒 · "+title,Size=new Size(650,600),MinimumSize=new Size(580,570),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};

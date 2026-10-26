@@ -436,7 +436,7 @@ async function uploadFilesToTask(files: File[] | FileList) {
 	try {
 		const uploaded = await uploadFiles(attachmentService, props.task.id, files)
 		if (uploaded.length > 0) {
-			emit('update:attachments', [...attachments.value, ...uploaded])
+			emit('update:attachments', [...(props.task.attachments ?? []), ...uploaded])
 		}
 	} catch (e) {
 		error(e)
@@ -456,7 +456,7 @@ async function deleteAttachment() {
 
 	try {
 		const r = await attachmentService.delete(attachmentToDelete.value)
-		const updated = attachments.value.filter(a => a.id !== attachmentToDelete.value!.id)
+		const updated = (props.task.attachments ?? []).filter(a => a.id !== attachmentToDelete.value!.id)
 		emit('update:attachments', updated)
 		success(r)
 		setAttachmentToDelete(null)
