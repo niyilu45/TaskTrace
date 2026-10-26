@@ -688,11 +688,11 @@ internal sealed partial class FloatingWindow : Form {
                 Action renderImages=delegate { };
                 Func<string> snapshot=delegate {string editorHtml=progress.Html;return json.Serialize(new {date=selectedDay,html=ProgressSnapshotHtml(editorHtml,id),images=ProgressEditorImageKeys(editorHtml),references=SerializeProgressReferences(references)});};
                 Func<string> referenceSnapshot=delegate{return SerializeProgressReferences(references);};
-                Func<bool> progressDirty=delegate{return !updateDiscarded && (((progressDraftRestored || progress.ChangeVersion!=originalProgressVersion) && !SameProgressEditorContent(progress.Html,originalProgressEditorHtml)) || referenceSnapshot()!=originalReferenceSnapshot);};
-                Func<bool> descriptionDirty=delegate{return !updateDiscarded && descriptionEditor.ChangeVersion!=originalDescriptionVersion && !SameProgressEditorContent(descriptionEditor.Html,originalDescriptionEditorHtml);};
+                Func<bool> progressDirty=delegate{return !updateDiscarded && (progress.IsPastePending || ((progressDraftRestored || progress.ChangeVersion!=originalProgressVersion) && !SameProgressEditorContent(progress.Html,originalProgressEditorHtml)) || referenceSnapshot()!=originalReferenceSnapshot);};
+                Func<bool> descriptionDirty=delegate{return !updateDiscarded && (descriptionEditor.IsPastePending || (descriptionEditor.ChangeVersion!=originalDescriptionVersion && !SameProgressEditorContent(descriptionEditor.Html,originalDescriptionEditorHtml)));};
                 Action<bool> setDescriptionExpanded=delegate(bool expanded){descriptionExpanded=expanded;descriptionEditor.Visible=descriptionActions.Visible=expanded;descriptionPanel.RowStyles[2].Height=expanded?38:0;layout.RowStyles[0].Height=expanded?260:42;descriptionToggle.Text=expanded?"收起任务描述":"查看/编辑任务描述";if(expanded)descriptionEditor.FocusEditor();};
                 Func<Task<bool>> writeDescription=async delegate {
-                    if(descriptionSaving || taskName.Saving)return false;if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
+                    if(descriptionSaving || taskName.Saving)return false;if(descriptionEditor.IsPastePending){feedback.Text="正在读取粘贴的图文，请完成后再保存。";return false;}if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
 
                     descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
                     try {
@@ -780,6 +780,7 @@ internal sealed partial class FloatingWindow : Form {
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};
                 Func<bool,Task<bool>> write=async delegate(bool finish) {
+                    if(progress.IsPastePending){feedback.Text="正在读取粘贴的图文，请完成后再保存。";return false;}
                     if(submitting || taskName.Saving || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
                     if(!progressDirty() && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return true;}
 

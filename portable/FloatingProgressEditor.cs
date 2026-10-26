@@ -60,6 +60,10 @@ public sealed class ProgressHtmlEditorBridge {
     public void NotifyPaste(){var callback=Pasted;if(callback!=null)callback();}
     internal Func<string> ReadClipboardHtml;
     internal Action<string> ClipboardError;
+    internal Func<Task<string>> ReadClipboardHtmlAsync;
+    internal Action<int,string> PasteCompleted;
+    public bool UsesAsyncClipboard(){return ReadClipboardHtmlAsync!=null;}
+    public async void RequestPasteHtml(int id){string html="";try{html=await ReadClipboardHtmlAsync();}catch(Exception error){if(ClipboardError!=null)ClipboardError(error.Message);}finally{if(PasteCompleted!=null)PasteCompleted(id,html);}}
     public string PasteHtml(){try{return ReadClipboardHtml();}catch(Exception error){if(ClipboardError!=null)ClipboardError(error.Message);return "";}}
     internal Func<string,string,bool> WriteClipboardHtml;
     public bool CopyHtml(string html,string text){try{if(WriteClipboardHtml!=null && WriteClipboardHtml(html,text))return true;if(ClipboardError!=null)ClipboardError("复制失败，剪贴板可能被其他程序占用，请重试。");}catch(Exception error){if(ClipboardError!=null)ClipboardError("复制失败："+error.Message);}return false;}
@@ -102,10 +106,12 @@ internal sealed class ProgressHtmlEditor : UserControl {
     internal event EventHandler<ProgressClipboardErrorEventArgs> ClipboardFailed;
     public event EventHandler<ProgressEditorImageEventArgs> ImageDoubleClicked;
 
-    public ProgressHtmlEditor():this(FloatingClipboard.Html) {}
+    public ProgressHtmlEditor():this(FloatingClipboard.HtmlAsync,true) {}
+    internal ProgressHtmlEditor(Func<Task<string>> readClipboardHtmlAsync,bool asyncClipboard):this(new Func<string>(()=>"")){bridge.ReadClipboardHtmlAsync=asyncClipboard?readClipboardHtmlAsync:null;}
     internal ProgressHtmlEditor(Func<string> readClipboardHtml):this(readClipboardHtml,FloatingClipboard.Copy) {}
     internal ProgressHtmlEditor(Func<string> readClipboardHtml,Func<string,string,bool> writeClipboardHtml) {
         bridge.ReadClipboardHtml=readClipboardHtml;bridge.WriteClipboardHtml=writeClipboardHtml;
+        bridge.PasteCompleted=delegate(int id,string html){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{if(!IsDisposed && ready && browser.Document!=null)browser.Document.InvokeScript("completeTaskTracePaste",new object[]{id,html});}));};
         bridge.ClipboardError=delegate(string message){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{var handler=ClipboardFailed;if(!IsDisposed && handler!=null)handler(this,new ProgressClipboardErrorEventArgs(message));}));};
         bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(NotifyChanged));};browser.ObjectForScripting=bridge;
         browser.ClipboardShortcut=HandleClipboardShortcut;
@@ -180,7 +186,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         if(editor == null) return;
         changing = true;
         editor.InnerHtml = pendingHtml ?? "";
-        browser.Document.InvokeScript("eval",new object[]{"taskTraceSavedRange=null;window.getSelection().removeAllRanges();"});
+        browser.Document.InvokeScript("eval",new object[]{"taskTraceSavedRange=null;resetTaskTracePastes();window.getSelection().removeAllRanges();"});
         browser.Document.InvokeScript("ensureTaskTraceImageCarets");
         observedHtml = CleanHtml(editor.InnerHtml);
         changing = false;
@@ -204,6 +210,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         set { pendingHtml = value ?? ""; ApplyHtml(); }
     }
 
+    internal bool IsPastePending {get{return ready && browser.Document!=null && Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"taskTracePasteOrder.length>0"}));}}
     public int ImageCount { get { return Regex.Matches(Html ?? "", @"<img\b", RegexOptions.IgnoreCase).Count; } }
     public int ChangeVersion { get { return changeVersion; } }
     internal int ImageDoubleClickCountForTest { get { return imageDoubleClickCount; } }

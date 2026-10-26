@@ -7,6 +7,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 internal static class FloatingClipboard {
@@ -34,22 +35,28 @@ internal static class FloatingClipboard {
         }finally{CloseClipboard();}
     }
 
-    internal static string Html() {
-        string text=null;bool files=false;
-        try {
-            text=Clipboard.ContainsText(TextDataFormat.UnicodeText)?Clipboard.GetText(TextDataFormat.UnicodeText):null;
-            byte[] bytes=HtmlBytes();
-            string html=bytes==null && Clipboard.ContainsText(TextDataFormat.Html)?Clipboard.GetText(TextDataFormat.Html):"";
-            html=PrepareHtml(bytes,html,text,Encoding.Default.CodePage);
-            if(html!="") {
-                if(Clipboard.ContainsImage())html=Regex.Replace(html,@"<img\b[^>]*>",delegate(Match match){return Regex.IsMatch(match.Value,@"(?:data:image/|/tasks/\d+/attachments/)",RegexOptions.IgnoreCase)?match.Value:ImageHtml();},RegexOptions.IgnoreCase);
-                return html;
-            }
-            if(Clipboard.ContainsFileDropList()){files=true;return FilesHtml(Clipboard.GetFileDropList());}
-            if(!String.IsNullOrEmpty(text))return TextHtml(text);
-            if(Clipboard.ContainsText() && !String.IsNullOrEmpty(Clipboard.GetText()))return TextHtml(Clipboard.GetText());
-            return ImageHtml();
-        }catch{if(files)throw;return text==null?"":TextHtml(text);}
+    internal static string Html(){return ReadData(Clipboard.GetDataObject(),HtmlBytes());}
+    internal static Task<string> HtmlAsync() {
+        var snapshot=SnapshotData(Clipboard.GetDataObject(),HtmlBytes());
+        return Task.Run(delegate{try{return ReadData(snapshot);}finally{DisposeCopyData(snapshot);}});
+    }
+    internal static DataObject SnapshotData(IDataObject source,byte[] rawHtml=null) {
+        var snapshot=new DataObject();if(source==null)return snapshot;
+        foreach(string format in new[]{DataFormats.UnicodeText,DataFormats.Rtf,DataFormats.FileDrop}){var value=source.GetData(format,true);var paths=value as string[];if(paths!=null)value=paths.Clone();if(value!=null)snapshot.SetData(format,false,value);}
+        var raw=rawHtml;if(raw==null){var value=source.GetData(DataFormats.Html,false);raw=StreamBytes(value as Stream);if(raw==null && value is string)snapshot.SetData(DataFormats.Html,false,value);}
+        if(raw!=null)snapshot.SetData(DataFormats.Html,false,new MemoryStream(raw,false));
+        var image=ImageBytes(source);if(image!=null)snapshot.SetData("PNG",false,new MemoryStream(image,false));
+        return snapshot;
+    }
+    internal static string ReadData(IDataObject data,byte[] rawHtml=null,Func<Uri,byte[]> readRemote=null) {
+        if(data==null)return "";
+        string html=FloatingClipboardMedia.Expand(HtmlData(data,rawHtml),data,readRemote);
+        if(html!="")return html;
+        var files=data.GetData(DataFormats.FileDrop,true) as string[];
+        if(files!=null){var paths=new System.Collections.Specialized.StringCollection();paths.AddRange(files);return FilesHtml(paths);}
+        string text=Convert.ToString(data.GetData(DataFormats.UnicodeText,true));
+        if(text!="")return TextHtml(text);
+        return BitmapHtml(data);
     }
 
     internal static string FilesHtml(System.Collections.Specialized.StringCollection paths) {
@@ -68,7 +75,8 @@ internal static class FloatingClipboard {
         string format="Version:1.0\r\nStartHTML:{0:D10}\r\nEndHTML:{1:D10}\r\nStartFragment:{2:D10}\r\nEndFragment:{3:D10}\r\n";
         int start=Encoding.UTF8.GetByteCount(String.Format(format,0,0,0,0)),fragment=start+Encoding.UTF8.GetByteCount(prefix),end=fragment+Encoding.UTF8.GetByteCount(html);
         var result=new DataObject();result.SetData(DataFormats.UnicodeText,true,text??"");
-        result.SetData(DataFormats.Html,false,String.Format(format,start,end+Encoding.UTF8.GetByteCount(suffix),fragment,end)+prefix+html+suffix);
+        // WinForms serializes HTML strings with the system ANSI encoding. CF_HTML offsets and content must stay UTF-8.
+        result.SetData(DataFormats.Html,false,new MemoryStream(Encoding.UTF8.GetBytes(String.Format(format,start,end+Encoding.UTF8.GetByteCount(suffix),fragment,end)+prefix+html+suffix+"\0"),false));
         var images=Regex.Matches(html??"",@"<img\b[^>]*>",RegexOptions.IgnoreCase);
         if(images.Count==1 && String.IsNullOrWhiteSpace(text)) {
             var match=Regex.Match(images[0].Value,@"\bsrc\s*=\s*['""](?<src>data:image/(?:png|jpe?g|gif|bmp);base64,[A-Za-z0-9+/=\s]+)['""]",RegexOptions.IgnoreCase);
@@ -83,14 +91,22 @@ internal static class FloatingClipboard {
         }
     }
     internal static DataObject CopyImageData(byte[] bytes){using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream)){return CopyData("<img src=\"data:image/png;base64,"+Convert.ToBase64String(PngBytes(image))+"\">","");}}
-    internal static void DisposeCopyData(DataObject data){foreach(string format in new[]{"PNG",DataFormats.Bitmap}){var value=data.GetData(format,false) as IDisposable;if(value!=null)value.Dispose();}}
+    internal static void DisposeCopyData(DataObject data){foreach(string format in new[]{DataFormats.Html,"PNG",DataFormats.Bitmap}){var value=data.GetData(format,false) as IDisposable;if(value!=null)value.Dispose();}}
     static bool WriteCopyData(DataObject data){try{Clipboard.SetDataObject(data,true,3,100);return true;}catch{return false;}finally{DisposeCopyData(data);}}
     internal static bool Copy(string html,string text){return WriteCopyData(CopyData(html,text));}
     internal static bool CopyImage(byte[] bytes){return WriteCopyData(CopyImageData(bytes));}
+    internal static byte[] StreamBytes(Stream stream) {
+        if(stream==null)return null;long position=stream.CanSeek?stream.Position:0;
+        try{if(stream.CanSeek)stream.Position=0;using(var bytes=new MemoryStream()){stream.CopyTo(bytes);return bytes.ToArray();}}finally{if(stream.CanSeek)stream.Position=position;}
+    }
+    internal static string HtmlData(IDataObject data,byte[] rawHtml=null) {
+        if(data==null)return "";var html=data.GetData(DataFormats.Html,false);
+        return PrepareHtml(rawHtml??StreamBytes(html as Stream),html as string,Convert.ToString(data.GetData(DataFormats.UnicodeText,true)),Encoding.Default.CodePage);
+    }
     internal static byte[] ImageBytes(IDataObject data) {
         if(data==null)return null;
         var png=data.GetData("PNG",false) as Stream;
-        if(png!=null){long position=png.CanSeek?png.Position:0;try{if(png.CanSeek)png.Position=0;using(var bytes=new MemoryStream()){png.CopyTo(bytes);return bytes.ToArray();}}finally{if(png.CanSeek)png.Position=position;}}
+        if(png!=null)return StreamBytes(png);
         var bitmap=data.GetData(DataFormats.Bitmap,true) as Image;return PngBytes(bitmap);
     }
     internal static byte[] ImageOnlyBytes(IDataObject data){string text=data==null?null:Convert.ToString(data.GetData(DataFormats.UnicodeText,true));return String.IsNullOrWhiteSpace(text)?ImageBytes(data):null;}
@@ -161,7 +177,6 @@ internal static class FloatingClipboard {
         int first=html.IndexOf('<');return first<0?"":html.Substring(first);
     }
 
-    static string ImageHtml(){return BitmapHtml(Clipboard.GetDataObject());}
     internal const string Script=@"
 function cleanTaskTracePaste(html){
  var root=document.createElement('div');root.innerHTML=html;var elements=root.querySelectorAll('*');
@@ -185,9 +200,13 @@ function taskTraceRange(){var editor=document.getElementById('progress-editor'),
 function rememberTaskTraceRange(){var range=taskTraceRange();if(range)taskTraceSavedRange=range;}
 function restoreTaskTraceRange(range){var editor=document.getElementById('progress-editor'),selection=window.getSelection();range=range||taskTraceRange()||taskTraceSavedRange;if(!range||!taskTraceInside(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}editor.focus();selection.removeAllRanges();selection.addRange(range);return range;}
 function insertTaskTraceHtml(html,range){var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false'||!html)return false;range=restoreTaskTraceRange(range);range.deleteContents();var holder=document.createElement('div');holder.innerHTML=html;var fragment=document.createDocumentFragment(),last;while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);if(last)range.setStartAfter(last);range.collapse(true);ensureTaskTraceImageCarets();var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);rememberTaskTraceRange();window.external.NotifyPaste();return true;}
+var taskTracePendingPastes={},taskTracePasteOrder=[],taskTracePasteSequence=0;
+function completeTaskTracePaste(id,html){var pending=taskTracePendingPastes[id];if(!pending)return;pending.html=html;pending.ready=true;while(taskTracePasteOrder.length){var first=taskTracePasteOrder[0],next=taskTracePendingPastes[first];if(!next||!next.ready)break;taskTracePasteOrder.shift();delete taskTracePendingPastes[first];var following=[];if(next.range.collapsed)for(var key in taskTracePendingPastes){var other=taskTracePendingPastes[key];if(other.range.collapsed&&other.range.compareBoundaryPoints(0,next.range)===0)following.push(other);}if(insertTaskTraceHtml(cleanTaskTracePaste(next.html),next.range))for(var i=0;i<following.length;i++)following[i].range=taskTraceSavedRange.cloneRange();}}
+function resetTaskTracePastes(){taskTracePendingPastes={};taskTracePasteOrder=[];}
 function pasteTaskTrace(e){e=e||window.event;if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}
  var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false')return false;
- var range=taskTraceRange()||taskTraceSavedRange,html=cleanTaskTracePaste(window.external.PasteHtml());insertTaskTraceHtml(html,range);return false;
+ var range=taskTraceRange()||taskTraceSavedRange;if(!range){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}
+ if(window.external.UsesAsyncClipboard()){var id=++taskTracePasteSequence;taskTracePendingPastes[id]={range:range.cloneRange(),ready:false};taskTracePasteOrder.push(id);window.external.RequestPasteHtml(id);}else insertTaskTraceHtml(cleanTaskTracePaste(window.external.PasteHtml()),range);return false;
 }
 function copyTaskTrace(e,cut){var editor=document.getElementById('progress-editor'),range=taskTraceRange()||taskTraceSavedRange;if(!range||range.collapsed)return true;var holder=document.createElement('div');holder.appendChild(range.cloneContents());var images=holder.getElementsByTagName('img');for(var i=0;i<images.length;i++)images[i].removeAttribute('data-tasktrace-src');var html=holder.innerHTML.replace(/\u200b/g,''),text=(holder.innerText||holder.textContent||'').replace(/\u200b/g,'');if(!window.external.CopyHtml(html,text)){if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}return false;}if(e){if(e.preventDefault)e.preventDefault();e.returnValue=false;}if(cut&&editor.getAttribute('contenteditable')!=='false'){range.deleteContents();rememberTaskTraceRange();window.external.NotifyPaste();}return false;}
 function selectTaskTraceImage(e){e=e||window.event;var image=e.srcElement||e.target;if(!image||String(image.tagName).toLowerCase()!=='img'||e.button===2)return true;document.getElementById('progress-editor').focus();var range=document.createRange(),selection=window.getSelection();range.selectNode(image);var saved=range.cloneRange();selection.removeAllRanges();selection.addRange(range);taskTraceSavedRange=saved;if(e.preventDefault)e.preventDefault();e.returnValue=false;return false;}
