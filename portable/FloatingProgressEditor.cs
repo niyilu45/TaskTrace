@@ -75,8 +75,16 @@ internal sealed class ProgressEditorImageEventArgs : EventArgs {
     public ProgressEditorImageEventArgs(string source,string retainedSource) {Source=source??"";RetainedSource=retainedSource??"";}
 }
 
+internal sealed class ProgressEditorBrowser : WebBrowser {
+    internal Func<Keys,bool> ClipboardShortcut;
+    protected override bool ProcessCmdKey(ref Message message,Keys keyData) {
+        return (ClipboardShortcut!=null && ClipboardShortcut(keyData)) || base.ProcessCmdKey(ref message,keyData);
+    }
+    internal bool ShortcutForTest(Keys keyData){var message=new Message();return ProcessCmdKey(ref message,keyData);}
+}
+
 internal sealed class ProgressHtmlEditor : UserControl {
-    readonly WebBrowser browser = new WebBrowser { Dock = DockStyle.Fill, AllowWebBrowserDrop = false, IsWebBrowserContextMenuEnabled = false, WebBrowserShortcutsEnabled = true, ScriptErrorsSuppressed = true };
+    readonly ProgressEditorBrowser browser = new ProgressEditorBrowser { Dock = DockStyle.Fill, AllowWebBrowserDrop = false, IsWebBrowserContextMenuEnabled = false, WebBrowserShortcutsEnabled = true, ScriptErrorsSuppressed = true };
     readonly ContextMenuStrip clipboardMenu=new ContextMenuStrip();
     readonly ToolStripSeparator imageCopySeparator=new ToolStripSeparator();
     readonly ToolStripMenuItem copyImageMenu=new ToolStripMenuItem("复制图片");
@@ -100,6 +108,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         bridge.ReadClipboardHtml=readClipboardHtml;bridge.WriteClipboardHtml=writeClipboardHtml;
         bridge.ClipboardError=delegate(string message){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{var handler=ClipboardFailed;if(!IsDisposed && handler!=null)handler(this,new ProgressClipboardErrorEventArgs(message));}));};
         bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(NotifyChanged));};browser.ObjectForScripting=bridge;
+        browser.ClipboardShortcut=HandleClipboardShortcut;
         Controls.Add(browser);
         clipboardMenu.Items.AddRange(new ToolStripItem[]{copyImageMenu,imageCopySeparator,copyTextMenu,cutTextMenu,pasteTextMenu});
         clipboardMenu.Items.Add("全选",null,delegate{browser.Document.InvokeScript("selectAllTaskTrace");});
@@ -123,7 +132,14 @@ internal sealed class ProgressHtmlEditor : UserControl {
             ApplyHtml();
             SetReadOnly(readOnly);
         };
-        browser.DocumentText = "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceOpenImage(e){e=e||window.event;var image=e.srcElement||e.target;if(!image||String(image.tagName).toLowerCase()!=='img')return true;window.external.OpenImage(image.src||'',image.getAttribute('data-tasktrace-src')||'');if(e.preventDefault)e.preventDefault();e.returnValue=false;return false;}function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var range=taskTraceRange()||taskTraceSavedRange;insertTaskTraceHtml('<img src=\"'+src+'\">',range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>".Replace("</head>","<script>"+FloatingClipboard.Script+"</script></head>").Replace("contenteditable=\"true\"", "contenteditable=\"true\" onpaste=\"return pasteTaskTrace(event)\" oncopy=\"return copyTaskTrace(event,false)\" oncut=\"return copyTaskTrace(event,true)\" onmousedown=\"return selectTaskTraceImage(event)\" onmouseup=\"rememberTaskTraceRange()\" onkeyup=\"rememberTaskTraceRange()\"");
+        browser.DocumentText = "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceOpenImage(e){e=e||window.event;var image=e.srcElement||e.target;if(!image||String(image.tagName).toLowerCase()!=='img')return true;window.external.OpenImage(image.src||'',image.getAttribute('data-tasktrace-src')||'');if(e.preventDefault)e.preventDefault();e.returnValue=false;return false;}function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var range=taskTraceRange()||taskTraceSavedRange;insertTaskTraceHtml('<img src=\"'+src+'\">',range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>".Replace("</head>","<script>"+FloatingClipboard.Script+"</script></head>").Replace("contenteditable=\"true\"", "contenteditable=\"true\" onpaste=\"return pasteTaskTrace(event)\" onmousedown=\"return selectTaskTraceImage(event)\" onmouseup=\"rememberTaskTraceRange()\" onkeyup=\"rememberTaskTraceRange()\"");
+    }
+
+    bool HandleClipboardShortcut(Keys keyData) {
+        if(!ready || browser.Document==null)return false;
+        if(keyData==(Keys.Control|Keys.A) || keyData==(Keys.Alt|Keys.A)){browser.Document.InvokeScript("selectAllTaskTrace");return true;}
+        if(keyData==(Keys.Control|Keys.C) || keyData==(Keys.Control|Keys.X))return !Convert.ToBoolean(browser.Document.InvokeScript("copyTaskTrace",new object[]{null,keyData==(Keys.Control|Keys.X)}));
+        return false;
     }
 
     void SetContextImage(HtmlElement element) {

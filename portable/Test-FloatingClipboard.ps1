@@ -57,8 +57,8 @@ static class FloatingClipboardTests {
         Console.WriteLine("PASS UTF-8/GBK/UTF-16, byte offsets, Unicode fallback, reversible mojibake, entities, fragment markers, blank lines and indentation.");
     }
     static async Task EditorCases(Form host) {
-        string payload="",copiedHtml="",copiedText="";DataObject copiedData=null;bool disturbSelection=false;WebBrowser currentBrowser=null;
-        using(var editor=new ProgressHtmlEditor(()=>{if(disturbSelection && currentBrowser!=null)currentBrowser.Document.InvokeScript("eval",new object[]{"var r=document.createRange();r.selectNodeContents(document.body);r.collapse(false);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"});return payload;},(html,text)=>{if(copiedData!=null)FloatingClipboard.DisposeCopyData(copiedData);var exported=copiedData=FloatingClipboard.CopyData(html,text);copiedHtml=FloatingClipboard.PrepareHtml(null,(string)exported.GetData(DataFormats.Html),text,936);copiedText=(string)exported.GetData(DataFormats.UnicodeText);return true;}){Dock=DockStyle.Fill}) {
+        string payload="",copiedHtml="",copiedText="";DataObject copiedData=null;int copyWrites=0;bool allowCopy=true,disturbSelection=false;WebBrowser currentBrowser=null;
+        using(var editor=new ProgressHtmlEditor(()=>{if(disturbSelection && currentBrowser!=null)currentBrowser.Document.InvokeScript("eval",new object[]{"var r=document.createRange();r.selectNodeContents(document.body);r.collapse(false);var s=window.getSelection();s.removeAllRanges();s.addRange(r);"});return payload;},(html,text)=>{if(!allowCopy)return false;if(copiedData!=null)FloatingClipboard.DisposeCopyData(copiedData);var exported=copiedData=FloatingClipboard.CopyData(html,text);copiedHtml=FloatingClipboard.PrepareHtml(null,(string)exported.GetData(DataFormats.Html),text,936);copiedText=(string)exported.GetData(DataFormats.UnicodeText);copyWrites++;return true;}){Dock=DockStyle.Fill}) {
             host.Controls.Add(editor);var browser=(WebBrowser)editor.Controls[0];currentBrowser=browser;
             for(int i=0;i<100 && (browser.Document==null || browser.Document.GetElementById("progress-editor")==null);i++)await Task.Delay(40);
             Require(browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Editor did not load");
@@ -91,7 +91,9 @@ static class FloatingClipboardTests {
             Require(editor.Html.Contains("甲替换乙") && !editor.Html.Contains("删除"),"Pasting did not replace exactly the selected text");
             string fileData="data:application/octet-stream;base64,AQIDBA==";
             editor.Html="<p>图前<img src='"+picture+"' data-tasktrace-src='/api/v1/tasks/3/attachments/8'>图中<img src='"+picture+"'>图后<a href='"+fileData+"' download='检查记录.txt'>检查记录.txt</a></p>";
-            browser.Document.InvokeScript("eval",new object[]{"var r=document.createRange(),s=window.getSelection();r.selectNodeContents(document.getElementById('progress-editor'));s.removeAllRanges();s.addRange(r);copyTaskTrace({preventDefault:function(){}},false);"});
+            browser.Document.InvokeScript("eval",new object[]{"var outside=document.createElement('p');outside.id='outside-editor';outside.innerText='不应复制的窗口文字';document.body.appendChild(outside);var r=document.createRange(),s=window.getSelection();r.selectNodeContents(document.body);s.removeAllRanges();s.addRange(r);var copy=document.createEvent('Event');copy.initEvent('copy',true,true);window.nativeCopyContinued=document.body.dispatchEvent(copy);"});
+            Require(copyWrites==1 && !copiedHtml.Contains("不应复制的窗口文字") && !Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"window.nativeCopyContinued"})),"Page-wide copy escaped the editor, ran twice or fell through to native text-only copy");
+            Require(copiedHtml.Contains(picture) && System.Text.RegularExpressions.Regex.Matches(copiedHtml,"<img\\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count==2,"Page-wide select-all/copy lost inline images or bypassed the editor clipboard handler");
             Require(copiedHtml.Contains(fileData) && copiedHtml.Contains("download=") && !copiedHtml.Contains("data-tasktrace-src"),"Copy leaked a source-task attachment address or lost a file");
             Require(copiedText.Contains("图前") && copiedText.Contains("检查记录.txt") && !copiedText.Contains("\u200b"),"Copy lost Unicode text or included invisible caret markers");
             using(var destination=new ProgressHtmlEditor(()=>copiedHtml){Dock=DockStyle.Fill}) {
@@ -104,6 +106,41 @@ static class FloatingClipboardTests {
                 Require(pasted.IndexOf("目标开头")<pasted.IndexOf("图前") && pasted.IndexOf("图后")<pasted.IndexOf("目标结尾"),"Cross-window paste changed the caret position or interleaved layout");
                 host.Controls.Remove(destination);
             }
+            var nativeBrowser=(ProgressEditorBrowser)browser;string allContent=editor.Html;int allVersion=editor.ChangeVersion;
+            foreach(bool readOnlyAll in new[]{false,true})foreach(Keys allKey in new[]{Keys.Control|Keys.A,Keys.Alt|Keys.A}) {
+                editor.SetReadOnly(readOnlyAll);copiedHtml="";int previousWrites=copyWrites;
+                Require(nativeBrowser.ShortcutForTest(allKey),"Select-all shortcut was not handled: "+allKey);
+                Require(nativeBrowser.ShortcutForTest(Keys.Control|Keys.C),"Copy shortcut was not handled after select-all");
+                Require(copyWrites==previousWrites+1 && System.Text.RegularExpressions.Regex.Matches(copiedHtml,"<img\\b",System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count==2 && copiedHtml.Contains(fileData),"Shortcut select-all lost images/files or copied twice: "+allKey);
+                Require(copiedText.Contains("图前") && copiedText.Contains("图后") && !copiedHtml.Contains("不应复制的窗口文字"),"Select-all shortcut included unrelated page content or lost text");
+                Require(editor.Html==allContent && editor.ChangeVersion==allVersion,"Select-all/copy changed source content or its dirty state");
+            }
+            foreach(bool altAll in new[]{false,true}) {
+                copiedHtml="";int previousWrites=copyWrites;
+                browser.Document.InvokeScript("eval",new object[]{"function testClipboardKey(code,ctrl,alt){var e=document.createEvent('Event');e.initEvent('keydown',true,true);Object.defineProperty(e,'keyCode',{value:code});Object.defineProperty(e,'ctrlKey',{value:ctrl});Object.defineProperty(e,'altKey',{value:alt});return document.getElementById('progress-editor').dispatchEvent(e);}window.allKeyContinued=testClipboardKey(65,"+(altAll?"false,true":"true,false")+");window.copyKeyContinued=testClipboardKey(67,true,false);"});
+                Require(copyWrites==previousWrites+1 && copiedHtml.Contains(picture) && copiedHtml.Contains(fileData),"Browser DOM keyboard route lost select-all media");
+                Require(!Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"window.allKeyContinued||window.copyKeyContinued"})),"Browser keyboard route fell through to native select-all/copy");
+            }
+            editor.SetReadOnly(false);
+            browser.Document.InvokeScript("eval",new object[]{"document.getElementById('outside-editor').parentNode.removeChild(document.getElementById('outside-editor'));"});
+            using(var destination=new ProgressHtmlEditor(()=>copiedHtml){Dock=DockStyle.Fill}) {
+                host.Controls.Add(destination);destination.BringToFront();var target=(WebBrowser)destination.Controls[0];
+                for(int i=0;i<100 && (target.Document==null || target.Document.GetElementById("progress-editor")==null);i++)await Task.Delay(40);
+                target.Document.InvokeScript("eval",new object[]{"pasteTaskTrace({preventDefault:function(){}});"});
+                string result=destination.Html;
+                Require(destination.ImageCount==2 && result.Contains(fileData) && result.IndexOf("图前")<result.IndexOf("<img") && result.LastIndexOf("<img")<result.IndexOf("图后"),"Pasting shortcut select-all content into another editor lost images/files or changed their layout");
+                host.Controls.Remove(destination);
+            }
+            browser.Document.InvokeScript("eval",new object[]{"var t=document.getElementById('progress-editor').firstChild.firstChild,r=document.createRange(),s=window.getSelection();r.setStart(t,0);r.setEnd(t,2);s.removeAllRanges();s.addRange(r);"});
+            nativeBrowser.ShortcutForTest(Keys.Control|Keys.C);
+            Require(copiedText=="图前" && !copiedHtml.Contains("<img"),"Partial text copy unexpectedly included the full document or images");
+            nativeBrowser.ShortcutForTest(Keys.Control|Keys.A);allowCopy=false;nativeBrowser.ShortcutForTest(Keys.Control|Keys.X);allowCopy=true;
+            Require(editor.Html==allContent && editor.ChangeVersion==allVersion,"Failed cut deleted unsaved text or images");
+            int beforeCut=copyWrites;
+            browser.Document.InvokeScript("eval",new object[]{"var cut=document.createEvent('Event');cut.initEvent('cut',true,true);document.body.dispatchEvent(cut);"});
+            await Task.Delay(40);
+            Require(copyWrites==beforeCut+1 && editor.ImageCount==0 && !editor.Html.Contains("检查记录.txt") && copiedHtml.Contains(fileData),"Whole-document cut ran twice, failed to clear selection or lost file/image bytes");
+            Console.WriteLine("PASS Ctrl+A/Alt+A plus Ctrl+C through native and browser keys, bounded page-wide copy/cut, read-only select-all, partial selection, failed-cut recovery and two-image/file paste into another editor.");
             editor.Html="<p>备注前<img src='"+picture+"'>备注后</p>";int beforeCopy=editor.ChangeVersion;string beforeHtml=editor.Html;
             browser.Document.InvokeScript("eval",new object[]{"var image=document.getElementById('progress-editor').getElementsByTagName('img')[0],mouse=document.createEvent('MouseEvents');mouse.initMouseEvent('mousedown',true,true,window,1,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(mouse);"});
             Require(Convert.ToBoolean(browser.Document.InvokeScript("taskTraceHasSelection")),"Clicking a note image left a collapsed selection: "+Convert.ToString(browser.Document.InvokeScript("eval",new object[]{"String(document.getElementById('progress-editor').getAttribute('onmousedown'))+' range='+window.getSelection().rangeCount+' saved='+(taskTraceSavedRange?taskTraceSavedRange.collapsed:'none')"})));
