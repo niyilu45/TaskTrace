@@ -2,7 +2,7 @@
 
 基于 [Vikunja](https://github.com/go-vikunja/vikunja) 二次开发的事项与项目进展跟踪工具，提供 Windows 置顶悬浮窗和完整网页界面。
 
-**[从源码生成免安装版](https://github.com/niyilu45/TaskTrace/tree/main/dist)** · **[下载正式发布版](https://github.com/niyilu45/TaskTrace/releases)** · **[下载源码](https://github.com/niyilu45/TaskTrace/archive/refs/heads/main.zip)** · **[反馈问题](https://github.com/niyilu45/TaskTrace/issues)**
+**[快速指南](QuickStart.md)** · **[从源码生成免安装版](https://github.com/niyilu45/TaskTrace/tree/main/dist)** · **[下载正式发布版](https://github.com/niyilu45/TaskTrace/releases)** · **[下载源码](https://github.com/niyilu45/TaskTrace/archive/refs/heads/main.zip)** · **[反馈问题](https://github.com/niyilu45/TaskTrace/issues)**
 
 ## 使用软件
 
@@ -11,7 +11,7 @@
 3. 启动后只显示悬浮窗，不会主动打开浏览器；需要完整界面时点击悬浮窗或托盘菜单中的“完整界面”。无需安装 Node.js、Go、Docker 或数据库，无需注册登录。
 4. 点击悬浮窗关闭按钮或最小化按钮会隐藏到系统托盘；真正退出请在托盘菜单选择“退出 TaskTrace”。
 
-当前测试版面向 Windows x64、本机单人使用，仅监听本机地址。多人协作需另行部署带账号登录的共享服务，不能直接通过此免登录体验包联网使用。
+本版本面向 Windows x64，网页服务仅监听本机地址。多人协作通过 Windows 共享的 `teamData` 文件夹在局域网内交换任务，每个人仍使用自己的本地工作区；操作步骤见 [快速指南](QuickStart.md#5-团队协作)。
 
 ## 已支持
 
