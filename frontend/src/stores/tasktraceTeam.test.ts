@@ -184,7 +184,7 @@ describe('TaskTrace team bindings', () => {
 		expect(tasksTeamShare).toHaveBeenCalledTimes(2)
 	})
 
-	it('persists a resolved identity for an existing teamData member', async () => {
+	it('resolves an existing member identity without changing Windows permissions', async () => {
 		const unresolvedStatus = {
 			enabled: true,
 			username: 'current',
@@ -202,9 +202,8 @@ describe('TaskTrace team bindings', () => {
 		const store = useTasktraceTeamStore()
 		await store.refresh()
 
-		await vi.waitFor(() => expect(tasktraceTeamMembersAccessCreate).toHaveBeenCalledWith(expect.objectContaining({
-			body: expect.objectContaining({account_name: 'CHINA\\654321', display_name: '张三'}),
-		})))
+		await vi.waitFor(() => expect(store.displayNameFor('654321')).toBe('张三'))
+		expect(tasktraceTeamMembersAccessCreate).not.toHaveBeenCalled()
 		expect(store.displayNameFor('654321')).toBe('张三')
 	})
 

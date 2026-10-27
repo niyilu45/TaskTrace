@@ -13,9 +13,11 @@ import (
 // This cache is only for the candidate list shown in the UI. Granting or
 // revoking access still runs the real Windows permission operation every time.
 type taskTraceTeamAccessCache struct {
-	mu      sync.Mutex
-	entries map[string]*taskTraceTeamAccessCacheEntry
-	now     func() time.Time
+	mu         sync.Mutex
+	entries    map[string]*taskTraceTeamAccessCacheEntry
+	shared     map[string]bool
+	sharePaths map[string]string
+	now        func() time.Time
 }
 
 type taskTraceTeamAccessCacheEntry struct {
@@ -152,5 +154,39 @@ func (cache *taskTraceTeamAccessCache) cached(root string) ([]TaskTraceTeamRepos
 func (cache *taskTraceTeamAccessCache) invalidate(root string) {
 	cache.mu.Lock()
 	delete(cache.entries, taskTraceTeamAccessCacheKey(root))
+	delete(cache.shared, taskTraceTeamAccessCacheKey(root))
+	delete(cache.sharePaths, taskTraceTeamAccessCacheKey(root))
 	cache.mu.Unlock()
+}
+
+// The sharing bit comes from the same Windows scan as the member ACLs. It must
+// never be inferred from a saved repository manifest or a nonempty NTFS ACL.
+func (cache *taskTraceTeamAccessCache) recordShared(root string, shared bool) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.shared == nil {
+		cache.shared = make(map[string]bool)
+	}
+	cache.shared[taskTraceTeamAccessCacheKey(root)] = shared
+}
+
+func (cache *taskTraceTeamAccessCache) isShared(root string) bool {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.shared[taskTraceTeamAccessCacheKey(root)]
+}
+
+func (cache *taskTraceTeamAccessCache) recordSharePath(root, path string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.sharePaths == nil {
+		cache.sharePaths = make(map[string]string)
+	}
+	cache.sharePaths[taskTraceTeamAccessCacheKey(root)] = path
+}
+
+func (cache *taskTraceTeamAccessCache) sharePath(root string) string {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.sharePaths[taskTraceTeamAccessCacheKey(root)]
 }

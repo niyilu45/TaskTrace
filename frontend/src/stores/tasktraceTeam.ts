@@ -24,6 +24,7 @@ import {
 	type TaskTraceTeamStatus,
 } from '@/client/generated'
 import {overrideTeamLinkRepository} from '@/helpers/tasktraceTeam'
+import {isTeamAccessCancelled, needsTeamAccessConsent, teamAccessHeaders, withTeamAccessConsent} from '@/helpers/tasktraceTeamAccess'
 import {
 	mergeTeamMemberCandidates,
 	teamMemberDisplayName,
@@ -122,17 +123,27 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return operation
 	}
 
-	async function refresh(force = false) {
-		if (!force && loaded.value && Date.now() - lastReadAt < 2000 && pending === 0) return status.value
-		return run(signal => tasktraceTeamStatus({signal}), 'read')
+	async function refresh(force = false, scanAccess = false) {
+		if (!force && !scanAccess && loaded.value && Date.now() - lastReadAt < 2000 && pending === 0) return status.value
+		if (scanAccess) activeRead = null
+		return run(signal => tasktraceTeamStatus({signal, headers: scanAccess ? {'X-TaskTrace-Refresh-Access': true} : undefined}), 'read')
 	}
 
 	async function sync() {
 		return run(signal => tasktraceTeamSync({signal}), 'sync')
 	}
 
+	async function accessAction<T>(action: Parameters<typeof withTeamAccessConsent<T>>[0], label: string) {
+		try {
+			return await withTeamAccessConsent(action, label)
+		} catch (cause) {
+			if (isTeamAccessCancelled(cause)) return false as const
+			throw cause
+		}
+	}
+
 	async function share(taskId: number, members: string[]) {
-		return run(signal => tasksTeamShare({path: {task: taskId}, body: {members}, signal}))
+		return accessAction(consent => run(signal => tasksTeamShare({path: {task: taskId}, body: {members}, headers: teamAccessHeaders(consent), signal}), 'write', consent.elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT * Math.max(1, members.length) : TEAM_WRITE_TIMEOUT), '更新协作成员')
 	}
 
 	async function importLink(link: string, projectId: number, repository = '') {
@@ -144,12 +155,12 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function configurePermissions(shareId: string, taskId: number, outstandingId: string, permissions: TaskTraceTeamPermissionUpdate[]) {
-		return run(signal => tasktraceTeamPermissionsConfigure({body: {
+		return accessAction(consent => run(signal => tasktraceTeamPermissionsConfigure({body: {
 			share_id: shareId,
 			task_id: taskId,
 			outstanding_id: outstandingId,
 			permissions,
-		}, signal}))
+		}, headers: teamAccessHeaders(consent), signal}), 'write', consent.elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT : TEAM_WRITE_TIMEOUT), '更新协作权限')
 	}
 
 	async function resolve(shareId: string, resolutions: TaskTraceTeamResolution[]) {
@@ -218,16 +229,6 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()]
 	}
 
-	function hasKnownTeamDataAccess(member: string) {
-		const key = teamMemberKey(member)
-		if (!key || key === teamMemberKey(status.value.username)) return false
-		return [
-			...(status.value.repository?.candidates ?? []),
-			...(status.value.unassigned_members ?? []),
-			...(status.value.bindings ?? []).flatMap(binding => [binding.owner, ...(binding.members ?? [])]),
-		].some(candidate => teamMemberKey(candidate) === key)
-	}
-
 	type TeamAccessLevel = 'read' | 'write'
 	type RepositoryAccessMember = {account_name?: string, access?: TeamAccessLevel}
 
@@ -240,7 +241,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return repositoryAccessMembers().find(item => teamMemberKey(item.account_name) === teamMemberKey(member))?.access
 	}
 
-	function memberAccessOptions(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write') {
+	function memberAccessOptions(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write', createShare = false) {
 		const candidate = typeof member === 'string' ? memberProfile(member) : member
 		const accountName = candidate.account_name || candidate.username
 		if (!accountName) throw new Error('缺少 Windows 账户名，无法设置 teamData 权限。')
@@ -252,7 +253,7 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 				email: candidate.email,
 				access,
 			},
-			headers: elevate ? {'X-TaskTrace-Elevate': true as const} : undefined,
+			headers: teamAccessHeaders({elevate, createShare}),
 		}
 	}
 
@@ -266,23 +267,65 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			// Explicit user searches still run immediately.
 			profileRetryAfter.set(key, Date.now() + 300_000)
 			hydratingProfiles.add(key)
+			// Resolving a display name must never grant or rewrite Windows permissions.
 			void searchMembers(key)
-				.then(async candidates => {
-					const candidate = candidates.find(item => teamMemberKey(item.account_name || item.username || item.email) === key)
-					if (!candidate || !hasKnownTeamDataAccess(member)) return
-					await run(signal => tasktraceTeamMembersAccessCreate({...memberAccessOptions(candidate, false, maximumAccessFor(member) ?? 'write'), signal}))
-				})
 				.catch(() => undefined)
 				.finally(() => hydratingProfiles.delete(key))
 		}
 	}
 
-	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write') {
+	async function grantMember(member: TaskTraceTeamMemberCandidate | string, elevate = false, access: TeamAccessLevel = 'write', createShare = false) {
 		return run(
-			signal => tasktraceTeamMembersAccessCreate({...memberAccessOptions(member, elevate, access), signal}),
+			signal => tasktraceTeamMembersAccessCreate({...memberAccessOptions(member, elevate, access, createShare), signal}),
 			'write',
 			elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT : TEAM_WRITE_TIMEOUT,
 		)
+	}
+
+	async function grantMemberWithConsent(member: TaskTraceTeamMemberCandidate | string, access: TeamAccessLevel = 'write') {
+		const result = await accessAction(
+			consent => grantMember(member, consent.elevate, access, consent.createShare),
+			`为 ${typeof member === 'string' ? displayNameFor(member) : teamMemberDisplayName(member)} 设置 teamData ${access === 'write' ? '读写' : '仅读'}权限`,
+		)
+		if (result && typeof member !== 'string') rememberMemberProfiles([member])
+		return result
+	}
+
+	async function setMemberAccessWithConsent(member: TaskTraceTeamMemberCandidate | string, access: TeamAccessLevel) {
+		return grantMemberWithConsent(member, access)
+	}
+
+	async function removeMemberWithConsent(member: string) {
+		return accessAction(consent => removeMember(member, consent.elevate), `删除 ${displayNameFor(member)} 的 teamData 权限`)
+	}
+
+	async function ensureMemberAccess(members: string[], access: TeamAccessLevel = 'write') {
+		for (const member of uniqueMembers(members)) {
+			if (teamMemberKey(member) === teamMemberKey(status.value.username)) continue
+			const current = maximumAccessFor(member)
+			// Binding membership alone is not evidence of Windows share permission.
+			if (status.value.repository?.shared !== false && (current === 'write' || current === access)) continue
+			if (!await grantMemberWithConsent(member, access)) return false
+		}
+		return true
+	}
+
+	let reconcilingAccess: Promise<string[]> | null = null
+	async function reconcileMemberAccess(): Promise<string[]> {
+		if (reconcilingAccess) return reconcilingAccess
+		reconcilingAccess = (async () => {
+			// The backend compares current NTFS/SMB rights with effective task rights.
+			// A task member can be known while still lacking local repository access.
+			const pendingMembers = [...(status.value.repository?.pending_members ?? [])]
+			const added: string[] = []
+			for (const member of pendingMembers) {
+				if (!member.account_name || teamMemberKey(member.account_name) === teamMemberKey(status.value.username)) continue
+				if (!await grantMemberWithConsent(member.account_name, member.access === 'write' ? 'write' : 'read')) break
+				added.push(member.account_name)
+			}
+			return added
+		})().finally(() => { reconcilingAccess = null })
+		return reconcilingAccess
 	}
 
 	async function setMemberAccess(member: TaskTraceTeamMemberCandidate | string, access: TeamAccessLevel, elevate = false) {
@@ -313,7 +356,23 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		try {
 			const result = await operation
 			if (result.data.status) apply(result.data.status, sequence)
-			return result.data
+			// Member-link imports preserve partial successes. Retry only permission
+			// failures through the same explicit sharing/UAC flow as a searched member.
+			const added = [...(result.data.added ?? [])]
+			const failed = [] as NonNullable<TaskTraceTeamMemberImportResult['failed']>
+			for (const failure of result.data.failed ?? []) {
+				if (!failure.username || !needsTeamAccessConsent({message: failure.reason})) {
+					failed.push(failure)
+					continue
+				}
+				try {
+					if (await grantMemberWithConsent(failure.username)) added.push(failure.username)
+					else failed.push(failure)
+				} catch (cause) {
+					failed.push({...failure, reason: cause instanceof Error ? cause.message : failure.reason})
+				}
+			}
+			return {...result.data, status: status.value, added: uniqueMembers(added), failed}
 		} finally {
 			mutations.delete(operation)
 			pending--
@@ -348,11 +407,11 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function configureAssignees(shareId: string, taskId: number, assignees: string[]) {
-		return run(signal => tasktraceTeamPermissionsConfigure({body: {
+		return accessAction(consent => run(signal => tasktraceTeamPermissionsConfigure({body: {
 			share_id: shareId,
 			task_id: taskId,
 			assignees,
-		}, signal}))
+		}, headers: teamAccessHeaders(consent), signal}), 'write', consent.elevate ? TEAM_ELEVATED_ACCESS_TIMEOUT : TEAM_WRITE_TIMEOUT), '更新受理人权限')
 	}
 
 	const conflictCount = computed(() => status.value.conflicts?.length ?? 0)
@@ -381,5 +440,5 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 		return [...members.values()].sort((left, right) => left.localeCompare(right, 'zh-CN'))
 	})
 
-	return {status, loading, loaded, conflictCount, notificationCount, unreadNotificationCount, activityCount, memberRoster, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, markNotificationsRead, searchMembers, grantMember, setMemberAccess, maximumAccessFor, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
+	return {status, loading, loaded, conflictCount, notificationCount, unreadNotificationCount, activityCount, memberRoster, reconcileMemberAccess, ensureMemberAccess, grantMemberWithConsent, setMemberAccessWithConsent, removeMemberWithConsent, refresh, sync, share, importLink, configure, configurePermissions, configureAssignees, resolve, dismissNotifications, markNotificationsRead, searchMembers, grantMember, setMemberAccess, maximumAccessFor, removeMember, importMembers, bindingForTask, permissionForTask, canWriteTask, refreshWritePermission, memberProfile, displayNameFor, identityTitleFor, avatarFor, uniqueMembers, memberKey: teamMemberKey}
 })

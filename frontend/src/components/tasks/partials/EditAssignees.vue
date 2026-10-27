@@ -138,7 +138,7 @@ async function addAssignee(user: IUser) {
 		if (teamMode.value && binding.value?.share_id) {
 			if (!canManageTeamAssignees.value) return
 			const usernames = [...new Set([...assignees.value.map(item => item.username), user.username].filter(Boolean))]
-			await teamStore.configureAssignees(binding.value.share_id, props.taskId, usernames)
+			if (!await teamStore.configureAssignees(binding.value.share_id, props.taskId, usernames)) return
 			syncTeamAssignees()
 			success({message: t('task.assignee.assignSuccess')})
 			return
@@ -159,7 +159,7 @@ async function removeAssignee(user: IUser) {
 	try {
 		if (teamMode.value && binding.value?.share_id) {
 			if (!canManageTeamAssignees.value) return
-			await teamStore.configureAssignees(binding.value.share_id, props.taskId, assignees.value.filter(item => teamStore.memberKey(item.username) !== teamStore.memberKey(user.username)).map(item => item.username))
+			if (!await teamStore.configureAssignees(binding.value.share_id, props.taskId, assignees.value.filter(item => teamStore.memberKey(item.username) !== teamStore.memberKey(user.username)).map(item => item.username))) return
 			syncTeamAssignees()
 			success({message: t('task.assignee.unassignSuccess')})
 			return

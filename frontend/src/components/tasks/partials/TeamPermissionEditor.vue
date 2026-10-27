@@ -178,7 +178,7 @@ import type {
 	TaskTraceTeamBindingStatus,
 	TaskTraceTeamPermissionTarget,
 } from '@/client/generated'
-import {error, getErrorText, success} from '@/message'
+import {error, success} from '@/message'
 import {useTasktraceTeamStore} from '@/stores/tasktraceTeam'
 
 type EditablePermission = {
@@ -266,28 +266,13 @@ function initials(username: string) {
 	return username.trim().slice(0, 2).toUpperCase() || '?'
 }
 
-function needsAdministratorAuthorization(cause: unknown) {
-	const value = cause as {status?: number, response?: {status?: number}, reason?: {response?: {status?: number}}}
-	const status = value?.reason?.response?.status ?? value?.response?.status ?? value?.status
-	const message = getErrorText(cause).toLowerCase()
-	return status === 403 || ['windows administrator authorization required', '需要 windows 管理员授权', 'access is denied', 'access denied', '拒绝访问', '系统错误 5'].some(marker => message.includes(marker))
-}
-
 async function ensureMaximumAccess() {
 	for (const permission of draftPermissions.value) {
 		const required = permission.write ? 'write' : permission.read ? 'read' : undefined
 		if (!required) continue
 		const current = teamStore.maximumAccessFor(permission.username)
 		if (current === 'write' || current === required) continue
-		const profile = teamStore.memberProfile(permission.username)
-		try {
-			await teamStore.setMemberAccess(profile, required)
-		} catch (cause) {
-			if (!needsAdministratorAuthorization(cause)) throw cause
-			const confirmed = window.confirm(`为 ${teamStore.displayNameFor(permission.username)} 开放${required === 'write' ? '读写' : '仅读'}权限需要 Windows 管理员授权。\n\n继续后只会为本次操作短暂提升权限。`)
-			if (!confirmed) return false
-			await teamStore.setMemberAccess(profile, required, true)
-		}
+		if (!await teamStore.setMemberAccessWithConsent(permission.username, required)) return false
 	}
 	return true
 }
@@ -298,7 +283,7 @@ async function save() {
 	saving.value = true
 	try {
 		if (!await ensureMaximumAccess()) return
-		await teamStore.configurePermissions(
+		if (!await teamStore.configurePermissions(
 			props.binding.share_id,
 			target.task_id,
 			target.outstanding_id || '',
@@ -307,7 +292,7 @@ async function save() {
 				read: permission.read,
 				write: permission.write,
 			})),
-		)
+		)) return
 		const refreshedBinding = teamStore.bindingForTask(props.taskId)
 		const refreshedTarget = refreshedBinding?.permission_targets?.find(item => targetKey(item) === activeKey.value)
 		loadTarget(refreshedTarget)
@@ -327,6 +312,8 @@ function closeOnEscape(event: KeyboardEvent) {
 
 watch(targets, value => {
 	const current = value.find(target => targetKey(target) === activeKey.value)
+	// Status polling must not replace choices that the user is editing or saving.
+	if (saving.value || (current && changed.value)) return
 	loadTarget(current ?? value[0])
 }, {immediate: true})
 

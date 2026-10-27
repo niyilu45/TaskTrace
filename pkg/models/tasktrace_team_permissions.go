@@ -45,6 +45,8 @@ type TaskTraceTeamPermissionUpdate struct {
 }
 
 type TaskTraceTeamPermissionsRequest struct {
+	CreateShare   bool                            `json:"-"`
+	Elevate       bool                            `json:"-"`
 	ShareID       string                          `json:"share_id" minLength:"1" doc:"The collaboration share to update."`
 	TaskID        int64                           `json:"task_id" minimum:"1" doc:"The local task whose permissions are being updated."`
 	OutstandingID string                          `json:"outstanding_id,omitempty" doc:"The outstanding-item id to update. Leave empty to update the task itself."`
@@ -246,7 +248,6 @@ func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTra
 		manifest.Permissions = map[string][]TaskTraceTeamMemberPermission{}
 	}
 	changed := false
-	knownBindingMembers := append([]string{}, binding.Members...)
 	previousMembers := append([]string{}, manifest.Members...)
 	members := append([]string{}, previousMembers...)
 	for _, shared := range snapshot.Tasks {
@@ -270,19 +271,9 @@ func taskTraceTeamReconcileManifestPermissions(s *xorm.Session, binding *TaskTra
 		changed = true
 	}
 	binding.Members = normalizedMembers
-	if strings.EqualFold(actor, manifest.Owner) && strings.EqualFold(strings.TrimRight(binding.Repository, `\/`), strings.TrimRight(taskTraceTeamRoot(), `\/`)) {
-		for _, member := range manifest.Members {
-			if strings.EqualFold(member, actor) || taskTraceTeamContainsMember(knownBindingMembers, member) {
-				continue
-			}
-			taskTraceTeamMemberAccessMu.Lock()
-			_, err := taskTraceTeamGrantWindowsAccess(binding.Repository, member)
-			taskTraceTeamMemberAccessMu.Unlock()
-			if err != nil {
-				return changed, fmt.Errorf("无法为受理人或团队成员 %s 设置 teamData 读写权限: %w", member, err)
-			}
-		}
-	}
+	// Background reconciliation never changes Windows permissions. Explicit
+	// member/permission requests prepare their grants before acquiring the
+	// global lock, and the team page reconciles remaining repository access.
 	for _, shared := range snapshot.Tasks {
 		key := taskTraceTeamPermissionKey(shared.NodeID, "")
 		existing, exists := manifest.Permissions[key]
@@ -655,6 +646,9 @@ func taskTraceTeamPermissionParent(s *xorm.Session, binding *TaskTraceTeamBindin
 }
 
 func TaskTraceTeamConfigurePermissions(s *xorm.Session, a web.Auth, request TaskTraceTeamPermissionsRequest) (*TaskTraceTeamStatus, error) {
+	if err := taskTraceTeamPreparePermissionAccess(a, request); err != nil {
+		return nil, err
+	}
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
 	u, err := user.GetFromAuth(a)

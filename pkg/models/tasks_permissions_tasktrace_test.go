@@ -87,6 +87,14 @@ func TestTaskCanUpdateUsesLiveTaskTraceTeamPermission(t *testing.T) {
 func TestTaskTraceTeamConfigurePermissionsPersistsMemberWrite(t *testing.T) {
 	db.LoadAndAssertFixtures(t)
 	root := t.TempDir()
+	// Model tests exercise collaboration rules without changing real Windows
+	// accounts, SMB shares or directory ACLs. Seed the permission scan with the
+	// already sufficient folder ceiling expected by this isolated repository.
+	_, err := taskTraceWindowsAccessCache.read(root, func() ([]TaskTraceTeamRepositoryMember, error) {
+		return []TaskTraceTeamRepositoryMember{{AccountName: "user2", Access: TaskTraceTeamAccessWrite}}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { taskTraceWindowsAccessCache.invalidate(root) })
 	dataRoot := t.TempDir()
 	t.Setenv("TASKTRACE_TEAM_ROOT", root)
 	t.Setenv("TASKTRACE_DATA_ROOT", dataRoot)
@@ -109,7 +117,15 @@ func TestTaskTraceTeamConfigurePermissionsPersistsMemberWrite(t *testing.T) {
 
 	s := db.NewSession()
 	defer s.Close()
-	_, err := TaskTraceTeamConfigurePermissions(s, &user.User{ID: 1, Username: "user1"}, TaskTraceTeamPermissionsRequest{
+	_, err = TaskTraceTeamConfigurePermissions(s, &user.User{ID: 2, Username: "user2"}, TaskTraceTeamPermissionsRequest{
+		ShareID: binding.ShareID, TaskID: 1,
+		Permissions: []TaskTraceTeamPermissionUpdate{{Username: "user2", Read: true, Write: true}},
+	})
+	require.ErrorAs(t, err, &ErrGenericForbidden{})
+	require.NoError(t, taskTraceTeamReadJSON(manifestPath, &manifest))
+	require.False(t, taskTraceTeamPermissionMap(manifest.Permissions["root"])["user2"].Write)
+
+	_, err = TaskTraceTeamConfigurePermissions(s, &user.User{ID: 1, Username: "user1"}, TaskTraceTeamPermissionsRequest{
 		ShareID: binding.ShareID, TaskID: 1,
 		Permissions: []TaskTraceTeamPermissionUpdate{{Username: "user2", Read: true, Write: true}},
 	})

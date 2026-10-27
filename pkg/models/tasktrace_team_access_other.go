@@ -13,24 +13,15 @@ func taskTraceTeamSearchWindowsMembers(context.Context, string, bool) ([]TaskTra
 	return nil, errors.New("Windows account search is only available on Windows")
 }
 
-func taskTraceTeamListWindowsAccess(string) ([]TaskTraceTeamRepositoryMember, error) {
+func taskTraceTeamListWindowsAccess(root string) ([]TaskTraceTeamRepositoryMember, error) {
+	if members, ok := taskTraceWindowsAccessCache.cached(root); ok {
+		return members, nil
+	}
 	return nil, errors.New("Windows folder permissions are only available on Windows")
 }
 
 func taskTraceTeamGrantWindowsAccess(string, string) (string, error) {
 	return "", errors.New("Windows folder permissions are only available on Windows")
-}
-
-func taskTraceTeamGrantWindowsAccessWithElevation(string, string, bool) (string, error) {
-	return "", errors.New("Windows folder permissions are only available on Windows")
-}
-
-func taskTraceTeamSetWindowsAccessWithElevation(string, string, string, bool) (string, error) {
-	return "", errors.New("Windows folder permissions are only available on Windows")
-}
-
-func IsTaskTraceTeamAdminRequired(error) bool {
-	return false
 }
 
 func taskTraceTeamRemoveWindowsAccess(string, string) error {
@@ -39,4 +30,8 @@ func taskTraceTeamRemoveWindowsAccess(string, string) error {
 
 func taskTraceTeamRemoveWindowsAccessWithElevation(string, string, bool) error {
 	return errors.New("Windows folder permissions are only available on Windows")
+}
+
+func taskTraceTeamSetWindowsAccessWithOptions(string, string, string, TaskTraceTeamAccessOptions) (string, error) {
+	return "", errors.New("Windows folder permissions are only available on Windows")
 }

@@ -15,6 +15,12 @@ import (
 )
 
 func taskTraceTeamMutationError(message string, err error) error {
+	if models.IsTaskTraceTeamShareRequired(err) {
+		return huma.Error409Conflict("Windows file sharing confirmation required", err)
+	}
+	if models.IsTaskTraceTeamAdminRequired(err) {
+		return huma.Error403Forbidden("Windows administrator authorization required", err)
+	}
 	translated := translateDomainError(err)
 	var statusError huma.StatusError
 	if errors.As(translated, &statusError) {
@@ -111,13 +117,16 @@ func taskTraceTeamWriteSession(ctx context.Context) (*xorm.Session, web.Auth, er
 	return db.NewSession(), a, nil
 }
 
-func taskTraceTeamStatus(ctx context.Context, _ *struct{}) (*singleBody[models.TaskTraceTeamStatus], error) {
+func taskTraceTeamStatus(ctx context.Context, in *struct {
+	RefreshAccess bool `header:"X-TaskTrace-Refresh-Access" doc:"Rescan current Windows share permissions when opening member management instead of reusing the polling cache."`
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamReadSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	status, err := models.TaskTraceTeamReadStatus(s, a)
+	//nolint:contextcheck // A shared, bounded Windows metadata scan may also serve other waiting status reads.
+	status, err := models.TaskTraceTeamReadStatus(s, a, in.RefreshAccess)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("read team collaboration status", err)
 	}
@@ -125,8 +134,10 @@ func taskTraceTeamStatus(ctx context.Context, _ *struct{}) (*singleBody[models.T
 }
 
 func taskTraceTeamShare(ctx context.Context, in *struct {
-	TaskID int64 `path:"task"`
-	Body   struct {
+	TaskID      int64 `path:"task"`
+	Elevate     bool  `header:"X-TaskTrace-Elevate" doc:"Consent to a one-time Windows administrator prompt for this permission change."`
+	CreateShare bool  `header:"X-TaskTrace-Create-Share" doc:"Consent to create a restricted Windows share for teamData when none exists."`
+	Body        struct {
 		Members []string `json:"members" minItems:"1" doc:"Windows usernames allowed to collaborate."`
 	}
 }) (*singleBody[models.TaskTraceTeamStatus], error) {
@@ -135,7 +146,9 @@ func taskTraceTeamShare(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
-	status, err := models.TaskTraceTeamShare(s, a, models.TaskTraceTeamShareRequest{TaskID: in.TaskID, Members: in.Body.Members})
+	// Windows ACL changes must finish their own bounded operation after consent; a disconnected browser must not interrupt rollback.
+	//nolint:contextcheck // The model serializes Windows access changes using an independent timeout.
+	status, err := models.TaskTraceTeamShare(s, a, models.TaskTraceTeamShareRequest{TaskID: in.TaskID, Members: in.Body.Members, Elevate: in.Elevate, CreateShare: in.CreateShare})
 	if err != nil {
 		return nil, taskTraceTeamMutationError("无法更新协作成员", err)
 	}
@@ -198,13 +211,17 @@ func taskTraceTeamConfigure(ctx context.Context, in *struct {
 }
 
 func taskTraceTeamPermissionsConfigure(ctx context.Context, in *struct {
-	Body models.TaskTraceTeamPermissionsRequest
+	Body        models.TaskTraceTeamPermissionsRequest
+	Elevate     bool `header:"X-TaskTrace-Elevate" doc:"Consent to a one-time Windows administrator prompt for this permission change."`
+	CreateShare bool `header:"X-TaskTrace-Create-Share" doc:"Consent to create a restricted Windows share for teamData when none exists."`
 }) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamWriteSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
+	in.Body.Elevate = in.Elevate
+	in.Body.CreateShare = in.CreateShare
 	status, err := models.TaskTraceTeamConfigurePermissions(s, a, in.Body)
 	if err != nil {
 		return nil, taskTraceTeamMutationError("无法更新协作权限或受理人", err)
@@ -286,20 +303,19 @@ func taskTraceTeamMembersSearch(ctx context.Context, in *struct {
 }
 
 func taskTraceTeamMembersAccessCreate(ctx context.Context, in *struct {
-	Body    models.TaskTraceTeamMemberAccessRequest
-	Elevate bool `header:"X-TaskTrace-Elevate" doc:"Retry this permission change with a one-time Windows administrator prompt."`
+	Body        models.TaskTraceTeamMemberAccessRequest
+	CreateShare bool `header:"X-TaskTrace-Create-Share" doc:"Consent to create a restricted Windows share for teamData when none exists."`
+	Elevate     bool `header:"X-TaskTrace-Elevate" doc:"Retry this permission change with a one-time Windows administrator prompt."`
 }) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamWriteSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
-	status, err := models.TaskTraceTeamGrantMemberAccess(s, a, in.Body, in.Elevate)
+	//nolint:contextcheck // Complete the bounded OS permission change even if the requesting browser disconnects.
+	status, err := models.TaskTraceTeamGrantMemberAccessWithOptions(s, a, in.Body, models.TaskTraceTeamAccessOptions{CreateShare: in.CreateShare, Elevate: in.Elevate})
 	if err != nil {
-		if models.IsTaskTraceTeamAdminRequired(err) {
-			return nil, huma.Error403Forbidden("Windows administrator authorization required", err)
-		}
-		return nil, huma.Error422UnprocessableEntity("grant teamData access", err)
+		return nil, taskTraceTeamMutationError("grant teamData access", err)
 	}
 	if err := s.Commit(); err != nil {
 		return nil, huma.Error500InternalServerError("save teamData access", err)

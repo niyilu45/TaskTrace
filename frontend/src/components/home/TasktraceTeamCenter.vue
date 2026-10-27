@@ -15,17 +15,25 @@
 					</div>
 					<XButton
 						variant="secondary"
+						:disabled="reconcilingMembers || !!grantingMember || !!changingMember || !!removingMember"
 						@click="addingMember = !addingMember"
 					>
 						{{ addingMember ? '取消添加' : '添加协作成员' }}
 					</XButton>
 				</div>
 				<TeamMemberPicker
-					v-if="addingMember"
+					v-if="addingMember && !grantingMember"
 					input-id="team-unassigned-member-search"
 					:excluded="knownMembers"
 					@select="grantMember"
 				/>
+				<p
+					v-if="reconcilingMembers || grantingMember || memberActionSuccess"
+					class="team-member-feedback"
+					role="status"
+				>
+					{{ reconcilingMembers ? '正在补全已有协作成员的 teamData 共享权限…' : grantingMember ? `正在为 ${grantingMember} 添加协作权限…` : memberActionSuccess }}
+				</p>
 				<div
 					v-if="allMembers.length"
 					class="team-unassigned-list"
@@ -48,7 +56,7 @@
 								:id="`team-access-${teamStore.memberKey(member.username)}`"
 								class="select"
 								:value="member.access"
-								:disabled="member.isCurrent || changingMember === member.username"
+								:disabled="reconcilingMembers || member.isCurrent || changingMember === member.username"
 								@change="changeMemberAccess(member.username, ($event.target as HTMLSelectElement).value as 'read' | 'write')"
 							>
 								<option value="read">
@@ -62,7 +70,7 @@
 								v-if="member.unassigned"
 								variant="secondary"
 								:loading="removingMember === member.username"
-								:disabled="!!removingMember || !!changingMember"
+								:disabled="reconcilingMembers || !!removingMember || !!changingMember"
 								@click="requestRemoveMember(member.username)"
 							>
 								删除权限
@@ -133,6 +141,7 @@
 				<XButton
 					variant="primary"
 					:loading="teamStore.loading"
+					:disabled="reconcilingMembers"
 					@click="importTeamMembers"
 				>
 					导入成员并设置权限
@@ -219,6 +228,9 @@ const pendingRemoval = ref('')
 const removingMember = ref('')
 const changingMember = ref('')
 const memberActionError = ref('')
+const memberActionSuccess = ref('')
+const grantingMember = ref('')
+const reconcilingMembers = ref(false)
 useVisiblePolling(poll, 15_000, {enabled: () => activityHost.value})
 
 const knownMembers = computed(() => [
@@ -243,7 +255,7 @@ async function poll() {
 }
 
 onMounted(() => {
-	if (!activityHost.value) void teamStore.refresh().catch(() => undefined)
+	if (!activityHost.value) void refreshMembers()
 	if (activityHost.value) {
 		window.addEventListener('tasktrace-team-conflicts-open', openConflicts)
 	}
@@ -257,64 +269,48 @@ function openConflicts() {
 	showConflicts.value = true
 }
 
-function needsAdministratorAuthorization(cause: unknown) {
-	const value = cause as {status?: number, response?: {status?: number}, reason?: {response?: {status?: number}}}
-	const status = value?.reason?.response?.status ?? value?.response?.status ?? value?.status
-	const message = getErrorText(cause).toLowerCase()
-	return status === 403 || [
-		'windows administrator authorization required',
-		'需要 windows 管理员授权',
-		'access is denied',
-		'access denied',
-		'拒绝访问',
-		'系统错误 5',
-	].some(marker => message.includes(marker))
+async function refreshMembers() {
+	try {
+		await teamStore.refresh(true, true)
+		// Only show progress when the server has identified permissions to repair.
+		reconcilingMembers.value = Boolean(teamStore.status.repository?.pending_members?.length)
+		const added = await teamStore.reconcileMemberAccess()
+		if (added.length) memberActionSuccess.value = `已为 ${added.length} 位已有协作成员补全本机 teamData 共享权限。`
+	} catch (cause) {
+		memberActionError.value = getErrorText(cause)
+	} finally {
+		reconcilingMembers.value = false
+	}
 }
 
 async function grantMember(candidate: TaskTraceTeamMemberCandidate) {
 	const accountName = candidate.account_name || candidate.username
-	if (!accountName) return
+	if (!accountName || grantingMember.value || reconcilingMembers.value) return
 	memberActionError.value = ''
+	memberActionSuccess.value = ''
+	grantingMember.value = teamStore.displayNameFor(accountName) || accountName
 	try {
-		await teamStore.grantMember(candidate)
+		if (!await teamStore.grantMemberWithConsent(candidate)) return
+		addingMember.value = false
+		memberActionSuccess.value = `已成功添加 ${teamStore.displayNameFor(accountName)}，并设置 teamData 读写权限。`
+		success({message: memberActionSuccess.value})
 	} catch (cause) {
-		if (!needsAdministratorAuthorization(cause)) {
-			memberActionError.value = getErrorText(cause)
-			error(cause)
-			return
-		}
-		const confirmed = window.confirm(`为 ${accountName} 设置 teamData 共享读写权限需要 Windows 管理员授权。\n\n继续后 Windows 会显示用户账户控制窗口；本次操作完成后 TaskTrace 仍以普通权限运行。`)
-		if (!confirmed) return
-		try {
-			await teamStore.grantMember(candidate, true)
-		} catch (elevatedCause) {
-			memberActionError.value = getErrorText(elevatedCause)
-			error(elevatedCause)
-			return
-		}
+		memberActionError.value = getErrorText(cause)
+		error(cause)
+	} finally {
+		grantingMember.value = ''
 	}
-	addingMember.value = false
-	success({message: `已为 ${accountName} 设置 teamData 读写权限。`})
-}
-
-async function setMaximumAccess(member: string, access: 'read' | 'write', elevate = false) {
-	return teamStore.setMemberAccess(member, access, elevate)
 }
 
 async function changeMemberAccess(member: string, access: 'read' | 'write') {
-	if (changingMember.value || teamStore.maximumAccessFor(member) === access) return
+	if (reconcilingMembers.value || changingMember.value || teamStore.maximumAccessFor(member) === access) return
 	changingMember.value = member
 	memberActionError.value = ''
+	memberActionSuccess.value = ''
 	try {
-		try {
-			await setMaximumAccess(member, access)
-		} catch (cause) {
-			if (!needsAdministratorAuthorization(cause)) throw cause
-			const confirmed = window.confirm(`修改 ${member} 的 teamData ${access === 'write' ? '读写' : '仅读'}权限需要 Windows 管理员授权。\n\n继续后只会为本次操作短暂提升权限，TaskTrace 仍以普通权限运行。`)
-			if (!confirmed) return
-			await setMaximumAccess(member, access, true)
-		}
-		success({message: `已将 ${member} 的最高权限设置为${access === 'write' ? '读写' : '仅读'}。`})
+		if (!await teamStore.setMemberAccessWithConsent(member, access)) return
+		memberActionSuccess.value = `已将 ${teamStore.displayNameFor(member)} 的最高权限设置为${access === 'write' ? '读写' : '仅读'}。`
+		success({message: memberActionSuccess.value})
 	} catch (cause) {
 		memberActionError.value = getErrorText(cause)
 		error(cause)
@@ -324,7 +320,9 @@ async function changeMemberAccess(member: string, access: 'read' | 'write') {
 }
 
 function requestRemoveMember(member: string) {
+	if (reconcilingMembers.value) return
 	memberActionError.value = ''
+	memberActionSuccess.value = ''
 	pendingRemoval.value = member
 }
 
@@ -339,17 +337,12 @@ async function confirmRemoveMember() {
 	removingMember.value = member
 	memberActionError.value = ''
 	try {
-		try {
-			await teamStore.removeMember(member)
-		} catch (cause) {
-			if (!needsAdministratorAuthorization(cause)) throw cause
-			await teamStore.removeMember(member, true)
-		}
+		if (!await teamStore.removeMemberWithConsent(member)) return
 		pendingRemoval.value = ''
 		success({message: `已删除 ${member} 的 teamData 权限。`})
 	} catch (cause) {
 		try {
-			await teamStore.refresh()
+			await teamStore.refresh(true)
 			if (!teamStore.status.unassigned_members?.some(value => teamStore.memberKey(value) === teamStore.memberKey(member))) {
 				pendingRemoval.value = ''
 				success({message: `已删除 ${member} 的 teamData 权限。`})
@@ -370,6 +363,7 @@ async function copyTeamMembers(link?: string) {
 }
 
 async function importTeamMembers() {
+	if (reconcilingMembers.value) return
 	if (!memberLink.value.trim()) {
 		error({message: '请先粘贴团队成员链接。'})
 		return
@@ -491,6 +485,12 @@ async function importTeamMembers() {
 
 .team-import-result p {
 	margin: .15rem 0;
+}
+
+.team-member-feedback {
+	margin-block: .75rem 0;
+	color: var(--text);
+	overflow-wrap: anywhere;
 }
 
 .team-member-error {

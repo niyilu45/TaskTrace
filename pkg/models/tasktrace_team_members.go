@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
@@ -142,6 +141,10 @@ func taskTraceTeamUnassignedMembers(state taskTraceTeamState, candidates []strin
 }
 
 func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberAccessRequest, elevate bool) (*TaskTraceTeamStatus, error) {
+	return TaskTraceTeamGrantMemberAccessWithOptions(s, a, request, TaskTraceTeamAccessOptions{Elevate: elevate})
+}
+
+func TaskTraceTeamGrantMemberAccessWithOptions(s *xorm.Session, a web.Auth, request TaskTraceTeamMemberAccessRequest, options TaskTraceTeamAccessOptions) (*TaskTraceTeamStatus, error) {
 	u, err := user.GetFromAuth(a)
 	if err != nil {
 		return nil, err
@@ -157,10 +160,16 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 		return nil, errors.New("teamData 权限必须是 read 或 write")
 	}
 	taskTraceTeamMemberAccessMu.Lock()
-	resolved, err := taskTraceTeamSetWindowsAccessWithElevation(taskTraceTeamRoot(), request.AccountName, access, elevate)
+	resolved, err := taskTraceTeamSetWindowsAccessWithOptions(taskTraceTeamRoot(), request.AccountName, access, options)
 	taskTraceTeamMemberAccessMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("无法为 %s 设置 teamData 权限：%w", request.AccountName, err)
+	}
+	// Refresh once after the successful OS operation; Fast status then uses
+	// this exact member list and the newly created UNC share immediately.
+	if _, err := taskTraceTeamListWindowsAccess(taskTraceTeamRoot()); err != nil {
+		//nolint:gosmopolitan // This actionable error is displayed by the local Chinese UI.
+		return nil, fmt.Errorf("权限已设置，但读取共享信息失败，请重试：%w", err)
 	}
 	candidate := TaskTraceTeamMemberCandidate{Username: request.Username, AccountName: resolved, DisplayName: request.DisplayName, Email: request.Email}
 	if candidate.Username == "" {
@@ -170,18 +179,8 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 		if _, err := rememberTaskTraceWindowsTeamUser(s, candidate); err != nil {
 			return nil, fmt.Errorf("保存协作成员资料失败：%w", err)
 		}
-	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if found, searchErr := taskTraceSearchTeamMembers(ctx, resolved, false); searchErr == nil {
-			for _, profile := range found.Candidates {
-				if taskTraceTeamMembersEqual(profile.AccountName, resolved) {
-					_, _ = rememberTaskTraceWindowsTeamUser(s, profile)
-					break
-				}
-			}
-		}
 	}
+
 	state, err := taskTraceTeamLoadState()
 	if err != nil {
 		return nil, err
@@ -202,6 +201,7 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 		}
 	}
 	if err == nil {
+		status.Repository.Shared = true
 		updated := false
 		for index := range status.Repository.Members {
 			if taskTraceTeamMembersEqual(status.Repository.Members[index].AccountName, resolved) {
@@ -213,6 +213,9 @@ func TaskTraceTeamGrantMemberAccess(s *xorm.Session, a web.Auth, request TaskTra
 		if !updated {
 			status.Repository.Members = append(status.Repository.Members, TaskTraceTeamRepositoryMember{AccountName: resolved, Access: access})
 		}
+		status.Repository.PendingMembers = slices.DeleteFunc(status.Repository.PendingMembers, func(member TaskTraceTeamRepositoryMember) bool {
+			return taskTraceTeamMembersEqual(member.AccountName, resolved) && (access == TaskTraceTeamAccessWrite || member.Access == TaskTraceTeamAccessRead)
+		})
 		sort.Slice(status.Repository.Members, func(i, j int) bool {
 			return strings.ToLower(status.Repository.Members[i].AccountName) < strings.ToLower(status.Repository.Members[j].AccountName)
 		})

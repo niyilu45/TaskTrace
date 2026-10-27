@@ -208,3 +208,14 @@ func TestTaskTraceTeamAccessCacheCachedNeverStartsAScan(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []TaskTraceTeamRepositoryMember{{AccountName: "DOMAIN\\alice", Access: TaskTraceTeamAccessWrite}}, members)
 }
+
+func TestTaskTraceTeamAccessCacheInvalidatesSharedState(t *testing.T) {
+	cache := taskTraceTeamAccessCache{}
+	cache.recordShared(`C:\teamData`, true)
+	cache.recordSharePath(`C:\teamData`, `\\pc\custom-share`)
+	assert.Equal(t, `\\pc\custom-share`, cache.sharePath(`C:\teamData`))
+	assert.True(t, cache.isShared(`C:\teamData`))
+	cache.invalidate(`C:\teamData`)
+	assert.False(t, cache.isShared(`C:\teamData`))
+	assert.Empty(t, cache.sharePath(`C:\teamData`))
+}

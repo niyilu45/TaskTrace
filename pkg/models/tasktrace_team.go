@@ -42,12 +42,13 @@ const (
 var taskTraceTeamMu sync.Mutex
 
 type TaskTraceTeamRepositoryInfo struct {
-	Path       string                          `json:"path"`
-	Paths      []string                        `json:"-"`
-	Computer   string                          `json:"computer,omitempty"`
-	Candidates []string                        `json:"candidates"`
-	Members    []TaskTraceTeamRepositoryMember `json:"members" readOnly:"true" doc:"Windows accounts with access to teamData and their maximum access level."`
-	Shared     bool                            `json:"shared"`
+	PendingMembers []TaskTraceTeamRepositoryMember `json:"pending_members" readOnly:"true" doc:"Known collaborators whose required access is missing from the local teamData share. Reading status never changes Windows permissions."`
+	Path           string                          `json:"path"`
+	Paths          []string                        `json:"-"`
+	Computer       string                          `json:"computer,omitempty"`
+	Candidates     []string                        `json:"candidates"`
+	Members        []TaskTraceTeamRepositoryMember `json:"members" readOnly:"true" doc:"Windows accounts with access to teamData and their maximum access level."`
+	Shared         bool                            `json:"shared"`
 }
 
 const (
@@ -183,8 +184,10 @@ type taskTraceTeamState struct {
 }
 
 type TaskTraceTeamShareRequest struct {
-	TaskID  int64    `json:"task_id"`
-	Members []string `json:"members"`
+	CreateShare bool     `json:"-"`
+	Elevate     bool     `json:"-"`
+	TaskID      int64    `json:"task_id"`
+	Members     []string `json:"members"`
 }
 
 type TaskTraceTeamImportRequest struct {
@@ -455,6 +458,11 @@ func taskTraceTeamRepositoryInfo(root string) TaskTraceTeamRepositoryInfo {
 	if members, err := taskTraceTeamListWindowsAccess(root); err == nil {
 		info.Members = taskTraceTeamFilterRepositoryMembers(members)
 		info.Candidates = taskTraceTeamRepositoryMemberNames(info.Members)
+		info.Shared = taskTraceWindowsAccessCache.isShared(root)
+		if sharedPath := taskTraceWindowsAccessCache.sharePath(root); sharedPath != "" {
+			info.Path = sharedPath
+			info.Paths = taskTraceTeamAppendRepository(info.Paths, sharedPath)
+		}
 	}
 	return info
 }
@@ -464,6 +472,11 @@ func taskTraceTeamRepositoryInfoCached(root string) TaskTraceTeamRepositoryInfo 
 	if members, ok := taskTraceWindowsAccessCache.cached(root); ok {
 		info.Members = taskTraceTeamFilterRepositoryMembers(members)
 		info.Candidates = taskTraceTeamRepositoryMemberNames(info.Members)
+		info.Shared = taskTraceWindowsAccessCache.isShared(root)
+		if sharedPath := taskTraceWindowsAccessCache.sharePath(root); sharedPath != "" {
+			info.Path = sharedPath
+			info.Paths = taskTraceTeamAppendRepository(info.Paths, sharedPath)
+		}
 	}
 	return info
 }
@@ -2672,29 +2685,8 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 }
 
 func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTraceTeamState, binding *TaskTraceTeamBinding, requested []string, actor string) (*TaskTraceTeamStatus, error) {
-	resolvedMembers := make([]string, 0, len(requested))
-	for _, member := range requested {
-		if taskTraceTeamMembersEqual(member, actor) {
-			continue
-		}
-		resolved := ""
-		for _, existing := range binding.Members {
-			if taskTraceTeamMembersEqual(existing, member) {
-				resolved = existing
-				break
-			}
-		}
-		if resolved == "" {
-			var err error
-			taskTraceTeamMemberAccessMu.Lock()
-			resolved, err = taskTraceTeamGrantWindowsAccess(binding.Repository, member)
-			taskTraceTeamMemberAccessMu.Unlock()
-			if err != nil {
-				return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, err)
-			}
-		}
-		resolvedMembers = append(resolvedMembers, resolved)
-	}
+	// Windows permissions have already been prepared outside taskTraceTeamMu.
+	resolvedMembers := requested
 	members := taskTraceTeamNormalizeMembers(resolvedMembers, actor)
 	if len(members) < 2 {
 		return nil, errors.New("at least one other team member is required")
@@ -2733,6 +2725,14 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 }
 
 func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareRequest) (*TaskTraceTeamStatus, error) {
+	// A Windows UAC prompt must not block background collaboration sync or other
+	// task saves. Authorize and prepare access before entering the state lock;
+	// the normal checks below run again against the latest state before writing.
+	resolved, err := taskTraceTeamPrepareShareMembers(s, a, request)
+	if err != nil {
+		return nil, err
+	}
+	request.Members = resolved
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
 	if !taskTraceTeamEnabled() {
@@ -2764,19 +2764,7 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 		return taskTraceTeamUpdateMembersLocked(s, a, state, existing, request.Members, u.Username)
 	}
 	root := taskTraceTeamRoot()
-	grantedMembers := make([]string, 0, len(request.Members))
-	for _, member := range request.Members {
-		if taskTraceTeamMembersEqual(member, u.Username) {
-			continue
-		}
-		taskTraceTeamMemberAccessMu.Lock()
-		resolved, grantErr := taskTraceTeamGrantWindowsAccess(root, member)
-		taskTraceTeamMemberAccessMu.Unlock()
-		if grantErr != nil {
-			return nil, fmt.Errorf("无法为 %s 设置 teamData 读写权限：%w", member, grantErr)
-		}
-		grantedMembers = append(grantedMembers, resolved)
-	}
+	grantedMembers := request.Members
 	members := taskTraceTeamNormalizeMembers(grantedMembers, u.Username)
 	if len(members) < 2 {
 		return nil, errors.New("at least one other team member is required")
@@ -3259,15 +3247,22 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 	}
 	status := TaskTraceTeamStatus{Enabled: taskTraceTeamEnabled(), Username: u.Username, Repository: repository, UnassignedMembers: []string{}, Bindings: []TaskTraceTeamBindingStatus{}, Conflicts: []TaskTraceTeamConflict{}, Notifications: []TaskTraceTeamNotification{}, Profiles: []TaskTraceTeamMemberProfile{}}
 	status.UnassignedMembers = taskTraceTeamUnassignedMembers(state, status.Repository.Candidates, u.Username)
+	requiredAccess := []TaskTraceTeamRepositoryMember{}
 	profiles := map[string]TaskTraceTeamMemberProfile{
 		taskTraceTeamProfileKey(u.Username): {Username: u.Username, DisplayName: u.Name, Email: u.Email, Avatar: taskTraceTeamAvatarDataURI(s, u.Username)},
 	}
 	for _, binding := range state.Bindings {
 		manifest := TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
-		if manifestErr := taskTraceTeamReadManifest(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest); manifestErr != nil {
+		manifestErr := taskTraceTeamReadManifest(filepath.Join(taskTraceTeamShareDir(binding.Repository, binding.ShareID), "manifest.json"), &manifest)
+		if manifestErr != nil {
 			manifest = TaskTraceTeamManifest{Owner: binding.Owner, Members: binding.Members}
 		}
 		manifest.Members = taskTraceTeamNormalizeMembers(manifest.Members, manifest.Owner)
+		if manifestErr == nil {
+			// Names remain visible while a share is offline, but an unreadable
+			// manifest cannot authorize adding Windows access for those names.
+			requiredAccess = append(requiredAccess, taskTraceTeamManifestRequiredAccess(&manifest, u.Username)...)
+		}
 		ids := make([]int64, 0, len(binding.NodeTasks))
 		for _, id := range binding.NodeTasks {
 			ids = append(ids, id)
@@ -3275,11 +3270,14 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 		linkPath := binding.Repository
 		linkPaths := []string{}
-		if binding.Owner == u.Username {
+		if taskTraceTeamMembersEqual(binding.Owner, u.Username) {
 			// Only the main repository needs an ACL scan. Reading the same Windows
 			// share permissions once per collaboration made a page refresh slower
 			// as more shared tasks were added.
-			info := taskTraceTeamRepositoryMetadata(binding.Repository)
+			info := taskTraceTeamRepositoryInfoCached(binding.Repository)
+			if taskTraceTeamAccessCacheKey(binding.Repository) == taskTraceTeamAccessCacheKey(root) {
+				info = repository
+			}
 			linkPath = info.Path
 			linkPaths = info.Paths
 		}
@@ -3314,6 +3312,7 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 			profiles[key] = taskTraceTeamMergeProfile(profiles[key], profile)
 		}
 	}
+	status.Repository.PendingMembers = taskTraceTeamMissingRepositoryAccess(status.Repository.Members, requiredAccess)
 	storedProfiles, err := taskTraceTeamStoredProfiles(s)
 	if err != nil {
 		return TaskTraceTeamStatus{}, err
@@ -3341,9 +3340,14 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 	return status, nil
 }
 
-func TaskTraceTeamReadStatus(s *xorm.Session, a web.Auth) (TaskTraceTeamStatus, error) {
+func TaskTraceTeamReadStatus(s *xorm.Session, a web.Auth, freshAccess ...bool) (TaskTraceTeamStatus, error) {
 	if !taskTraceTeamEnabled() {
 		return TaskTraceTeamStatus{Enabled: false}, nil
+	}
+	if len(freshAccess) > 0 && freshAccess[0] {
+		// Opening member management explicitly rechecks ACL edits made in Explorer.
+		// Routine status polling still shares the short-lived Windows scan cache.
+		taskTraceWindowsAccessCache.invalidate(taskTraceTeamRoot())
 	}
 	// State and shared manifests are replaced atomically. Reading a snapshot does
 	// not need the mutation lock, and must remain available while a slow network

@@ -3415,6 +3415,10 @@ export type TaskTraceTeamRepositoryInfo = {
      */
     readonly members?: Array<TaskTraceTeamRepositoryMember> | null;
     path?: string;
+    /**
+     * Known collaborators whose required access is missing from the local teamData share. Reading status never changes Windows permissions.
+     */
+    readonly pending_members?: Array<TaskTraceTeamRepositoryMember> | null;
     shared?: boolean;
 };
 
@@ -11308,6 +11312,16 @@ export type TasksRelationsDeleteResponse = TasksRelationsDeleteResponses[keyof T
 
 export type TasksTeamShareData = {
     body: TasksTeamShareRequestWritable;
+    headers?: {
+        /**
+         * Consent to a one-time Windows administrator prompt for this permission change.
+         */
+        'X-TaskTrace-Elevate'?: boolean;
+        /**
+         * Consent to create a restricted Windows share for teamData when none exists.
+         */
+        'X-TaskTrace-Create-Share'?: boolean;
+    };
     path: {
         task: number;
     };
@@ -11908,6 +11922,12 @@ export type TasktracePeriodReviewResponse = TasktracePeriodReviewResponses[keyof
 
 export type TasktraceTeamStatusData = {
     body?: never;
+    headers?: {
+        /**
+         * Rescan current Windows share permissions when opening member management instead of reusing the polling cache.
+         */
+        'X-TaskTrace-Refresh-Access'?: boolean;
+    };
     path?: never;
     query?: never;
     url: '/tasktrace/team';
@@ -12009,6 +12029,10 @@ export type TasktraceTeamImportResponse = TasktraceTeamImportResponses[keyof Tas
 export type TasktraceTeamMembersAccessCreateData = {
     body: TaskTraceTeamMemberAccessRequestWritable;
     headers?: {
+        /**
+         * Consent to create a restricted Windows share for teamData when none exists.
+         */
+        'X-TaskTrace-Create-Share'?: boolean;
         /**
          * Retry this permission change with a one-time Windows administrator prompt.
          */
@@ -12186,6 +12210,16 @@ export type TasktraceTeamNotificationsReadResponse = TasktraceTeamNotificationsR
 
 export type TasktraceTeamPermissionsConfigureData = {
     body: TaskTraceTeamPermissionsRequestWritable;
+    headers?: {
+        /**
+         * Consent to a one-time Windows administrator prompt for this permission change.
+         */
+        'X-TaskTrace-Elevate'?: boolean;
+        /**
+         * Consent to create a restricted Windows share for teamData when none exists.
+         */
+        'X-TaskTrace-Create-Share'?: boolean;
+    };
     path?: never;
     query?: never;
     url: '/tasktrace/team/permissions';
