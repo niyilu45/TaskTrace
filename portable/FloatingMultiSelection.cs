@@ -129,9 +129,10 @@ internal sealed partial class FloatingWindow {
                     var patch=new Dictionary<string,object>();
                     if(done.HasValue&&wasDone!=done.Value)patch["done"]=done.Value;
                     if(taskStatus!=null&&TaskStatusValue(current)!=taskStatus)patch["status"]=taskStatus;
-                    if(priority.HasValue&&PriorityNumber(current)!=priority.Value)patch["priority"]=ApiPriority(priority.Value);
-                    if(patch.Count==0){result.Unchanged++;continue;}
-                    await Api("PATCH","/tasks/"+id,patch);
+                    bool priorityChanged=priority.HasValue&&PriorityNumber(current)!=priority.Value;
+                    if(patch.Count==0&&!priorityChanged){result.Unchanged++;continue;}
+                    if(patch.Count>0)await Api("PATCH","/tasks/"+id,patch);
+                    if(priorityChanged)await SavePersonalPriority(id,priority.Value);
                     if(patch.ContainsKey("done"))RememberTaskCompletion(id,done.Value);
                     result.Saved++;
                 }catch(Exception error){result.Failures.Add(node.Text+"："+error.Message);}
@@ -149,6 +150,11 @@ internal sealed partial class FloatingWindow {
                         bool changeDone=done.HasValue&&item.Done!=done.Value,changePriority=priority.HasValue&&item.Priority!=priority.Value;
                         if(!changeDone&&!changePriority){result.Unchanged++;continue;}
                         if(changeDone){item.Done=done.Value;item.CompletedAt=done.Value?DateTimeOffset.UtcNow.ToString("o"):null;}
+                        if(!changeDone && changePriority){
+                            try{await SavePersonalPriority(owner.Key,priority.Value,item.Id);result.Saved++;}
+                            catch(Exception error){result.Failures.Add(node.Text+"："+error.Message);}
+                            continue;
+                        }
                         if(changePriority)item.Priority=priority.Value;
                         changed.Add(item);pending.Add(node);
                     }

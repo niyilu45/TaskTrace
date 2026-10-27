@@ -30,6 +30,11 @@ export function invalidateCachedTask(id: number) {
 	taskCacheVersion.value++
 }
 
+export function invalidateCachedTasks(ids: number[]) {
+	for (const id of new Set(ids)) cache.delete(id)
+	if (ids.length) taskCacheVersion.value++
+}
+
 export function clearTaskCache() {
 	cache.clear()
 	taskCacheIdentityVersion.value++

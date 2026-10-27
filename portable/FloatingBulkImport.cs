@@ -113,8 +113,8 @@ internal sealed partial class FloatingWindow {
         int count=0;
         foreach(var line in lines){
             if(line.Saved){progress(++count);continue;}
-            if(line.TaskId==0){var created=await api("POST","/projects/"+projectId+"/tasks",new{title=line.Text,priority=ApiPriority(priority)});line.TaskId=Convert.ToInt64(created["id"]);}
-            if(parentId>0)await api("POST","/tasks/"+parentId+"/relations",new{other_task_id=line.TaskId,relation_kind="subtask"});
+            if(line.TaskId==0){var payload=new Dictionary<string,object>{{"title",line.Text},{"priority",ApiPriority(priority)}};if(parentId>0)payload["parent_task_id"]=parentId;var created=await api("POST","/projects/"+projectId+"/tasks",payload);line.TaskId=Convert.ToInt64(created["id"]);}
+            else if(parentId>0)await api("POST","/tasks/"+parentId+"/relations",new{other_task_id=line.TaskId,relation_kind="subtask"});
             line.Saved=true;progress(++count);
         }
     }

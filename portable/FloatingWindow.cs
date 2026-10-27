@@ -516,7 +516,7 @@ internal sealed partial class FloatingWindow : Form {
                     string message = response.StatusCode == HttpStatusCode.Forbidden
                         ? "当前不具备写权限，修改已保留。所属人开放写权限后无需关闭窗口，直接重试保存即可。"
                         : "操作未保存（" + (int)response.StatusCode + "），请刷新后重试。";
-                    if(path == "/tasktrace/undo" || path == "/tasktrace/team/sync") try { var problem = ReadObject(responseBody); object detail; if(problem.TryGetValue("detail", out detail) || problem.TryGetValue("message", out detail)) message = Convert.ToString(detail); } catch { }
+                    message=ApiFailureMessage(response.StatusCode,path,responseBody,message);
                     throw new Exception(message);
                 }
                 var result = ReadObject(responseBody);
@@ -524,6 +524,18 @@ internal sealed partial class FloatingWindow : Form {
                 return result;
             }
         }
+    }
+    string ApiFailureMessage(HttpStatusCode code,string path,string body,string fallback) {
+        try {
+            var problem=ReadObject(body);object value;
+            string summary=problem.TryGetValue("detail",out value)||problem.TryGetValue("message",out value)?Convert.ToString(value):"";
+            var details=new List<string>();
+            if(problem.TryGetValue("errors",out value)&&value is IEnumerable)foreach(object entry in (IEnumerable)value){var error=entry as Dictionary<string,object>;object reason;if(error!=null&&error.TryGetValue("message",out reason)&&!String.IsNullOrWhiteSpace(Convert.ToString(reason)))details.Add(Convert.ToString(reason));}
+            if(code==HttpStatusCode.Forbidden && (String.IsNullOrWhiteSpace(summary)||String.Equals(summary,"forbidden",StringComparison.OrdinalIgnoreCase)))summary="";
+            string message=String.IsNullOrWhiteSpace(summary)?fallback:summary;
+            foreach(string detail in details.Distinct())if(!message.Contains(detail))message+="；"+detail;
+            return message;
+        }catch{return fallback;}
     }
     static string TeamIdentityName(string value) {
         value=(value??"").Trim();int slash=value.LastIndexOf('\\');if(slash>=0)value=value.Substring(slash+1);int at=value.IndexOf('@');if(at>0)value=value.Substring(0,at);return value;
@@ -934,8 +946,8 @@ internal sealed partial class FloatingWindow : Form {
         if(await TaskHierarchySpan(parentId) >= 5) throw new Exception(TaskDepthMessage);
         using(BeginUndoGroup()) {
         long childId = existingId;
-        if(childId == 0) { int selectedPriority=priority<0?defaultPriority:priority;var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title, priority = ApiPriority(selectedPriority) }); childId = Convert.ToInt64(child["id"]); }
-        await Api("POST", "/tasks/" + parentId + "/relations", new { other_task_id = childId, relation_kind = "subtask" });
+        if(childId == 0) { int selectedPriority=priority<0?defaultPriority:priority;var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title, priority = ApiPriority(selectedPriority), parent_task_id = parentId }); childId = Convert.ToInt64(child["id"]); }
+        else await Api("POST", "/tasks/" + parentId + "/relations", new { other_task_id = childId, relation_kind = "subtask" });
         return childId;
         }
     }
@@ -1003,11 +1015,11 @@ internal sealed partial class FloatingWindow : Form {
                         if(await TaskHierarchySpan(parentId) >= 5) { depthLimit = true; throw new Exception(TaskDepthMessage); }
                         if(pendingUndoGroup == null) pendingUndoGroup = Guid.NewGuid().ToString();
                         using(BeginUndoGroup(pendingUndoGroup)) {
-                        if(pendingId == 0) { pendingPriority=priority.SelectedIndex;var child = await Api("POST", "/projects/" + projectId + "/tasks", new { title = title.Text.Trim(), priority = ApiPriority(pendingPriority) }); pendingId = Convert.ToInt64(child["id"]); }
-                        await CreateSubtask(parentId, projectId, title.Text, pendingId,pendingPriority);
+                        if(pendingId == 0) { pendingPriority=priority.SelectedIndex;await CreateSubtask(parentId, projectId, title.Text.Trim(),0,pendingPriority); }
+                        else await CreateSubtask(parentId, projectId, title.Text,pendingId,pendingPriority);
                         }
                         pendingId = 0;pendingPriority=-1; pendingUndoGroup = null; title.Clear();priority.SelectedIndex=defaultPriority; feedback.Text = "子任务已添加。可独立勾选完成。"; add.Text = "添加子任务"; await reload();
-                    } catch { feedback.Text = depthLimit ? TaskDepthMessage : pendingId == 0 ? "创建失败，请重试。" : "事项已创建，关联失败；点击重试，不会重复创建。"; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
+                    } catch(Exception error) { feedback.Text = depthLimit ? TaskDepthMessage : (pendingId == 0 ? "子任务未创建，输入已保留。" : "事项已创建，关联失败；点击重试，不会重复创建。")+" "+error.Message; add.Text = pendingId == 0 ? "添加子任务" : "重试关联"; }
                     finally { writing = false; add.Enabled = !depthLimit;if(bulk!=null)bulk.Enabled=!depthLimit && pendingId==0; title.Enabled = !depthLimit && pendingId == 0;priority.Enabled=!depthLimit && pendingId==0; }
                 };
                 title.KeyDown += delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; add.PerformClick(); } };

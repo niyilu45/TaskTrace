@@ -15,6 +15,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -24,13 +25,25 @@ internal sealed class SelectionApi : HttpMessageHandler {
     internal readonly Dictionary<long,Dictionary<string,object>> Tasks=new Dictionary<long,Dictionary<string,object>>();
     internal readonly Dictionary<long,string> Lists=new Dictionary<long,string>();
     internal readonly List<string> Writes=new List<string>(),Groups=new List<string>();
-    internal readonly HashSet<long> Denied=new HashSet<long>();
+    internal readonly HashSet<long> Denied=new HashSet<long>(),PriorityDenied=new HashSet<long>();
     readonly JavaScriptSerializer json=new JavaScriptSerializer();
     internal int Reads;
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken cancel) {
         string path=request.RequestUri.AbsolutePath.Substring("/api/v2".Length);string method=request.Method.Method;
         object response;
         if(path=="/tasktrace/undo")response=new{id=1,label="batch"};
+        else if(path.StartsWith("/tasktrace/tasks/")&&path.EndsWith("/priority")) {
+            var parts=path.Split('/');long id=Int64.Parse(parts[3]);
+            if(method!="PUT")throw new Exception("Personal priority must use PUT");
+            if(PriorityDenied.Contains(id))return new HttpResponseMessage(HttpStatusCode.Forbidden){Content=new StringContent("{}")};
+            var payload=json.Deserialize<Dictionary<string,object>>(await request.Content.ReadAsStringAsync());int priority=Convert.ToInt32(payload["priority"]);object key;
+            if(payload.TryGetValue("outstanding_id",out key)) {
+                string pattern="(<li[^>]*data-id=\""+Regex.Escape(Convert.ToString(key))+"\"[^>]*data-priority=\")"+"[0-9]+"+"(\")";
+                Lists[id]=Regex.Replace(Lists[id],pattern,match=>match.Groups[1].Value+priority+match.Groups[2].Value);
+            } else Tasks[id]["priority"]=10-priority;
+            Writes.Add(method+" "+path);Groups.Add(request.Headers.GetValues("X-TaskTrace-Undo-Group").Single());
+            response=new{task_id=id,priority=priority,stored_priority=10-priority};
+        }
         else {
             var parts=path.Split('/');if(parts.Length<3||parts[1]!="tasks")throw new Exception("Unexpected request: "+path);
             long id=Int64.Parse(parts[2]);
@@ -218,7 +231,7 @@ internal sealed partial class FloatingWindow {
         api.Lists[1]=list;api.Lists[3]=list;
         var one=SelectionTask(1,"Task one");var a=SelectionLeaf(1,"a","Alpha");var b=SelectionLeaf(1,"b","Beta");
         var selected=new List<TreeNode>{one,a,b};
-        var result=await SaveSelectedStates(selected,null,0);Check(result.Saved==3&&result.Failures.Count==0&&api.Writes.Count==2&&api.Reads==1,"Batch priority did not group outstanding writes by task");
+        var result=await SaveSelectedStates(selected,null,0);Check(result.Saved==3&&result.Failures.Count==0&&api.Writes.Count==3&&api.Reads==1,"Batch priority did not use isolated per-item personal settings");
         Check(Convert.ToInt32(api.Tasks[1]["priority"])==10&&api.Groups.Distinct().Count()==1&&!String.IsNullOrWhiteSpace(api.Groups[0])&&undoGroup==null,"Priority API conversion or undo grouping failed");
         var shared=ReadShared(await ReadHistory(1));Check(shared.Items[0].Priority==0&&shared.Items[1].Priority==0&&shared.Items[0].Html.Contains("<img")&&shared.Items[0].NoteHtml=="Keep note"&&shared.Items[2].Priority==4&&shared.Items[2].ReminderAt=="2030-01-01T12:00:00Z","Batch priority lost images, memo, reminders or unselected item content");
         int writes=api.Writes.Count;result=await SaveSelectedStates(selected,null,0);Check(result.Unchanged==3&&result.Saved==0&&api.Writes.Count==writes,"Unchanged priority generated duplicate writes");
@@ -226,9 +239,14 @@ internal sealed partial class FloatingWindow {
         shared=ReadShared(await ReadHistory(1));Check(shared.Items[0].Done&&shared.Items[1].Done&&!shared.Items[2].Done&&!String.IsNullOrEmpty(shared.Items[0].CompletedAt),"Completion changed unselected entry or missed completion timestamps");
         result=await SaveSelectedStates(selected,false,null);shared=ReadShared(await ReadHistory(1));Check(result.Saved==3&&!shared.Items[0].Done&&String.IsNullOrEmpty(shared.Items[0].CompletedAt),"Batch reopen did not clear completion time");
         api.Denied.Add(2);api.Denied.Add(3);selected.Add(SelectionTask(2,"Read-only task"));selected.Add(SelectionLeaf(3,"a","Read-only outstanding"));selected.Add(SelectionLeaf(1,"missing","Moved outstanding"));
-        result=await SaveSelectedStates(selected,null,9);Check(result.Saved==3&&result.Failures.Count==3&&Convert.ToInt32(api.Tasks[2]["priority"])==3,"Partial permission/missing-item failure was hidden or discarded valid writes");
+        api.PriorityDenied.Add(3);
+        result=await SaveSelectedStates(selected,null,9);Check(result.Saved==4&&result.Failures.Count==2&&Convert.ToInt32(api.Tasks[2]["priority"])==1,"Personal priority was blocked by read-only content permission, or per-item failure was hidden");
+        api.PriorityDenied.Clear();
+        var readOnlyItems=new List<TreeNode>{SelectionTask(2,"Read-only task"),SelectionLeaf(3,"a","Read-only outstanding")};
+        result=await SaveSelectedStates(readOnlyItems,null,2);Check(result.Saved==2&&result.Failures.Count==0,"Read-only task/outstanding personal priority was denied");
+        result=await SaveSelectedStates(readOnlyItems,true,null);Check(result.Saved==0&&result.Failures.Count==2,"Read-only personal priority support accidentally allowed shared content writes");
         Check(!api.Lists[1].Contains("mint")&&!api.Lists[1].Contains("lavender")&&!api.Lists[1].Contains("soft-rose"),"Local appearance leaked into shared content");
-        Console.WriteLine("PASS mixed task/outstanding batches, priorities 0/9, one owner write, no-op suppression, one undo group, completion/reopen, image/note/reminder preservation, per-item failures and local-only colors.");
+        Console.WriteLine("PASS mixed task/outstanding batches, personal priorities 0/9 for writable and read-only shared entries, no-op suppression, one undo group, completion/reopen, image/note/reminder preservation, per-item failures and local-only colors.");
     }
 }
 internal static class FloatingMultiSelectionTests {

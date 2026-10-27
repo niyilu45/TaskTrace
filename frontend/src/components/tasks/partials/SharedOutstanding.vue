@@ -37,7 +37,24 @@
 						@change="toggleDone(entry.item, eventChecked($event))"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }} · {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
+						<span class="outstanding-priority">
+							<select
+								v-if="isLocalBuild"
+								:value="entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY"
+								:disabled="personalPriorityBlocked"
+								:aria-label="`第 ${entry.number} 条遗留事项的个人优先级`"
+								title="个人优先级，仅影响本机"
+								@change="setItemPriority(entry.item, $event)"
+							>
+								<option
+									v-for="value in 10"
+									:key="value - 1"
+									:value="value - 1"
+								>P{{ value - 1 }}</option>
+							</select>
+							<template v-else>P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</template>
+							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
+						</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
@@ -120,7 +137,24 @@
 						@change="toggleDone(entry.item, false)"
 					>
 					<div class="outstanding-body">
-						<span class="outstanding-priority">P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }} · {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
+						<span class="outstanding-priority">
+							<select
+								v-if="isLocalBuild"
+								:value="entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY"
+								:disabled="personalPriorityBlocked"
+								:aria-label="`第 ${entry.number} 条遗留事项的个人优先级`"
+								title="个人优先级，仅影响本机"
+								@change="setItemPriority(entry.item, $event)"
+							>
+								<option
+									v-for="value in 10"
+									:key="value - 1"
+									:value="value - 1"
+								>P{{ value - 1 }}</option>
+							</select>
+							<template v-else>P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</template>
+							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
+						</span>
 						<ReadonlyRichText :html="entry.item.html" />
 					</div>
 				</div>
@@ -342,8 +376,8 @@
 import {COMPLETION_OPTIONS, effectiveCompletion, manualCompletion} from '@/helpers/tasktraceCompletion'
 import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
-import {useTasktraceUndoGuard, undoInProgress} from '@/helpers/tasktraceUndo'
-import {taskAttachmentsUpload, tasksRead, patchTasksRead} from '@/client/generated'
+import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
+import {taskAttachmentsUpload, tasksRead, patchTasksRead, tasksPersonalPriorityUpdate} from '@/client/generated'
 import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
@@ -358,6 +392,8 @@ import TaskReminderModel from '@/models/taskReminder'
 import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {getErrorText} from '@/message'
 
 
 type ImageDraft = {file?: File, preview: string, attachmentId?: number}
@@ -384,6 +420,7 @@ const pendingCompletionIds = ref(new Set<string>())
 const completionTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const cachedSignatures = new Map<string, string>()
 const blocked = computed(() => props.disabled || busy.value || loading.value || noteUploading.value || undoInProgress.value)
+const personalPriorityBlocked = computed(() => busy.value || loading.value || noteUploading.value || undoInProgress.value)
 const activeIndex = computed(() => items.value.findIndex(item => item.id === activeId.value))
 const numberedItems = computed(() => numberOutstandingItems(items.value))
 const visibleItems = computed(() => numberedItems.value.filter(entry => !entry.item.done || pendingCompletionIds.value.has(entry.item.id)))
@@ -681,8 +718,8 @@ async function setItemReminder(item: OutstandingItem, reminder: ITaskReminder | 
 		items.value = result
 		message.value = '提醒已保存，并同步到悬浮窗。'
 		emit('saved')
-	} catch {
-		if (taskId === props.taskId && mounted) error.value = '提醒保存失败，请重试。'
+	} catch (cause) {
+		if (taskId === props.taskId && mounted) error.value = `提醒保存失败：${getErrorText(cause)}`
 	} finally { busy.value = false }
 }
 
@@ -700,8 +737,8 @@ async function setCompletion(item: OutstandingItem, value: number) {
 		items.value = result
 		message.value = item.done ? '填写完成度已保存；当前已勾选完成，显示为 100%。' : '完成度已保存。'
 		emit('saved')
-	} catch {
-		if (taskId === props.taskId && mounted) error.value = '完成度保存失败，请重试。'
+	} catch (cause) {
+		if (taskId === props.taskId && mounted) error.value = `完成度保存失败：${getErrorText(cause)}`
 	} finally { busy.value = false }
 }
 
@@ -725,11 +762,11 @@ async function toggleDone(item: OutstandingItem, done: boolean) {
 		items.value = result
 		message.value = done ? '已标记完成，5 秒后移入已完成遗留事项。' : '已恢复为未完成遗留事项。'
 		emit('saved')
-	} catch {
+	} catch (cause) {
 		if (taskId !== props.taskId || !mounted) return
 		items.value = previous
 		clearCompletionTimer(item.id)
-		error.value = '完成状态保存失败，请重试。'
+		error.value = `完成状态保存失败：${getErrorText(cause)}`
 	} finally {
 		busy.value = false
 	}
@@ -750,6 +787,47 @@ function imageHtml(source: string) {
 	return paragraph.outerHTML
 }
 
+async function savePersonalPriority(taskId: number, outstandingId: string, priority: number) {
+	const result = await tasksPersonalPriorityUpdate({path: {task: taskId}, body: {outstanding_id: outstandingId, priority}, headers: undoGroupHeaders()})
+	return result.data.priority ?? priority
+}
+
+async function setItemPriority(item: OutstandingItem, event: Event) {
+	if (personalPriorityBlocked.value) return
+	const selection = event.target as HTMLSelectElement
+	const priority = Number(selection.value)
+	const taskId = props.taskId
+	busy.value = true
+	error.value = ''
+	try {
+		const saved = await savePersonalPriority(taskId, item.id, priority)
+		if (taskId !== props.taskId || !mounted) return
+		items.value = items.value.map(candidate => candidate.id === item.id ? {...candidate, priority: saved} : candidate)
+		const existingDraft = drafts.get(`${taskId}:${item.id}`)
+		if (existingDraft) {
+			existingDraft.priority = saved
+			existingDraft.base.priority = saved
+			const signature = JSON.parse(existingDraft.original)
+			signature[2] = saved
+			existingDraft.original = JSON.stringify(signature)
+		}
+		message.value = '个人优先级已保存，仅影响本机。'
+		emit('saved')
+	} catch (cause) {
+		if (taskId !== props.taskId || !mounted) return
+		selection.value = String(item.priority ?? TASKTRACE_DEFAULT_PRIORITY)
+		error.value = `个人优先级保存失败：${getErrorText(cause)}`
+	} finally { busy.value = false }
+}
+
+function onlyPriorityChanged(value: Draft) {
+	const original = JSON.parse(value.original)
+	const current = JSON.parse(draftSignature(value))
+	if (original[2] === current[2]) return false
+	original[2] = current[2]
+	return JSON.stringify(original) === JSON.stringify(current)
+}
+
 async function save() {
 	if (blocked.value || !canSave.value) return
 	const taskId = props.taskId
@@ -760,7 +838,18 @@ async function save() {
 	error.value = ''
 	message.value = ''
 	try {
-
+		if (isLocalBuild && targetId && onlyPriorityChanged(savedDraft)) {
+			const priority = await savePersonalPriority(taskId, targetId, savedDraft.priority)
+			clearDraft(key)
+			void deleteTaskTraceDraft('outstanding', taskId, cacheKey(targetId)).catch(() => {})
+			if (taskId !== props.taskId || !mounted) return
+			items.value = items.value.map(item => item.id === targetId ? {...item, priority} : item)
+			activeId.value = ''
+			showComposer.value = false
+			message.value = '个人优先级已保存，仅影响本机。'
+			emit('saved')
+			return
+		}
 		const savedNote = await persistProgressImages(savedDraft.note, taskId)
 		for (const picture of savedDraft.images) {
 			if (picture.attachmentId) continue
@@ -770,7 +859,7 @@ async function save() {
 			if (attachmentId) picture.attachmentId = attachmentId
 			if (!attachmentId || result.data.errors?.length) throw new Error('Image upload failed')
 		}
-		const result = await changeOutstanding(taskId, existing => {
+		let result = await changeOutstanding(taskId, existing => {
 			const current = targetId ? existing.find(item => item.id === targetId) : undefined
 			if (targetId && !current) throw new Error('Outstanding item no longer exists')
 			const images = savedDraft.images.map(picture => picture.attachmentId ? `/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}` : picture.preview)
@@ -799,6 +888,11 @@ async function save() {
 			const added = {id: savedDraft.itemId, html, note, done: false, priority: savedDraft.priority}
 			return existing.some(item => item.id === added.id) ? existing.map(item => item.id === added.id ? added : item) : [...existing, added]
 		})
+		if (isLocalBuild && (!targetId || savedDraft.priority !== savedDraft.base.priority)) {
+			const id = targetId || savedDraft.itemId
+			const priority = await savePersonalPriority(taskId, id, savedDraft.priority)
+			result = result.map(item => item.id === id ? {...item, priority} : item)
+		}
 		clearDraft(key)
 		void deleteTaskTraceDraft('outstanding', taskId, cacheKey(targetId)).catch(() => {})
 		if (taskId !== props.taskId || !mounted) return
@@ -809,14 +903,15 @@ async function save() {
 		emit('saved')
 	} catch (cause) {
 		if (taskId !== props.taskId || !mounted) return
-		const status = (cause as {response?: {status?: number}})?.response?.status
+		const failure = cause as {status?: number, response?: {status?: number}, reason?: {response?: {status?: number}}}
+		const status = failure?.status ?? failure?.response?.status ?? failure?.reason?.response?.status
 		error.value = status === 403
-			? '当前协作权限为只读，输入和图片已保留。所属人开放写权限后可直接再次保存。'
+			? `当前协作读写权限不足：${getErrorText(cause)}。输入和图片已保留，所属人开放写权限后可直接再次保存。`
 			: cause instanceof Error && cause.message === 'Outstanding item no longer exists'
 				? '这条遗留事项已被移除或移动。输入和图片已保留，请重新读取。'
 				: cause instanceof Error && cause.message === 'Outstanding edit conflict'
 					? '这条遗留事项的同一内容已在其他窗口修改。输入和图片已保留，请重新读取后合并。'
-					: '保存失败，输入和图片已保留，请重试。'
+					: `保存失败：${getErrorText(cause)}。输入和图片已保留，请重试。`
 	} finally {
 		busy.value = false
 	}
@@ -839,8 +934,8 @@ async function remove(id: string) {
 			showComposer.value = false
 		}
 		emit('saved')
-	} catch {
-		if (taskId === props.taskId && mounted) error.value = '移除失败，请重试。'
+	} catch (cause) {
+		if (taskId === props.taskId && mounted) error.value = `移除失败：${getErrorText(cause)}`
 	} finally {
 		busy.value = false
 	}

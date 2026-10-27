@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {flushPromises, mount, type VueWrapper} from '@vue/test-utils'
-import {taskAttachmentsUpload, taskCommentsCreate, taskCommentsDelete, taskCommentsList, taskCommentsUpdate} from '@/client/generated'
+import {taskAttachmentsUpload, taskCommentsCreate, taskCommentsDelete, taskCommentsList, taskCommentsUpdate, tasksPersonalPriorityUpdate} from '@/client/generated'
 import SharedOutstanding from './SharedOutstanding.vue'
 import {readTaskTraceDraft, deleteTaskTraceDraft} from '@/helpers/tasktraceDraftCache'
 
@@ -10,7 +10,9 @@ vi.mock('@/client/generated', () => ({
 	taskCommentsDelete: vi.fn(),
 	taskCommentsList: vi.fn(),
 	taskCommentsUpdate: vi.fn(),
+	tasksPersonalPriorityUpdate: vi.fn(),
 }))
+vi.mock('@/message', () => ({getErrorText: (cause: {message?: string, detail?: string}) => cause.message || cause.detail || ''}))
 vi.mock('@/helpers/autoSave', () => ({autoSaveSettings: {enabled: false}, useAutoSave: () => {}}))
 vi.mock('@/helpers/tasktraceLocal', () => ({isLocalBuild: true}))
 vi.mock('@/helpers/attachments', () => ({fetchAttachmentBlobUrl: vi.fn(async ({id}: {id: number}) => `blob:attachment-${id}`)}))
@@ -32,6 +34,7 @@ let wrapper: VueWrapper
 let history: {id: number, comment: string}[]
 let attachmentId: number
 let root: HTMLDivElement
+const priorityUpdate = vi.mocked(tasksPersonalPriorityUpdate)
 const upload = vi.mocked(taskAttachmentsUpload)
 const update = vi.mocked(taskCommentsUpdate)
 const create = vi.mocked(taskCommentsCreate)
@@ -90,6 +93,7 @@ beforeEach(() => {
 		return {data: {message: 'success'}} as never
 	})
 	upload.mockImplementation(async () => ({data: {success: [{id: ++attachmentId}]}}) as never)
+	priorityUpdate.mockImplementation(async ({body}) => ({data: {task_id: 42, priority: body.priority, outstanding_id: body.outstanding_id}}) as never)
 })
 
 afterEach(() => {
@@ -100,6 +104,41 @@ afterEach(() => {
 })
 
 describe('outstanding item images', () => {
+	it('allows a shared-task reader to update only their personal item priority', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first" data-priority="7">Read-only item</li>')}]
+		await open(true)
+		const select = wrapper.get('select[aria-label="第 1 条遗留事项的个人优先级"]')
+		expect(select.attributes('disabled')).toBeUndefined()
+		await select.setValue('2')
+		await flushPromises()
+		expect(priorityUpdate).toHaveBeenCalledWith(expect.objectContaining({path: {task: 42}, body: {outstanding_id: 'first', priority: 2}}))
+		expect(wrapper.text()).toContain('个人优先级已保存，仅影响本机')
+		expect(update).not.toHaveBeenCalled()
+		expect(create).not.toHaveBeenCalled()
+		expect(wrapper.get('input[type="checkbox"]').attributes('disabled')).toBeDefined()
+	})
+
+	it('saves an editor-only priority change without posting content or comments', async () => {
+		history = [{id: 1, comment: shared('<li data-id="first" data-priority="7">Existing</li>')}]
+		await open()
+		await click('编辑')
+		await wrapper.get('.outstanding-priority-select').setValue('1')
+		await click('保存修改')
+		expect(priorityUpdate).toHaveBeenCalledWith(expect.objectContaining({body: {outstanding_id: 'first', priority: 1}}))
+		expect(update).not.toHaveBeenCalled()
+		expect(create).not.toHaveBeenCalled()
+	})
+
+	it('shows a direct API read/write denial and keeps the unsaved item content', async () => {
+		await open()
+		await startNew()
+		await wrapper.get('textarea').setValue('Keep my text')
+		create.mockRejectedValueOnce({status: 403, detail: '此协作任务不具备写权限'})
+		await click('添加遗留事项')
+		expect(wrapper.get('[role="alert"]').text()).toContain('不具备写权限')
+		expect(wrapper.get('textarea').element).toHaveProperty('value', 'Keep my text')
+	})
+
 	it('opens a compact composer with a collapsed note without marking the empty draft dirty', async () => {
 		await open()
 		await startNew()

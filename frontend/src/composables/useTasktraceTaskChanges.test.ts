@@ -1,6 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {effectScope, nextTick, ref} from 'vue'
 import {useTasktraceTaskChanges} from './useTasktraceTaskChanges'
+import {publishTasktraceTaskChanges} from '@/helpers/tasktraceTaskEvents'
 
 const socket = vi.hoisted(() => ({callback: undefined as undefined | ((message: unknown) => void), unsubscribe: vi.fn(), authenticated: undefined as undefined | ReturnType<typeof ref<boolean>>}))
 vi.mock('./useWebSocket', async () => {
@@ -64,4 +65,19 @@ it('keeps distinct task and relation changes through retries and reconnects', as
  socket.authenticated!.value = true; await nextTick()
  await vi.advanceTimersByTimeAsync(350)
  expect(refresh).toHaveBeenLastCalledWith(null)
+})
+
+
+it('coalesces a committed local child deletion with the server event for the parent card', async () => {
+ const refresh = vi.fn(async () => {})
+ scope.run(() => useTasktraceTaskChanges(refresh, change => change.task_id === 42 || change.related_task_id === 42))
+ publishTasktraceTaskChanges([{task_id: 99, project_id: 1, deleted: true}, {task_id: 42, project_id: 1, related_task_id: 99}])
+ socket.callback?.({data: {task_id: 42, project_id: 1, related_task_id: 99}})
+ await vi.advanceTimersByTimeAsync(350)
+ expect(refresh).toHaveBeenCalledTimes(1)
+ expect(refresh).toHaveBeenLastCalledWith([{task_id: 42, project_id: 1, related_task_id: 99}])
+ scope.stop()
+ publishTasktraceTaskChanges([{task_id: 42, project_id: 1}])
+ await vi.advanceTimersByTimeAsync(1000)
+ expect(refresh).toHaveBeenCalledTimes(1)
 })

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"code.vikunja.io/api/pkg/db"
 	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 
@@ -183,7 +184,7 @@ func taskTraceTeamCan(manifest *TaskTraceTeamManifest, nodeID, outstandingID, us
 // The state and manifest files are atomically replaced, so this read must not
 // wait on taskTraceTeamMu: collaboration sync may be blocked on a slow network
 // share, and ordinary task saves still need a bounded permission decision.
-func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
+func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64, sessions ...*xorm.Session) (bool, error) {
 	if !taskTraceTeamEnabled() {
 		return true, nil
 	}
@@ -213,9 +214,50 @@ func taskTraceTeamCanWriteLocalTask(a web.Auth, taskID int64) (bool, error) {
 			// write access when teamData is temporarily unavailable.
 			return false, nil
 		}
-		return taskTraceTeamCan(&manifest, nodeID, "", u.Username, true), nil
+		if _, explicit := manifest.Permissions[nodeID]; explicit || taskID == binding.RootTaskID {
+			return taskTraceTeamCan(&manifest, nodeID, "", u.Username, true), nil
+		}
+		// A just-created descendant can be in the local node map before the
+		// next shared manifest is published. Inherit only through the actual
+		// parent chain in this same binding; an explicit choice always wins.
+		var session *xorm.Session
+		if len(sessions) > 0 {
+			session = sessions[0]
+		}
+		if session == nil {
+			session = db.NewReadSession()
+			defer session.Close()
+		}
+		return taskTraceTeamCanWriteUnpublishedDescendant(session, binding, &manifest, taskID, u.Username)
 	}
 	return true, nil
+}
+
+func taskTraceTeamCanWriteUnpublishedDescendant(s *xorm.Session, binding *TaskTraceTeamBinding, manifest *TaskTraceTeamManifest, taskID int64, username string) (bool, error) {
+	visited := map[int64]bool{taskID: true}
+	for level := 1; level < MaxTaskHierarchyDepth; level++ {
+		var parents []*TaskRelation
+		if err := s.Where("task_id = ? AND relation_kind = ?", taskID, RelationKindParenttask).Limit(2).Find(&parents); err != nil {
+			return false, err
+		}
+		// Ambiguous legacy parents must not select whichever one is more permissive.
+		if len(parents) != 1 {
+			return false, nil
+		}
+		taskID = parents[0].OtherTaskID
+		if visited[taskID] {
+			return false, nil
+		}
+		visited[taskID] = true
+		node := taskTraceTeamNodeForTask(binding, taskID)
+		if node == "" {
+			return false, nil
+		}
+		if _, explicit := manifest.Permissions[node]; explicit || taskID == binding.RootTaskID {
+			return taskTraceTeamCan(manifest, node, "", username, true), nil
+		}
+	}
+	return false, nil
 }
 
 // taskTraceTeamOwnsLocalTask reports whether the authenticated user owns the

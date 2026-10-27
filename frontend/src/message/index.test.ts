@@ -91,3 +91,18 @@ describe('getErrorText', () => {
 		expect(text).toBe('cannot import team task：无法读取团队共享目录')
 	})
 })
+
+describe('permission failure messages', () => {
+	it('explains a shared-task write denial', () => {
+		expect(getErrorText({status: 403, detail: 'forbidden'})).toContain('读写权限')
+		expect(getErrorText({response: {status: 403, data: {detail: 'forbidden'}}})).toContain('任务所属人')
+	})
+	it('explains a filesystem permission failure without hiding its cause', () => {
+		const text = getErrorText({detail: 'save shared task', errors: [{message: 'Access is denied'}]})
+		expect(text).toContain('共享目录')
+		expect(text).toContain('Access is denied')
+	})
+	it('preserves the actionable administrator authorization marker', () => {
+		expect(getErrorText({status: 403, detail: 'Windows administrator authorization required'})).toBe('Windows administrator authorization required')
+	})
+})

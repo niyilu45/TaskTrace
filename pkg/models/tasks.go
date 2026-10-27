@@ -184,6 +184,11 @@ type Task struct {
 	// The UID is currently not used for anything other than CalDAV, which is why we don't expose it over json
 	UID string `xorm:"varchar(250) null" json:"-"`
 
+	// ParentTaskID is a creation-only request: the child and both relation rows
+	// are created in the same transaction. Existing hierarchy edits use relations.
+	deletionScopeIDs []int64 `xorm:"-" json:"-"`
+	ParentTaskID     int64   `xorm:"-" json:"parent_task_id,omitempty" minimum:"0" doc:"When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates."`
+
 	// All related tasks, grouped by their relation kind
 	RelatedTasks RelatedTaskMap `xorm:"-" json:"related_tasks" readOnly:"true" doc:"Related tasks grouped by relation kind. Read-only here; use the task-relation endpoints to change relations."`
 
@@ -1118,6 +1123,17 @@ func createTasks(s *xorm.Session, projectID int64, tasks []*Task, a web.Auth, up
 		}
 
 		t.ProjectID = projectID
+		if t.ParentTaskID != 0 {
+			// Importers and bulk creation also use this model directly. Validate
+			// the parent before inserting any task, not only in HTTP permissions.
+			allowed, checkErr := t.CanCreate(s, a)
+			if checkErr != nil {
+				return ErrInvalidTaskInBulkCreation{Index: i, Err: checkErr}
+			}
+			if !allowed {
+				return ErrInvalidTaskInBulkCreation{Index: i, Err: ErrGenericForbidden{}}
+			}
+		}
 		t.ID = 0
 		if !preserveIndexes {
 			t.Index = 0
@@ -1153,6 +1169,25 @@ func createTasks(s *xorm.Session, projectID int64, tasks []*Task, a web.Auth, up
 		_, err = s.Insert(t)
 		if err != nil {
 			return err
+		}
+	}
+
+	for index, task := range tasks {
+		if task.ParentTaskID == 0 {
+			continue
+		}
+		relation := &TaskRelation{TaskID: task.ParentTaskID, OtherTaskID: task.ID, RelationKind: RelationKindSubtask}
+		allowed, checkErr := relation.CanCreate(s, a)
+		if checkErr != nil {
+			return ErrInvalidTaskInBulkCreation{Index: index, Err: checkErr}
+		}
+		if !allowed {
+			return ErrInvalidTaskInBulkCreation{Index: index, Err: ErrGenericForbidden{}}
+		}
+		// Both relation directions and all task records share this transaction.
+		// Relation, bucket or position failures roll the complete creation back.
+		if err := relation.Create(s, a); err != nil {
+			return ErrInvalidTaskInBulkCreation{Index: index, Err: err}
 		}
 	}
 
@@ -2252,6 +2287,27 @@ func updateTaskLastUpdated(s *xorm.Session, task *Task) error {
 // @Failure 500 {object} models.Message "Internal error"
 // @Router /tasks/{id} [delete]
 func (t *Task) Delete(s *xorm.Session, a web.Auth) (err error) {
+	if !taskTraceTeamEnabled() {
+		return t.deleteSingleTask(s, a)
+	}
+	tasks, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
+	if err != nil {
+		return err
+	}
+	if len(t.deletionScopeIDs) > 0 && !taskTraceSameDeletionScope(t.deletionScopeIDs, tasks) {
+		return taskTraceUndoConflict()
+	}
+	// Validate the complete tree before deleting anything; then remove leaves
+	// first so each task is still readable when its deletion event is captured.
+	for index := len(tasks) - 1; index >= 0; index-- {
+		if err := tasks[index].deleteSingleTask(s, a); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Task) deleteSingleTask(s *xorm.Session, a web.Auth) (err error) {
 
 	// duplicate the task for the event
 	fullTask := &Task{ID: t.ID}

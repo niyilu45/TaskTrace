@@ -2238,6 +2238,10 @@ export type Task = {
      */
     readonly labels?: Array<Label> | null;
     /**
+     * When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates.
+     */
+    parent_task_id?: number;
+    /**
      * How far the task is from done, between 0 and 1.
      */
     percent_done?: number;
@@ -2578,6 +2582,10 @@ export type TaskReadOneBody = {
      * The maximum permission the requesting user has on this task (0=read, 1=read/write, 2=admin).
      */
     readonly max_permission?: number;
+    /**
+     * When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates.
+     */
+    parent_task_id?: number;
     /**
      * How far the task is from done, between 0 and 1.
      */
@@ -3043,6 +3051,33 @@ export type TaskTracePeriodReview = {
     readonly projects?: Array<TaskTraceReviewProject> | null;
     readonly task_count?: number;
     readonly warnings?: Array<string> | null;
+};
+
+export type TaskTracePersonalPriority = {
+    /**
+     * A URL to the JSON Schema for this object.
+     */
+    readonly $schema?: string;
+    /**
+     * The current outstanding-list comment, when an item priority was changed.
+     */
+    readonly comment_id?: number;
+    /**
+     * An existing outstanding item id; empty changes the task priority.
+     */
+    outstanding_id?: string;
+    /**
+     * Personal display priority: 0 is highest and 9 is lowest.
+     */
+    priority?: number;
+    /**
+     * The local task-priority encoding used by normal task responses.
+     */
+    readonly stored_priority?: number;
+    /**
+     * The local task id, supplied by the URL.
+     */
+    readonly task_id?: number;
 };
 
 export type TaskTraceRecoverableBackup = {
@@ -5440,6 +5475,10 @@ export type TaskWritable = {
      */
     is_favorite?: boolean;
     /**
+     * When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates.
+     */
+    parent_task_id?: number;
+    /**
      * How far the task is from done, between 0 and 1.
      */
     percent_done?: number;
@@ -5544,6 +5583,10 @@ export type TaskReadOneBodyWritable = {
      * Whether the requesting user has favorited this task. Per-user, so it differs between callers.
      */
     is_favorite?: boolean;
+    /**
+     * When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates.
+     */
+    parent_task_id?: number;
     /**
      * How far the task is from done, between 0 and 1.
      */
@@ -5708,6 +5751,17 @@ export type TaskTraceOutstandingMoveWritable = {
 
 export type TaskTracePeriodReviewWritable = {
     [key: string]: never;
+};
+
+export type TaskTracePersonalPriorityWritable = {
+    /**
+     * An existing outstanding item id; empty changes the task priority.
+     */
+    outstanding_id?: string;
+    /**
+     * Personal display priority: 0 is highest and 9 is lowest.
+     */
+    priority?: number;
 };
 
 export type TaskTraceRecoverableBackupWritable = {
@@ -11919,6 +11973,33 @@ export type TasktracePeriodReviewResponses = {
 };
 
 export type TasktracePeriodReviewResponse = TasktracePeriodReviewResponses[keyof TasktracePeriodReviewResponses];
+
+export type TasksPersonalPriorityUpdateData = {
+    body: TaskTracePersonalPriorityWritable;
+    path: {
+        task: number;
+    };
+    query?: never;
+    url: '/tasktrace/tasks/{task}/priority';
+};
+
+export type TasksPersonalPriorityUpdateErrors = {
+    /**
+     * Error
+     */
+    default: VikunjaErrorModel;
+};
+
+export type TasksPersonalPriorityUpdateError = TasksPersonalPriorityUpdateErrors[keyof TasksPersonalPriorityUpdateErrors];
+
+export type TasksPersonalPriorityUpdateResponses = {
+    /**
+     * OK
+     */
+    200: TaskTracePersonalPriority;
+};
+
+export type TasksPersonalPriorityUpdateResponse = TasksPersonalPriorityUpdateResponses[keyof TasksPersonalPriorityUpdateResponses];
 
 export type TasktraceTeamStatusData = {
     body?: never;

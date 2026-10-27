@@ -274,6 +274,9 @@ import TaskService from '@/services/task'
 
 import {formatDisplayDate, formatISO, formatDateLong} from '@/helpers/time/formatDate'
 import {error, success} from '@/message'
+import {tasksPersonalPriorityUpdate} from '@/client/generated'
+import {isLocalBuild} from '@/helpers/tasktraceLocal'
+import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
 
 import {useProjectStore} from '@/stores/projects'
 import {useBaseStore} from '@/stores/base'
@@ -487,9 +490,24 @@ async function saveInline(changes: Partial<ITask>) {
 	}
 }
 
-function changePriority(event: Event) {
-	const displayed = Number((event.target as HTMLSelectElement).value)
-	void saveInline({priority: tasktraceStoredPriority(displayed) as Priority})
+async function changePriority(event: Event) {
+	const selection = event.target as HTMLSelectElement
+	const displayed = Number(selection.value)
+	const priority = tasktraceStoredPriority(displayed) as Priority
+	if (!isLocalBuild) return saveInline({priority})
+	if (inlineSaving.value || props.disabled || props.isArchived) return
+	const id = task.value.id
+	inlineSaving.value = true
+	try {
+		const result = await tasksPersonalPriorityUpdate({path: {task: id}, body: {priority: displayed}, headers: undoGroupHeaders()})
+		if (task.value.id !== id) return
+		task.value.priority = (result.data.stored_priority ?? priority) as Priority
+		taskStore.lastUpdatedTask = new TaskModel(task.value)
+		emit('taskUpdated', task.value)
+	} catch (cause) {
+		selection.value = String(tasktracePriorityNumber(task.value.priority))
+		error(cause)
+	} finally { inlineSaving.value = false }
 }
 
 function changeStatus(event: Event) {

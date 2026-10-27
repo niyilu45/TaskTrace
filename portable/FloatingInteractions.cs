@@ -319,7 +319,13 @@ internal sealed partial class FloatingWindow {
             if(task!=null)task.CurrentTextLength=current.Length;else if(leaf!=null)leaf.CurrentTextLength=current.Length;
         }
     }
+    async Task SavePersonalPriority(long taskId,int priority,string outstandingId=null) {
+        var payload=new Dictionary<string,object>{{"priority",Math.Max(0,Math.Min(9,priority))}};
+        if(!String.IsNullOrWhiteSpace(outstandingId))payload["outstanding_id"]=outstandingId;
+        await Api("PUT","/tasktrace/tasks/"+taskId+"/priority",payload);
+    }
     async Task UpdateOutstandingState(long taskId,string itemId,bool? done,int? priority) {
+        if(!done.HasValue && priority.HasValue){await SavePersonalPriority(taskId,priority.Value,itemId);return;}
         var shared=ReadShared(await ReadHistory(taskId));var item=shared.Items.FirstOrDefault(value=>value.Id==itemId);
         if(item==null)throw new Exception("这条遗留事项已被移动或移除，请刷新后重试。");
         bool completionChanged=done.HasValue && item.Done!=done.Value;
@@ -345,7 +351,7 @@ internal sealed partial class FloatingWindow {
                 var choice=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList};for(int value=0;value<=9;value++)choice.Items.Add(PriorityChoiceText(value)+(value==defaultPriority?" · 新增默认":""));choice.SelectedIndex=selectedPriority;
                 var save=new Button{Text="保存优先级",AutoSize=true};bool writing=false;
                 layout.Controls.Add(new Label{Text=leaf==null?"0 最高，9 最低；当前新增默认 "+defaultPriority+"。按优先级排列时，\r\n同级任务排序，下级任务保留在父任务下。":"0 最高，9 最低；当前新增默认 "+defaultPriority+"。",Dock=DockStyle.Fill});layout.Controls.Add(choice);layout.Controls.Add(save);dialog.Controls.Add(layout);
-                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await Api("PATCH","/tasks/"+id,new{priority=10-choice.SelectedIndex});else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);saved=true;writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
+                save.Click+=async delegate{if(writing)return;writing=true;save.Enabled=false;choice.Enabled=false;try{if(leaf==null)await SavePersonalPriority(id,choice.SelectedIndex);else await UpdateOutstandingState(leaf.TaskId,leaf.Id,null,choice.SelectedIndex);saved=true;writing=false;dialog.Close();}catch(Exception e){MessageBox.Show(dialog,e.Message,"优先级未保存");}finally{writing=false;if(!dialog.IsDisposed){save.Enabled=true;choice.Enabled=true;}}};
                 dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(this);
             }
             if(saved){await LoadTasks();tasks.RestoreNativeScroll(viewport);}
@@ -490,7 +496,11 @@ internal sealed partial class FloatingWindow {
                         bool noteChanged=noteDirty();
                         bool priorityChanged=priority.SelectedIndex!=originalPriority;
                         bool appearanceChanged=SelectedAppearance(appearance)!=originalAppearance;
-                        if(!deleting && editingId!=null && appearanceChanged && !textChanged && !noteChanged && !priorityChanged && pictures.Count==0 && !removeExistingImages){SetLocalOutstandingAppearance(id,editingId,SelectedAppearance(appearance));originalAppearance=SelectedAppearance(appearance);DeleteDraftCache("outstanding",id,savedDraftKey);feedback.Text="背景色已保存到本机，不会同步给协作成员。";return true;}
+                        if(!deleting && editingId!=null && !textChanged && !noteChanged && pictures.Count==0 && !removeExistingImages){
+                            if(priorityChanged){await SavePersonalPriority(id,priority.SelectedIndex,editingId);originalPriority=priority.SelectedIndex;var local=shared.Items.FirstOrDefault(item=>item.Id==editingId);if(local!=null)local.Priority=originalPriority;}
+                            if(appearanceChanged){SetLocalOutstandingAppearance(id,editingId,SelectedAppearance(appearance));originalAppearance=SelectedAppearance(appearance);}
+                            DeleteDraftCache("outstanding",id,savedDraftKey);render();loading=true;list.SelectedItem=shared.Items.FirstOrDefault(item=>item.Id==editingId);loading=false;feedback.Text="本机优先级和背景色已保存，不会同步给协作成员。";return true;
+                        }
                         var current=ReadShared(await ReadHistory(id));var existing=current.Items.FirstOrDefault(item=>item.Id==(editingId??draftId));
                         if(editingId!=null && existing==null)throw new Exception("这条事项已被移动或移除；输入已保留，请重新读取后添加。");
                         if(existing!=null){
@@ -511,7 +521,7 @@ internal sealed partial class FloatingWindow {
                             if(noteChanged)savedNote=await PersistOutstandingNoteEditorImages(id,noteEditor.Html);
                             if(existing==null)current.Items.Add(new PendingItem{Id=draftId,Html=body,NoteHtml=savedNote,Priority=priority.SelectedIndex});else{existing.Html=body;existing.NoteHtml=savedNote;if(priorityChanged)existing.Priority=priority.SelectedIndex;}
                         }
-                        await WriteShared(id,current);if(deleting)RemoveLocalOutstandingAppearance(id,editingId);else SetLocalOutstandingAppearance(id,editingId??draftId,SelectedAppearance(appearance));DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();
+                        await WriteShared(id,current);if(!deleting && (priorityChanged || editingId==null))await SavePersonalPriority(id,priority.SelectedIndex,editingId??draftId);if(deleting)RemoveLocalOutstandingAppearance(id,editingId);else SetLocalOutstandingAppearance(id,editingId??draftId,SelectedAppearance(appearance));DeleteDraftCache("outstanding",id,savedDraftKey);shared=current;render();
                         var continueEditing=String.IsNullOrEmpty(continueEditingId)?null:shared.Items.FirstOrDefault(item=>item.Id==continueEditingId);
                         if(continueEditing!=null){loading=true;list.SelectedItem=continueEditing;loading=false;await edit(continueEditing);}else await edit(null);
                         feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。备注和图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;

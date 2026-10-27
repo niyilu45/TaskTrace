@@ -110,15 +110,16 @@ type TaskTraceTeamTask struct {
 }
 
 type TaskTraceTeamSnapshot struct {
-	Schema         int                          `json:"schema"`
-	ShareID        string                       `json:"share_id"`
-	Actor          string                       `json:"actor"`
-	DeviceID       string                       `json:"device_id"`
-	Updated        time.Time                    `json:"updated"`
-	Avatar         string                       `json:"avatar,omitempty"`
-	ResolutionAcks map[string]string            `json:"resolution_acks,omitempty"`
-	Base           map[string]TaskTraceTeamBase `json:"base,omitempty"`
-	Tasks          []TaskTraceTeamTask          `json:"tasks"`
+	TaskStates     map[string]TaskTraceTeamTaskState `json:"task_states,omitempty"`
+	Schema         int                               `json:"schema"`
+	ShareID        string                            `json:"share_id"`
+	Actor          string                            `json:"actor"`
+	DeviceID       string                            `json:"device_id"`
+	Updated        time.Time                         `json:"updated"`
+	Avatar         string                            `json:"avatar,omitempty"`
+	ResolutionAcks map[string]string                 `json:"resolution_acks,omitempty"`
+	Base           map[string]TaskTraceTeamBase      `json:"base,omitempty"`
+	Tasks          []TaskTraceTeamTask               `json:"tasks"`
 }
 
 type TaskTraceTeamBase struct {
@@ -150,23 +151,24 @@ type TaskTraceTeamConflict struct {
 }
 
 type TaskTraceTeamBinding struct {
-	ShareID               string                       `json:"share_id"`
-	Repository            string                       `json:"repository"`
-	Secret                string                       `json:"secret"`
-	Owner                 string                       `json:"owner"`
-	Members               []string                     `json:"members"`
-	RootTaskID            int64                        `json:"root_task_id"`
-	ProjectID             int64                        `json:"project_id"`
-	NodeTasks             map[string]int64             `json:"node_tasks"`
-	Base                  map[string]TaskTraceTeamBase `json:"base"`
-	Notify                bool                         `json:"notify"`
-	LastSnapshotHash      string                       `json:"last_snapshot_hash,omitempty"`
-	LastSync              time.Time                    `json:"last_sync,omitempty"`
-	LastError             string                       `json:"last_error,omitempty"`
-	Conflicts             []TaskTraceTeamConflict      `json:"conflicts,omitempty"`
-	ResolutionAcks        map[string]string            `json:"resolution_acks,omitempty"`
-	LocalAttachments      map[string]int64             `json:"local_attachments,omitempty"`
-	OutstandingPriorities map[string]int               `json:"outstanding_priorities,omitempty"`
+	TaskStates            map[string]TaskTraceTeamTaskState `json:"task_states,omitempty"`
+	ShareID               string                            `json:"share_id"`
+	Repository            string                            `json:"repository"`
+	Secret                string                            `json:"secret"`
+	Owner                 string                            `json:"owner"`
+	Members               []string                          `json:"members"`
+	RootTaskID            int64                             `json:"root_task_id"`
+	ProjectID             int64                             `json:"project_id"`
+	NodeTasks             map[string]int64                  `json:"node_tasks"`
+	Base                  map[string]TaskTraceTeamBase      `json:"base"`
+	Notify                bool                              `json:"notify"`
+	LastSnapshotHash      string                            `json:"last_snapshot_hash,omitempty"`
+	LastSync              time.Time                         `json:"last_sync,omitempty"`
+	LastError             string                            `json:"last_error,omitempty"`
+	Conflicts             []TaskTraceTeamConflict           `json:"conflicts,omitempty"`
+	ResolutionAcks        map[string]string                 `json:"resolution_acks,omitempty"`
+	LocalAttachments      map[string]int64                  `json:"local_attachments,omitempty"`
+	OutstandingPriorities map[string]int                    `json:"outstanding_priorities,omitempty"`
 }
 
 type taskTraceTeamResolutionRecord struct {
@@ -992,6 +994,9 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 	parents := map[int64]int64{}
 	seen := map[int64]bool{}
 	for _, root := range roots {
+		if taskTraceTeamTaskDeleted(binding, taskTraceTeamNodeForTask(binding, root)) {
+			continue
+		}
 		subtreeIDs, subtreeParents, err := taskTraceTeamSubtree(s, root)
 		if err != nil {
 			return TaskTraceTeamSnapshot{}, err
@@ -1024,7 +1029,7 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		value.Outstanding = taskTraceTeamStripOutstandingPriorities(value.Outstanding)
 		base[node] = value
 	}
-	snapshot := TaskTraceTeamSnapshot{Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), Avatar: taskTraceTeamAvatarDataURI(s, actor), ResolutionAcks: acks, Base: base, Tasks: []TaskTraceTeamTask{}}
+	snapshot := TaskTraceTeamSnapshot{TaskStates: taskTraceTeamCopyTaskStates(binding.TaskStates), Schema: taskTraceTeamSchema, ShareID: binding.ShareID, Actor: actor, DeviceID: device, Updated: time.Now().UTC(), Avatar: taskTraceTeamAvatarDataURI(s, actor), ResolutionAcks: acks, Base: base, Tasks: []TaskTraceTeamTask{}}
 	for _, taskID := range ids {
 		task, err := GetTaskByIDSimple(s, taskID)
 		if err != nil {
@@ -1124,6 +1129,7 @@ func taskTraceTeamSnapshotHash(snapshot TaskTraceTeamSnapshot) string {
 	normalized.Updated = time.Time{}
 	normalized.Avatar = ""
 	normalized.Base = nil
+	normalized = taskTraceTeamWithoutPersonalPriorities(normalized)
 	b, err := json.Marshal(normalized)
 	if err != nil {
 		return ""
@@ -1250,7 +1256,25 @@ func taskTraceTeamLatestSharedBase(snapshots []TaskTraceTeamSnapshot) map[string
 	return taskTraceTeamCanonicalizeBase(latest.Base, *latest)
 }
 
+func taskTraceTeamWithoutPersonalPriorities(snapshot TaskTraceTeamSnapshot) TaskTraceTeamSnapshot {
+	snapshot.Tasks = append([]TaskTraceTeamTask(nil), snapshot.Tasks...)
+	for i := range snapshot.Tasks {
+		snapshot.Tasks[i].Outstanding = taskTraceTeamStripOutstandingPriorities(snapshot.Tasks[i].Outstanding)
+	}
+	if snapshot.Base != nil {
+		snapshot.Base = taskTraceTeamCopyBase(snapshot.Base)
+		for node, base := range snapshot.Base {
+			base.Outstanding = taskTraceTeamStripOutstandingPriorities(base.Outstanding)
+			snapshot.Base[node] = base
+		}
+	}
+	return snapshot
+}
+
 func taskTraceTeamWriteSnapshot(binding *TaskTraceTeamBinding, snapshot TaskTraceTeamSnapshot) error {
+	// Strip at the actual wire boundary so older recipients cannot inherit a
+	// personal priority from raw actor data. Never mutate the caller's snapshot.
+	snapshot = taskTraceTeamWithoutPersonalPriorities(snapshot)
 	return taskTraceTeamWriteJSON(taskTraceTeamSnapshotPath(binding, snapshot.Actor, snapshot.DeviceID), &snapshot)
 }
 
@@ -2212,7 +2236,7 @@ func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskT
 		return err
 	}
 	for _, shared := range plan {
-		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, PercentDone: taskTraceCompletionValue(shared.PercentDone), Priority: 7}
+		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, PercentDone: taskTraceCompletionValue(shared.PercentDone), Priority: 10 - taskTraceDefaultDisplayPriority()}
 		if err := task.Create(s, a); err != nil {
 			return err
 		}
@@ -2326,6 +2350,9 @@ func taskTraceTeamValidateBinding(binding *TaskTraceTeamBinding, actor string) e
 func taskTraceTeamPruneMissingTaskMappings(s *xorm.Session, binding *TaskTraceTeamBinding) error {
 	for node, taskID := range binding.NodeTasks {
 		if _, err := GetTaskByIDSimple(s, taskID); err != nil {
+			if taskTraceTeamTaskDeleted(binding, node) {
+				continue
+			}
 			if !IsErrTaskDoesNotExist(err) {
 				return err
 			}
@@ -2350,6 +2377,9 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	}
 	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID, previousOverride...)
 	if err != nil {
+		return err
+	}
+	if err := taskTraceTeamCaptureTaskStates(s, binding, actor); err != nil {
 		return err
 	}
 	if err := taskTraceTeamPruneMissingTaskMappings(s, binding); err != nil {
@@ -2416,8 +2446,15 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	observedSnapshots := snapshots
 	snapshots = taskTraceTeamAcknowledgeSnapshots(snapshots, &manifest)
 	snapshots = taskTraceTeamFilterSnapshotsPermissions(snapshots, binding, &manifest)
+	snapshots, err = taskTraceTeamApplyTaskStates(s, a, binding, &manifest, snapshots)
+	if err != nil {
+		return err
+	}
 	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots); err != nil {
 		return fmt.Errorf("import shared tasks: %w", err)
+	}
+	if restoredRoot := binding.NodeTasks[manifest.RootNode]; restoredRoot != 0 {
+		binding.RootTaskID = restoredRoot
 	}
 	if err := taskTraceTeamEnsureAttachments(s, a, binding, snapshots); err != nil {
 		return fmt.Errorf("import shared attachments: %w", err)
@@ -2438,6 +2475,9 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	conflicts := []TaskTraceTeamConflict{}
 	unresolvedBases := map[string]map[string]string{}
 	for node, taskID := range binding.NodeTasks {
+		if taskTraceTeamTaskDeleted(binding, node) {
+			continue
+		}
 		if !taskTraceTeamCan(&manifest, node, "", actor, false) {
 			continue
 		}
@@ -2862,6 +2902,13 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	snapshots = taskTraceTeamLatestActorSnapshots(snapshots)
 	if len(snapshots) == 0 {
 		return nil, errors.New("the shared task has no data")
+	}
+	snapshots, err = taskTraceTeamApplyTaskStates(s, a, &binding, &manifest, snapshots)
+	if err != nil {
+		return nil, err
+	}
+	if taskTraceTeamTaskDeleted(&binding, manifest.RootNode) {
+		return nil, errors.New("the shared task was deleted; ask its owner to restore it before importing")
 	}
 	if err := taskTraceTeamCreateMissingTasks(s, a, &binding, snapshots); err != nil {
 		return nil, err

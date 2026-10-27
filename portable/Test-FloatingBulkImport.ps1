@@ -22,12 +22,27 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 internal sealed partial class FloatingWindow {
+    internal static async Task TestAtomicSharedTaskCreation() {
+        var window=(FloatingWindow)FormatterServices.GetUninitializedObject(typeof(FloatingWindow));var handler=new SharedCreationHandler();
+        using(var client=new HttpClient(handler)){
+            Action<string,object> field=(name,value)=>typeof(FloatingWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).SetValue(window,value);
+            field("http",client);field("url","http://127.0.0.1:1");field("token","isolated");field("json",new JavaScriptSerializer());field("defaultPriority",7);
+            if(await window.CreateSubtask(10,5,"成员新增子任务",0,3)!=101 || handler.Created!=1 || handler.Relations!=0)throw new Exception("Single subtask was not atomically created under its shared parent");
+            handler.Deny=true;
+            try{await window.CreateSubtask(10,5,"不允许创建的子任务");throw new Exception("Read-only parent accepted a child");}catch(Exception error){if(!error.Message.Contains("共享父任务没有写权限") || !error.Message.Contains("成员只具有读权限"))throw;}
+            if(handler.Created!=1 || handler.Relations!=0)throw new Exception("Read-only child failure produced an orphan or a second relation request");
+            await window.CreateSubtask(10,5,"旧版本等待关联的条目",222,3);
+            if(handler.Relations!=1 || handler.Created!=1)throw new Exception("Legacy pending child retry duplicated its task");
+            await window.SavePersonalPriority(10,0);await window.UpdateOutstandingState(10,"outstanding",null,2);
+            if(handler.PriorityWrites!=2)throw new Exception("Read-only personal task/outstanding priority did not use its dedicated route");
+        }
+    }
     internal static async Task TestBulkOutstanding() {
         var window=(FloatingWindow)FormatterServices.GetUninitializedObject(typeof(FloatingWindow));
         var handler=new BulkHandler();
         using(var client=new HttpClient(handler)){
             Action<string,object> field=(name,value)=>typeof(FloatingWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic).SetValue(window,value);
-            field("http",client);field("url","http://127.0.0.1:1");field("token","isolated");field("json",new JavaScriptSerializer());field("defaultPriority",7);
+            field("outstandingWriteGates",new Dictionary<long,SemaphoreSlim>());field("http",client);field("url","http://127.0.0.1:1");field("token","isolated");field("json",new JavaScriptSerializer());field("defaultPriority",7);
             var lines=new List<FloatingBulkLine>{new FloatingBulkLine("A < B"),new FloatingBulkLine("第二个遗留事项")};
             handler.Deny=true;
             try{await window.ImportBulkOutstanding(42,lines,3,n=>{});throw new Exception("Denied save accepted");}catch(Exception error){if(!error.Message.Contains("写权限"))throw;}
@@ -39,6 +54,26 @@ internal sealed partial class FloatingWindow {
             await window.ImportBulkOutstanding(42,lines,3,n=>{});
             if(handler.Writes!=writes)throw new Exception("Confirmed retry wrote duplicate outstanding activity");
         }
+    }
+}
+internal sealed class SharedCreationHandler:HttpMessageHandler {
+    internal bool Deny;internal int Created,Relations,PriorityWrites;
+    readonly JavaScriptSerializer json=new JavaScriptSerializer();
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token){
+        string path=request.RequestUri.AbsolutePath;object response;
+        if(request.Method==HttpMethod.Get && path=="/api/v2/tasks/10")response=new{id=10,title="来自其他成员的父任务",related_tasks=new Dictionary<string,object>()};
+        else if(request.Method==HttpMethod.Post && path=="/api/v2/projects/5/tasks"){
+            var payload=json.Deserialize<Dictionary<string,object>>(await request.Content.ReadAsStringAsync());if(Convert.ToInt64(payload["parent_task_id"])!=10)throw new Exception("Atomic parent context missing");
+            if(Deny)return new HttpResponseMessage(HttpStatusCode.Forbidden){Content=new StringContent("{\"detail\":\"共享父任务没有写权限\",\"errors\":[{\"message\":\"成员只具有读权限\"}]}")};
+            Created++;response=new{id=101};
+        }else if(request.Method==HttpMethod.Post && path=="/api/v2/tasks/10/relations"){Relations++;response=new{};}
+        else if(request.Method==HttpMethod.Put && path=="/api/v2/tasktrace/tasks/10/priority"){
+            var payload=json.Deserialize<Dictionary<string,object>>(await request.Content.ReadAsStringAsync());int priority=Convert.ToInt32(payload["priority"]);object key;
+            if(payload.TryGetValue("outstanding_id",out key)){if(Convert.ToString(key)!="outstanding"||priority!=2)throw new Exception("Outstanding personal priority lost its item identity");}
+            else if(priority!=0)throw new Exception("Task personal priority used the reversed storage scale");
+            PriorityWrites++;response=new{task_id=10,priority=priority,stored_priority=10-priority};
+        }else throw new Exception("Unexpected creation request: "+request.Method+" "+path);
+        return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(json.Serialize(response))};
     }
 }
 internal sealed class BulkHandler:HttpMessageHandler {
@@ -69,16 +104,17 @@ internal static class BulkTests {
                     Check(FloatingBulkText.Split("１２、全角\n三：中文\n(a)英文\n无序号原文").SequenceEqual(new[]{"全角","中文","英文","无序号原文"}),"Alternative numbering failed");
                     Console.WriteLine("PASS blank/punctuation/separator lines, numeric/Chinese/fullwidth/circled/bullet numbering, edge whitespace, decimals, dates, paths and duplicate preservation.");
 
-                    int creates=0,relations=0;bool fail=true;var payloads=new List<string>();var json=new JavaScriptSerializer();
+                    int creates=0,attempts=0,relations=0;bool fail=true;var payloads=new List<string>();var json=new JavaScriptSerializer();
                     Func<string,string,object,Task<Dictionary<string,object>>> api=(method,path,body)=>{
                         Check(method=="POST","Unexpected task operation");
                         var value=json.Deserialize<Dictionary<string,object>>(json.Serialize(body));
                         if(path.EndsWith("/tasks")){
-                            Check(path=="/projects/5/tasks" && Convert.ToInt32(value["priority"])==7,"Wrong target project or API priority");
+                            Check(path=="/projects/5/tasks" && Convert.ToInt32(value["priority"])==7 && Convert.ToInt64(value["parent_task_id"])==10,"Wrong project, API priority or missing atomic parent");
+                            attempts++;if(fail&&attempts==2)throw new Exception("共享父任务无写权限，未创建子任务");
                             creates++;payloads.Add((string)value["title"]);return Task.FromResult(new Dictionary<string,object>{{"id",100+creates}});
                         }
                         Check(path=="/tasks/10/relations","Wrong parent");
-                        relations++;if(fail&&relations==2)throw new Exception("关联失败");
+                        relations++;
                         return Task.FromResult(new Dictionary<string,object>());
                     };
                     using(var font=new Font("Microsoft YaHei UI",9F))
@@ -87,12 +123,15 @@ internal static class BulkTests {
                         Check(dialog.Source.Lines.Length==4 && dialog.Preview.Rows.Count==3 && creates==0,"Paste wrote before confirmation");
                         dialog.Preview.Rows[0].Cells[1].Value="修改后的第一项任务";dialog.Preview.Rows.RemoveAt(2);
                         Capture(dialog,"bulk-normal");
-                        Check(!await dialog.Import() && creates==2 && dialog.HasSaved,"Partial import not retained");
-                        Check(dialog.Preview.Rows[0].ReadOnly && (string)dialog.Preview.Rows[1].Cells[2].Value=="待关联","Saved rows not locked or pending relation missing");
+                        Check(!await dialog.Import() && creates==1 && dialog.HasSaved,"Partial atomic import not retained");
+                        Check(dialog.Preview.Rows[0].ReadOnly && ((FloatingBulkLine)dialog.Preview.Rows[1].Tag).TaskId==0,"Denied atomic create left an orphan task or unlocked saved row");
                         Capture(dialog,"bulk-partial");
-                        fail=false;Check(await dialog.Import() && creates==2 && relations==3,"Retry duplicated task or failed to finish association");
+                        fail=false;Check(await dialog.Import() && creates==2 && relations==0,"Atomic retry duplicated a task or sent a redundant relation request");
                         Check(payloads.SequenceEqual(new[]{"修改后的第一项任务","第二项任务"}),"Preview edits not saved");
                     }
+                    var legacy=new FloatingBulkLine("之前已创建、等待关联的子任务"){TaskId=88};
+                    await FloatingWindow.ImportBulkTasks(new List<FloatingBulkLine>{legacy},5,10,3,api,n=>{});
+                    Check(legacy.Saved&&relations==1&&creates==2,"Legacy pending association did not retry without creating another task");
                     int saves=0;
                     using(var dialog=new FloatingBulkImportDialog("遗留事项","协作验收任务",7,250,new Font("Microsoft YaHei UI",14F),async (lines,progress)=>{saves++;await Task.Yield();foreach(var line in lines)line.Saved=true;})){
                         Display(dialog);dialog.Size=new Size(1200,900);dialog.Source.Text="1、准备技术评审材料\n2、确认协作成员反馈\n3、安排下一次联调";
@@ -104,8 +143,9 @@ internal static class BulkTests {
                     using(var dialog=new FloatingBulkImportDialog("任务","项目",7,250,SystemFonts.MessageBoxFont,async (lines,progress)=>{saves++;await Task.Delay(10);foreach(var line in lines)line.Saved=true;})){
                         Display(dialog);dialog.Source.Text="并发确认";var pending=dialog.Import();Check(!await dialog.Import(),"Double confirmation accepted");dialog.Close();Check(!dialog.IsDisposed,"Closed while saving");Check(await pending && saves==1,"One save not completed");
                     }
+                    await FloatingWindow.TestAtomicSharedTaskCreation();
                     await FloatingWindow.TestBulkOutstanding();
-                    Console.WriteLine("PASS preview edits/deletion, explicit confirmation, cancel, size validation, duplicate-click guard, partial task creation/relation retry, shared-list preservation, write-permission retry and stable-id no-op.");
+                    Console.WriteLine("PASS preview edits/deletion, explicit confirmation, cancel, size validation, duplicate-click guard, atomic subtask creation/denied retry and legacy relation recovery, shared-list preservation, write-permission retry and stable-id no-op.");
                 }catch(Exception error){Console.Error.WriteLine(error);result=1;}finally{host.Close();}
             };
             Application.Run(host);

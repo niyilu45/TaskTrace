@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +49,25 @@ func restoreTaskTraceUndo(s *xorm.Session, a web.Auth, payload string) ([]int64,
 	}
 	if snap.Barrier != "" {
 		return nil, ErrTaskTraceUndoConflict{snap.Barrier}
+	}
+	if snap.Kind == "priority" {
+		value := &TaskTracePersonalPriority{TaskID: snap.TaskID, OutstandingID: snap.OutstandingID}
+		can, err := value.CanUpdate(s, a)
+		if err = taskTraceUndoRequire(can, err); err != nil {
+			return nil, err
+		}
+		current, err := taskTracePersonalPriorityValue(s, snap.TaskID, snap.OutstandingID)
+		if err != nil {
+			return nil, err
+		}
+		if current != taskTraceUndoInt(snap.After.Task, "Priority") {
+			return nil, taskTraceUndoConflict()
+		}
+		value.Priority = taskTraceUndoInt(snap.Before.Task, "Priority")
+		if err := value.Update(s, a); err != nil {
+			return nil, err
+		}
+		return []int64{snap.TaskID}, nil
 	}
 	if err := snap.checkPermissions(s, a); err != nil {
 		return nil, err
@@ -95,6 +115,11 @@ func restoreTaskTraceUndo(s *xorm.Session, a web.Auth, payload string) ([]int64,
 			if err := taskTraceUndoUpdateTask(s, snap.TaskID, taskTraceUndoRow{"DeletedAt": snap.Before.Task["DeletedAt"]}); err != nil {
 				return nil, err
 			}
+			for _, row := range snap.Before.Parts["subtree_tasks"] {
+				if err := taskTraceUndoUpdateTask(s, taskTraceUndoInt(row, "ID"), taskTraceUndoRow{"DeletedAt": row["DeletedAt"]}); err != nil {
+					return nil, err
+				}
+			}
 		case "update":
 			if err := taskTraceUndoUpdateTask(s, snap.TaskID, snap.Before.Task); err != nil {
 				return nil, err
@@ -109,7 +134,7 @@ func restoreTaskTraceUndo(s *xorm.Session, a web.Auth, payload string) ([]int64,
 		}
 	}
 	if snap.Kind == "move" || snap.Kind == "relation" || (snap.Kind == "task" && snap.Method == "delete") {
-		ids := []int64{snap.TaskID}
+		ids := snap.scopeTaskIDs()
 		if snap.OtherTaskID > 0 {
 			ids = append(ids, snap.OtherTaskID)
 		}
@@ -119,7 +144,7 @@ func restoreTaskTraceUndo(s *xorm.Session, a web.Auth, payload string) ([]int64,
 			}
 		}
 	}
-	ids := []int64{snap.TaskID}
+	ids := snap.scopeTaskIDs()
 	if snap.OtherTaskID > 0 && snap.OtherTaskID != snap.TaskID {
 		ids = append(ids, snap.OtherTaskID)
 	}
@@ -171,17 +196,23 @@ func (snap *taskTraceUndoCapture) checkPermissions(s *xorm.Session, a web.Auth) 
 	switch snap.Kind {
 	case "task":
 		if snap.Method == "delete" {
-			row, err := taskTraceUndoReadTask(s, snap.TaskID)
-			if err != nil {
-				return err
-			}
-			if row == nil {
-				return taskTraceUndoConflict()
-			}
-			project := &Project{ID: taskTraceUndoInt(row, "ProjectID")}
-			can, err := project.CanWrite(s, a)
-			if err = taskTraceUndoRequire(can, err); err != nil {
-				return err
+			for _, id := range snap.scopeTaskIDs() {
+				row, err := taskTraceUndoReadTask(s, id)
+				if err != nil {
+					return err
+				}
+				if row == nil {
+					return taskTraceUndoConflict()
+				}
+				project := &Project{ID: taskTraceUndoInt(row, "ProjectID")}
+				can, err := project.CanWrite(s, a)
+				if err = taskTraceUndoRequire(can, err); err != nil {
+					return err
+				}
+				can, err = taskTraceTeamCanWriteLocalTask(a, id, s)
+				if err = taskTraceUndoRequire(can, err); err != nil {
+					return err
+				}
 			}
 		} else if err := taskTraceUndoTaskWrite(s, a, snap.TaskID); err != nil {
 			return err
@@ -385,23 +416,34 @@ func (snap *taskTraceUndoCapture) validateRestoreReferences(s *xorm.Session, a w
 		restoringTask = snap.TaskID
 	}
 	if description := taskTraceUndoString(snap.Before.Task, "Description"); description != "" {
-		if err := taskTraceUndoValidateImages(s, a, description, restoringTask); err != nil {
+		if err := taskTraceUndoValidateImages(s, a, description, restoringTask, snap.SubtreeTaskIDs...); err != nil {
 			return err
 		}
 	}
 	if cover := taskTraceUndoInt(snap.Before.Task, "CoverImageAttachmentID"); cover > 0 {
-		if err := taskTraceUndoValidateAttachment(s, a, snap.TaskID, cover, restoringTask); err != nil {
+		if err := taskTraceUndoValidateAttachment(s, a, snap.TaskID, cover, restoringTask, snap.SubtreeTaskIDs...); err != nil {
 			return err
 		}
 	}
+	for _, row := range snap.Before.Parts["subtree_tasks"] {
+		id := taskTraceUndoInt(row, "ID")
+		if err := taskTraceUndoValidateImages(s, a, taskTraceUndoString(row, "Description"), restoringTask, snap.SubtreeTaskIDs...); err != nil {
+			return err
+		}
+		if cover := taskTraceUndoInt(row, "CoverImageAttachmentID"); cover > 0 {
+			if err := taskTraceUndoValidateAttachment(s, a, id, cover, restoringTask, snap.SubtreeTaskIDs...); err != nil {
+				return err
+			}
+		}
+	}
 	for _, row := range snap.Before.Parts["comments"] {
-		if err := taskTraceUndoValidateImages(s, a, taskTraceUndoString(row, "Comment"), restoringTask); err != nil {
+		if err := taskTraceUndoValidateImages(s, a, taskTraceUndoString(row, "Comment"), restoringTask, snap.SubtreeTaskIDs...); err != nil {
 			return err
 		}
 	}
 	// Undoing a legacy-list migration exposes the older progress notes again.
 	for _, row := range snap.Before.Parts["legacy"] {
-		if err := taskTraceUndoValidateImages(s, a, taskTraceUndoString(row, "Comment"), restoringTask); err != nil {
+		if err := taskTraceUndoValidateImages(s, a, taskTraceUndoString(row, "Comment"), restoringTask, snap.SubtreeTaskIDs...); err != nil {
 			return err
 		}
 	}
@@ -412,7 +454,7 @@ func (snap *taskTraceUndoCapture) validateRestoreReferences(s *xorm.Session, a w
 			related[taskTraceUndoInt(row, "OtherTaskID")] = true
 		}
 		for id := range related {
-			if id == restoringTask {
+			if id == restoringTask || slices.Contains(snap.SubtreeTaskIDs, id) {
 				continue
 			}
 			task := &Task{ID: id}
@@ -425,7 +467,7 @@ func (snap *taskTraceUndoCapture) validateRestoreReferences(s *xorm.Session, a w
 			}
 		}
 		for _, row := range snap.Before.Parts["attachments"] {
-			if err := taskTraceUndoValidateAttachment(s, a, snap.TaskID, taskTraceUndoInt(row, "ID"), restoringTask); err != nil {
+			if err := taskTraceUndoValidateAttachment(s, a, taskTraceUndoInt(row, "TaskID"), taskTraceUndoInt(row, "ID"), restoringTask, snap.SubtreeTaskIDs...); err != nil {
 				return err
 			}
 		}
@@ -461,7 +503,7 @@ func (snap *taskTraceUndoCapture) validateRestoreReferences(s *xorm.Session, a w
 	}
 	return nil
 }
-func taskTraceUndoValidateImages(s *xorm.Session, a web.Auth, content string, restoringTask int64) error {
+func taskTraceUndoValidateImages(s *xorm.Session, a web.Auth, content string, restoringTask int64, restoringOthers ...int64) error {
 	doc, err := html.Parse(strings.NewReader(content))
 	if err != nil {
 		return err
@@ -483,15 +525,15 @@ func taskTraceUndoValidateImages(s *xorm.Session, a web.Auth, content string, re
 		}
 		taskID, _ := strconv.ParseInt(match[1], 10, 64)
 		attachmentID, _ := strconv.ParseInt(match[2], 10, 64)
-		if err := taskTraceUndoValidateAttachment(s, a, taskID, attachmentID, restoringTask); err != nil {
+		if err := taskTraceUndoValidateAttachment(s, a, taskID, attachmentID, restoringTask, restoringOthers...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
-func taskTraceUndoValidateAttachment(s *xorm.Session, a web.Auth, taskID, attachmentID, restoringTask int64) error {
+func taskTraceUndoValidateAttachment(s *xorm.Session, a web.Auth, taskID, attachmentID, restoringTask int64, restoringOthers ...int64) error {
 	attachment := &TaskAttachment{TaskID: taskID, ID: attachmentID}
-	if taskID != restoringTask {
+	if taskID != restoringTask && !slices.Contains(restoringOthers, taskID) {
 		can, _, err := attachment.CanRead(s, a)
 		if err = taskTraceUndoRequire(can, err); err != nil {
 			return err
@@ -561,7 +603,7 @@ func (snap *taskTraceUndoCapture) lockScope(s *xorm.Session) error {
 	if snap.ProjectID > 0 {
 		projects[snap.ProjectID] = true
 	}
-	ids := []int64{snap.TaskID}
+	ids := snap.scopeTaskIDs()
 	if snap.OtherTaskID > 0 {
 		ids = append(ids, snap.OtherTaskID)
 	}

@@ -65,8 +65,43 @@ func (tc *TaskComment) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
 // CanUpdate checks if a user can update a comment
 func (tc *TaskComment) CanUpdate(s *xorm.Session, a web.Auth) (bool, error) {
 	can, err := tc.canUserModifyTaskComment(s, a, true)
+	if err == nil && !can {
+		can, err = tc.canUpdateSharedOutstandingList(s, a)
+	}
 	tc.recordOutstandingActivity = can && err == nil
 	return can, err
+}
+
+// The current outstanding list is shared task state, rather than its original
+// author's personal comment. Never extend this exception to ordinary comments,
+// historical list snapshots, deleting comments, or converting a list to prose.
+func (tc *TaskComment) canUpdateSharedOutstandingList(s *xorm.Session, a web.Auth) (bool, error) {
+	if !taskTraceTeamEnabled() || !taskTraceTeamIsOutstanding(tc.Comment) {
+		return false, nil
+	}
+	state, err := taskTraceTeamLoadState()
+	if err != nil {
+		return false, err
+	}
+	shared := false
+	for index := range state.Bindings {
+		if taskTraceTeamNodeForTask(&state.Bindings[index], tc.TaskID) != "" {
+			shared = true
+			break
+		}
+	}
+	if !shared {
+		return false, nil
+	}
+	allowed, err := (&Task{ID: tc.TaskID}).CanWrite(s, a)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	current, err := taskTraceReadOutstanding(s, tc.TaskID)
+	if err != nil {
+		return false, err
+	}
+	return current.comment != nil && current.comment.ID == tc.ID && taskTraceTeamIsOutstanding(current.original), nil
 }
 
 // CanCreate checks if a user can create a new comment

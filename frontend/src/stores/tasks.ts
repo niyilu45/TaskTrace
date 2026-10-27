@@ -41,6 +41,7 @@ import type {Label, Task as ApiTask} from '@/client/generated'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {tasktraceNewTaskStoredPriority} from '@/helpers/tasktracePriority'
 import {undoGroupHeaders} from '@/helpers/tasktraceUndo'
+import {publishTasktraceTaskChanges, tasktraceDeletionScope} from '@/helpers/tasktraceTaskEvents'
 import {
 	createLabelMutationOptions,
 	ensureLabels,
@@ -247,9 +248,29 @@ export const useTaskStore = defineStore('task', () => {
 	}
 
 	async function deleteTask(task: ITask) {
+		const scope = tasktraceDeletionScope(task, Object.values(tasks.value), isLocalBuild)
 		const taskService = new TaskService()
 		const response = await taskService.delete(task)
-		kanbanStore.removeTaskInBucket(task)
+		for (const id of scope.ids) {
+			kanbanStore.removeTaskInBucket(scope.tasks.get(id) ?? new TaskModel({id}))
+			delete tasks.value[id]
+		}
+		for (const known of Object.values(tasks.value)) {
+			let changed = false
+			const relatedTasks = Object.fromEntries(Object.entries(known.relatedTasks ?? {}).map(([kind, related]) => {
+				const remaining = (related ?? []).filter(item => !scope.ids.has(item.id))
+				if (remaining.length !== related?.length) changed = true
+				return [kind, remaining]
+			}))
+			// Replace the cache entry without briefly promoting stale list children
+			// to independent tasks while the authoritative collection is reloaded.
+			if (changed) tasks.value[known.id] = {...known, relatedTasks}
+		}
+		if (lastUpdatedTask.value && scope.ids.has(lastUpdatedTask.value.id)) lastUpdatedTask.value = null
+		publishTasktraceTaskChanges([
+			...[...scope.ids].map(id => ({task_id: id, project_id: scope.tasks.get(id)?.projectId ?? task.projectId, deleted: true})),
+			...[...scope.parents].map(id => ({task_id: id, project_id: scope.tasks.get(id)?.projectId ?? task.projectId, related_task_id: task.id})),
+		])
 		return response
 	}
 
@@ -594,6 +615,7 @@ export const useTaskStore = defineStore('task', () => {
 		bucketId,
 		projectId,
 		position,
+		parentTaskId,
 	} :
 		Partial<ITask>,
 	) {
@@ -606,6 +628,7 @@ export const useTaskStore = defineStore('task', () => {
 				position,
 			})
 
+			if (parentTaskId) task.parentTaskId = parentTaskId
 			const taskService = new TaskService()
 			const createdTask = await taskService.create(task)
 			return await addLabelsToTask({

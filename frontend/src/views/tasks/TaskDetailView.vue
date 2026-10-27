@@ -118,9 +118,9 @@
 								</div>
 								<PrioritySelect
 									:ref="e => setFieldRef('priority', e)"
-									v-model="task.priority"
+									:model-value="task.priority"
 									class="has-defaults"
-									:disabled="!canWrite"
+									:disabled="!canSetPriority || savingPriority"
 									@update:modelValue="setPriority"
 								/>
 							</div>
@@ -769,7 +769,8 @@ import {useTitle} from '@/composables/useTitle'
 import {useTaskDetailShortcuts} from '@/composables/useTaskDetailShortcuts'
 
 import {success, error} from '@/message'
-import {patchTasksRead} from '@/client/generated'
+import {patchTasksRead, tasksPersonalPriorityUpdate} from '@/client/generated'
+import {tasktracePriorityNumber} from '@/helpers/tasktracePriority'
 import type {Action as MessageAction} from '@/message'
 
 const props = defineProps<{
@@ -777,7 +778,7 @@ const props = defineProps<{
 	backdropView?: RouteLocation['fullPath'],
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
 	'close': [],
 }>()
 
@@ -881,6 +882,8 @@ const canEdit = computed(() => (
 ))
 const teamCanWrite = computed(() => teamStore.canWriteTask(task.value.id))
 const canWrite = computed(() => canEdit.value)
+// Shared-task priorities are personal even when the shared content is read-only.
+const canSetPriority = computed(() => canWrite.value || (isLocalBuild && Boolean(teamStore.bindingForTask(task.value.id))))
 
 
 const color = computed(() => {
@@ -995,10 +998,24 @@ onMounted(async () => {
 
 const taskService = shallowReactive(new TaskService())
 
+async function closeDeletedTask() {
+	taskNotFound.value = true
+	if (isModal.value) emit('close')
+	else await router.replace({name: 'project.index', params: {projectId: task.value.projectId}})
+}
+
 // Keep saved fields current without replacing comments or dirty editors.
-useTasktraceTaskChanges(async () => {
+useTasktraceTaskChanges(async changes => {
 	const id = props.taskId
-	const loaded = await taskService.get(new TaskModel({id}), {expand: ['reactions', 'buckets']})
+	if (changes?.some(change => change.task_id === id && change.deleted)) return closeDeletedTask()
+	let loaded: ITask
+	try {
+		loaded = await taskService.get(new TaskModel({id}), {expand: ['reactions', 'buckets']})
+	} catch (cause) {
+		const failure = cause as {status?: number, response?: {status?: number}}
+		if (id === props.taskId && (failure.status ?? failure.response?.status) === 404) return closeDeletedTask()
+		throw cause
+	}
 	if (id !== props.taskId) return
 	if (undoBlockReason.value) return false
 	Object.assign(task.value, loaded, {comments: task.value.comments})
@@ -1100,7 +1117,7 @@ function setActiveFields() {
 	activeFields.endDate = task.value.endDate !== null
 	activeFields.labels = task.value.labels.length > 0
 	activeFields.percentDone = true
-	activeFields.priority = task.value.priority !== PRIORITIES.UNSET
+	activeFields.priority = isLocalBuild || task.value.priority !== PRIORITIES.UNSET
 	activeFields.relatedTasks = Object.keys(task.value.relatedTasks).length > 0
 	activeFields.reminders = task.value.reminders.length > 0
 	activeFields.repeatAfter = task.value.repeatAfter?.amount > 0 || task.value.repeatMode !== TASK_REPEAT_MODES.REPEAT_MODE_DEFAULT
@@ -1195,7 +1212,13 @@ async function saveTask(
 		currentTask.endDate = currentTask.dueDate
 	}
 
-	const updatedTask = await taskStore.update(currentTask) // TODO: markraw ?
+	let updatedTask: ITask
+	try {
+		updatedTask = await taskStore.update(currentTask)
+	} catch (cause) {
+		error(cause)
+		return
+	}
 	Object.assign(task.value, updatedTask)
 	setActiveFields()
 
@@ -1218,9 +1241,14 @@ useTaskDetailShortcuts({
 const showDeleteModal = ref(false)
 
 async function deleteTask() {
-	await taskStore.delete(task.value)
-	success({message: t('task.detail.deleteSuccess')})
-	router.push({name: 'project.index', params: {projectId: task.value.projectId}})
+	try {
+		await taskStore.delete(task.value)
+		success({message: t('task.detail.deleteSuccess')})
+		if (isModal.value) emit('close')
+		else router.push({name: 'project.index', params: {projectId: task.value.projectId}})
+	} catch (cause) {
+		error(cause)
+	}
 }
 
 async function toggleTaskDone() {
@@ -1275,13 +1303,24 @@ async function setTaskStatus() {
 	await saveTask({...task.value, done})
 }
 
+const savingPriority = ref(false)
 async function setPriority(priority: Priority) {
-	const newTask: ITask = {
-		...task.value,
-		priority,
-	}
-
-	return saveTask(newTask)
+	if (!canSetPriority.value || savingPriority.value) return
+	if (!isLocalBuild) return saveTask({...task.value, priority})
+	const id = task.value.id
+	savingPriority.value = true
+	try {
+		// Only send the personal field. A stale task snapshot must not overwrite
+		// a collaborator's progress or accidentally require shared-content writes.
+		const result = await tasksPersonalPriorityUpdate({path: {task: id}, body: {priority: tasktracePriorityNumber(priority)}, headers: undoGroupHeaders()})
+		if (task.value.id !== id) return
+		task.value.priority = (result.data.stored_priority ?? priority) as Priority
+		taskStore.lastUpdatedTask = new TaskModel(task.value)
+		kanbanStore.ensureTaskIsInCorrectBucket(task.value)
+		success({message: t('task.detail.updateSuccess')})
+	} catch (cause) {
+		error(cause)
+	} finally { savingPriority.value = false }
 }
 
 const savingCompletion = ref(false)

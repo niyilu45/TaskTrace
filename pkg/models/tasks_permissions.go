@@ -23,7 +23,19 @@ import (
 
 // CanDelete checks if the user can delete an task
 func (t *Task) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
-	return t.canDoTask(s, a)
+	allowed, err := t.canDoTask(s, a)
+	if err != nil || !allowed || !taskTraceTeamEnabled() {
+		return allowed, err
+	}
+	tasks, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
+	if err != nil {
+		return false, err
+	}
+	t.deletionScopeIDs = make([]int64, 0, len(tasks))
+	for _, task := range tasks {
+		t.deletionScopeIDs = append(t.deletionScopeIDs, task.ID)
+	}
+	return true, nil
 }
 
 // CanUpdate determines if a user has the permission to update a project task
@@ -35,7 +47,36 @@ func (t *Task) CanUpdate(s *xorm.Session, a web.Auth) (bool, error) {
 func (t *Task) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	// A user can do a task if he has write acces to its project
 	l := &Project{ID: t.ProjectID}
-	return l.CanWrite(s, a)
+	allowed, err := l.CanWrite(s, a)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	return t.canCreateUnderParent(s, a)
+}
+
+func (t *Task) canCreateUnderParent(s *xorm.Session, a web.Auth) (bool, error) {
+	if t.ParentTaskID == 0 {
+		return true, nil
+	}
+	parent, err := GetTaskByIDSimple(s, t.ParentTaskID)
+	if err != nil {
+		return false, err
+	}
+	if parent.ProjectID != t.ProjectID {
+		return false, ErrGenericForbidden{}
+	}
+	allowed, err := parent.CanUpdate(s, a)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	depth, err := taskHierarchySpan(s, parent.ID, RelationKindParenttask, 1)
+	if err != nil {
+		return false, err
+	}
+	if depth >= MaxTaskHierarchyDepth {
+		return false, ErrTaskHierarchyDepth{}
+	}
+	return true, nil
 }
 
 // CanRead determines if a user can read a task
@@ -88,5 +129,5 @@ func (t *Task) canDoTask(s *xorm.Session, a web.Auth) (bool, error) {
 	if err != nil || !canWriteProject {
 		return canWriteProject, err
 	}
-	return taskTraceTeamCanWriteLocalTask(a, ot.ID)
+	return taskTraceTeamCanWriteLocalTask(a, ot.ID, s)
 }

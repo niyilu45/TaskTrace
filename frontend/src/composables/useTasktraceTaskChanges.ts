@@ -1,11 +1,8 @@
 import {onScopeDispose, watch} from 'vue'
 import {useWebSocket} from './useWebSocket'
 
-export interface TasktraceTaskChange {
-	task_id: number
-	project_id: number
-	related_task_id?: number
-}
+import {TASKTRACE_LOCAL_TASK_CHANGES, type TasktraceTaskChange} from '@/helpers/tasktraceTaskEvents'
+export type {TasktraceTaskChange} from '@/helpers/tasktraceTaskEvents'
 
 // Idle views perform no reads. Changes during a read or edit remain pending.
 export function useTasktraceTaskChanges(
@@ -44,13 +41,18 @@ export function useTasktraceTaskChanges(
 			schedule(failed ? 3000 : 350)
 		}
 	}
-	const unsubscribe = subscribe('tasktrace.task.changed', message => {
-		const change = message.data as TasktraceTaskChange | undefined
+	function enqueue(change?: TasktraceTaskChange) {
 		if (!change || !matches(change)) return
 		changes.set(`${change.task_id}:${change.related_task_id || 0}`, change)
 		pending = true
 		schedule()
-	})
+	}
+	const unsubscribe = subscribe('tasktrace.task.changed', message => enqueue(message.data as TasktraceTaskChange | undefined))
+	const localChanges = (event: Event) => {
+		const detail = (event as CustomEvent<TasktraceTaskChange[]>).detail
+		if (Array.isArray(detail)) for (const change of detail) enqueue(change)
+	}
+	window.addEventListener(TASKTRACE_LOCAL_TASK_CHANGES, localChanges)
 	watch(blocked, () => schedule())
 	watch(authenticated, value => {
 		if (value && wasAuthenticated) { pending = true; fullRefresh = true; schedule() }
@@ -62,6 +64,7 @@ export function useTasktraceTaskChanges(
 		disposed = true
 		if (timer) clearTimeout(timer)
 		unsubscribe()
+		window.removeEventListener(TASKTRACE_LOCAL_TASK_CHANGES, localChanges)
 		document.removeEventListener('visibilitychange', visible)
 	})
 }

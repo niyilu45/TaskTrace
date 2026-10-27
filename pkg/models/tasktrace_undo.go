@@ -75,6 +75,8 @@ func taskTraceUndoModelSupported(method string, model any) bool {
 		return method == "create"
 	case *TaskRelation:
 		return method == "create" || method == "delete"
+	case *TaskTracePersonalPriority:
+		return method == "update"
 	case *TaskPosition:
 		return method == "update"
 	default:

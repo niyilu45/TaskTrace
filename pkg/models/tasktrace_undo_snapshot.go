@@ -48,23 +48,37 @@ type taskTraceUndoState struct {
 	Parts map[string][]taskTraceUndoRow `json:"parts"`
 }
 type taskTraceUndoCapture struct {
-	Version      int                `json:"version"`
-	Kind         string             `json:"kind"`
-	Method       string             `json:"method"`
-	TaskID       int64              `json:"task_id"`
-	OtherTaskID  int64              `json:"other_task_id,omitempty"`
-	ProjectID    int64              `json:"project_id,omitempty"`
-	CommentID    int64              `json:"comment_id,omitempty"`
-	ViewID       int64              `json:"view_id,omitempty"`
-	ActorID      int64              `json:"actor_id"`
-	RelationKind RelationKind       `json:"relation_kind,omitempty"`
-	Before       taskTraceUndoState `json:"before"`
-	After        taskTraceUndoState `json:"after"`
-	Fields       []string           `json:"fields,omitempty"`
-	Parts        []string           `json:"changed_parts,omitempty"`
-	Guards       []string           `json:"guards,omitempty"`
-	ViewIDs      []int64            `json:"view_ids,omitempty"`
-	Barrier      string             `json:"barrier,omitempty"`
+	Version        int                `json:"version"`
+	Kind           string             `json:"kind"`
+	OutstandingID  string             `json:"outstanding_id,omitempty"`
+	Method         string             `json:"method"`
+	TaskID         int64              `json:"task_id"`
+	SubtreeTaskIDs []int64            `json:"subtree_task_ids,omitempty"`
+	OtherTaskID    int64              `json:"other_task_id,omitempty"`
+	ProjectID      int64              `json:"project_id,omitempty"`
+	CommentID      int64              `json:"comment_id,omitempty"`
+	ViewID         int64              `json:"view_id,omitempty"`
+	ActorID        int64              `json:"actor_id"`
+	RelationKind   RelationKind       `json:"relation_kind,omitempty"`
+	Before         taskTraceUndoState `json:"before"`
+	After          taskTraceUndoState `json:"after"`
+	Fields         []string           `json:"fields,omitempty"`
+	Parts          []string           `json:"changed_parts,omitempty"`
+	Guards         []string           `json:"guards,omitempty"`
+	ViewIDs        []int64            `json:"view_ids,omitempty"`
+	Barrier        string             `json:"barrier,omitempty"`
+}
+
+func (snap *taskTraceUndoCapture) scopeTaskIDs() []int64 {
+	ids := []int64{snap.TaskID}
+	seen := map[int64]bool{snap.TaskID: true}
+	for _, id := range snap.SubtreeTaskIDs {
+		if id > 0 && !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return ids
 }
 
 func taskTraceUndoBean(kind string) any {
@@ -210,6 +224,13 @@ func taskTraceUndoReadTask(s *xorm.Session, id int64) (taskTraceUndoRow, error) 
 func captureTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any) (any, bool, error) {
 	snap := &taskTraceUndoCapture{Version: 1, Method: method, ActorID: a.GetID()}
 	switch object := model.(type) {
+	case *TaskTracePersonalPriority:
+		if method != "update" {
+			return nil, false, nil
+		}
+		snap.Kind = "priority"
+		snap.TaskID = object.TaskID
+		snap.OutstandingID = object.OutstandingID
 	case *Task:
 		if method != "create" && method != "update" && method != "delete" {
 			return nil, false, nil
@@ -225,6 +246,17 @@ func captureTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any)
 				return nil, true, err
 			}
 			snap.ProjectID = taskTraceUndoInt(row, "ProjectID")
+			if method == "delete" && taskTraceTeamEnabled() {
+				tasks, scopeErr := taskTraceTaskDeletionScope(s, object.ID)
+				if scopeErr != nil {
+					return nil, true, scopeErr
+				}
+				if len(tasks) > 1 {
+					for _, task := range tasks {
+						snap.SubtreeTaskIDs = append(snap.SubtreeTaskIDs, task.ID)
+					}
+				}
+			}
 		}
 	case *TaskComment:
 		if method != "create" && method != "update" && method != "delete" {
@@ -292,6 +324,15 @@ func captureTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any)
 }
 func (snap *taskTraceUndoCapture) readState(s *xorm.Session) (taskTraceUndoState, error) {
 	state := taskTraceUndoState{Parts: map[string][]taskTraceUndoRow{}}
+	if snap.Kind == "priority" {
+		priority, err := taskTracePersonalPriorityValue(s, snap.TaskID, snap.OutstandingID)
+		if err != nil {
+			return state, err
+		}
+		raw, err := json.Marshal(priority)
+		state.Task = taskTraceUndoRow{"Priority": raw}
+		return state, err
+	}
 	put := func(name string, cond builder.Cond) error {
 		rows, err := taskTraceUndoReadRows(s, taskTraceUndoBean(name), cond)
 		return taskTraceUndoPart(&state, name, rows, err)
@@ -303,29 +344,49 @@ func (snap *taskTraceUndoCapture) readState(s *xorm.Session) (taskTraceUndoState
 		if err != nil {
 			return state, err
 		}
+		taskIDs := []int64{snap.TaskID}
+		if len(snap.SubtreeTaskIDs) > 0 {
+			taskIDs = snap.SubtreeTaskIDs
+			rows := []taskTraceUndoRow{}
+			for _, id := range taskIDs {
+				if id == snap.TaskID {
+					continue
+				}
+				row, readErr := taskTraceUndoReadTask(s, id)
+				if readErr != nil {
+					return state, readErr
+				}
+				if row == nil {
+					return state, taskTraceUndoConflict()
+				}
+				rows = append(rows, row)
+			}
+			taskTraceUndoSortRows(rows)
+			state.Parts["subtree_tasks"] = rows
+		}
 		// Only this project can be renumbered by task writes. Existing positions of
 		// this task in saved-filter views are included for delete/restore as well.
-		if err = put("positions", builder.Or(builder.In("project_view_id", builder.Select("id").From("project_views").Where(builder.Eq{"project_id": snap.ProjectID})), builder.Eq{"task_id": snap.TaskID})); err != nil {
+		if err = put("positions", builder.Or(builder.In("project_view_id", builder.Select("id").From("project_views").Where(builder.Eq{"project_id": snap.ProjectID})), builder.In("task_id", taskIDs))); err != nil {
 			return state, err
 		}
 		for _, name := range []string{"buckets", "reminders", "assignees"} {
-			if err = put(name, builder.Eq{"task_id": snap.TaskID}); err != nil {
+			if err = put(name, builder.In("task_id", taskIDs)); err != nil {
 				return state, err
 			}
 		}
-		if err = put("favorites", builder.Eq{"entity_id": snap.TaskID, "user_id": snap.ActorID, "kind": FavoriteKindTask}); err != nil {
+		if err = put("favorites", builder.And(builder.In("entity_id", taskIDs), builder.Eq{"user_id": snap.ActorID, "kind": FavoriteKindTask})); err != nil {
 			return state, err
 		}
 		if snap.Method != "update" {
 			for _, name := range []string{"comments", "attachments", "labels", "time_entries"} {
-				if err = put(name, builder.Eq{"task_id": snap.TaskID}); err != nil {
+				if err = put(name, builder.In("task_id", taskIDs)); err != nil {
 					return state, err
 				}
 			}
-			if err = put("relations", builder.Or(builder.Eq{"task_id": snap.TaskID}, builder.Eq{"other_task_id": snap.TaskID})); err != nil {
+			if err = put("relations", builder.Or(builder.In("task_id", taskIDs), builder.In("other_task_id", taskIDs))); err != nil {
 				return state, err
 			}
-			if err = put("reactions", builder.Eq{"entity_id": snap.TaskID, "entity_kind": ReactionKindTask}); err != nil {
+			if err = put("reactions", builder.And(builder.In("entity_id", taskIDs), builder.Eq{"entity_kind": ReactionKindTask})); err != nil {
 				return state, err
 			}
 		}
@@ -412,6 +473,9 @@ func finishTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any, 
 		return "", "", nil, false, err
 	}
 	snap.After = after
+	if snap.Kind == "priority" && !bytes.Equal(snap.Before.Task["Priority"], snap.After.Task["Priority"]) {
+		snap.Fields = []string{"Priority"}
+	}
 	if snap.Kind == "task" && snap.Method == "update" {
 		for field, old := range snap.Before.Task {
 			if !bytes.Equal(old, snap.After.Task[field]) {
@@ -427,6 +491,9 @@ func finishTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any, 
 	}
 	if snap.Kind == "task" && snap.Method != "update" {
 		snap.Guards = []string{"comments", "attachments", "labels", "relations", "time_entries", "reactions", "reminders", "assignees", "favorites"}
+		if len(snap.SubtreeTaskIDs) > 0 {
+			snap.Guards = append(snap.Guards, "subtree_tasks")
+		}
 	}
 	if snap.Kind == "comment" && snap.Method != "update" {
 		snap.Guards = []string{"reactions"}
@@ -485,11 +552,12 @@ func finishTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any, 
 	if !changed {
 		return "", "", nil, false, nil
 	}
-	ids := []int64{snap.TaskID}
+	ids := snap.scopeTaskIDs()
 	if snap.OtherTaskID != 0 && snap.OtherTaskID != snap.TaskID {
 		ids = append(ids, snap.OtherTaskID)
 	}
-	labels := map[string]string{"task": "修改任务", "comment": "修改进展或遗留事项", "move": "移动任务", "position": "调整任务顺序", "relation": "调整任务层级", "outstanding": "移动遗留事项"}
+	//nolint:gosmopolitan // These action labels are displayed directly in the Chinese TaskTrace UI.
+	labels := map[string]string{"priority": "修改个人优先级", "task": "修改任务", "comment": "修改进展或遗留事项", "move": "移动任务", "position": "调整任务顺序", "relation": "调整任务层级", "outstanding": "移动遗留事项"}
 	label := labels[snap.Kind]
 	if snap.Kind == "task" && method == "create" {
 		label = "新增任务"

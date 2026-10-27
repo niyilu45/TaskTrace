@@ -22,7 +22,7 @@
 						v-model="subtaskTitle"
 						class="input"
 						placeholder="例如：整理本周验收结果"
-						:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !!pendingSubtask"
+						:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH"
 					>
 				</div>
 				<div class="control">
@@ -31,7 +31,7 @@
 						type="submit"
 						:disabled="subtaskSaving || depthLoading || taskDepth >= MAX_TASK_DEPTH || !subtaskTitle.trim()"
 					>
-						{{ pendingSubtask ? '重试关联' : '添加子任务' }}
+						添加子任务
 					</button>
 				</div>
 			</div>
@@ -248,13 +248,14 @@
 					<BaseButton
 						v-if="editEnabled"
 						class="remove"
-						:aria-label="$t('task.relation.delete')"
+						:aria-label="isLocalBuild && rts.kind === 'subtask' ? `删除子任务：${task.title}` : `移除关联：${task.title}`"
+						:title="isLocalBuild && rts.kind === 'subtask' ? '删除子任务及其下级事项' : '仅移除关联，保留事项'"
 						@click="setRelationToDelete({
 							relationKind: rts.kind,
 							otherTaskId: task.id
 						})"
 					>
-						<Icon icon="trash-alt" />
+						<Icon :icon="isLocalBuild && rts.kind === 'subtask' ? 'trash-alt' : 'unlink'" />
 					</BaseButton>
 				</div>
 			</div>
@@ -268,17 +269,18 @@
 
 		<Modal
 			:enabled="relationToDelete !== undefined"
-			@close="relationToDelete = undefined"
+			:submit-label="isLocalBuild && relationToDelete?.relationKind === 'subtask' ? '删除子任务' : '移除关联'"
+			@close="cancelRelationDelete"
 			@submit="removeTaskRelation()"
 		>
 			<template #header>
-				<span>{{ $t('task.relation.delete') }}</span>
+				<span>{{ isLocalBuild && relationToDelete?.relationKind === 'subtask' ? '删除子任务' : '移除事项关联' }}</span>
 			</template>
 
 			<template #text>
 				<p>
-					{{ $t('task.relation.deleteText1') }}<br>
-					<strong class="has-text-white">{{ isLocalBuild ? '移除后可使用“撤销”恢复关系。' : $t('misc.cannotBeUndone') }}</strong>
+					{{ isLocalBuild && relationToDelete?.relationKind === 'subtask' ? '确定删除此子任务及其下级事项吗？子任务会被删除，不会变成独立事项。' : '只移除所选关联，事项内容仍会保留。移除父子关联后，子任务会成为独立事项。' }}<br>
+					<strong>{{ isLocalBuild ? relationToDelete?.relationKind === 'subtask' ? '删除后可使用“撤销”恢复子任务。' : '移除后可使用“撤销”恢复关系。' : $t('misc.cannotBeUndone') }}</strong>
 				</p>
 			</template>
 		</Modal>
@@ -293,7 +295,7 @@ import {useRoute} from 'vue-router'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {TASKTRACE_DEFAULT_STORED_PRIORITY} from '@/helpers/tasktracePriority'
 import {useTasktraceUndoGuard, undoGroupHeaders} from '@/helpers/tasktraceUndo'
-import {patchTasksRead, tasksCreate, tasksRelationsCreate} from '@/client/generated'
+import {patchTasksRead, tasksCreate} from '@/client/generated'
 import TaskService from '@/services/task'
 import {taskHierarchySpan, assertCanAddSubtask, MAX_TASK_DEPTH, TASK_DEPTH_MESSAGE} from '@/helpers/taskHierarchyDepth'
 import TaskModel, {getTaskIdentifier} from '@/models/task'
@@ -310,11 +312,12 @@ import Multiselect from '@/components/input/Multiselect.vue'
 import FancyCheckbox from '@/components/input/FancyCheckbox.vue'
 import QuickAddMagic from '@/components/tasks/partials/QuickAddMagic.vue'
 
-import {error, success} from '@/message'
+import {error, getErrorText, success} from '@/message'
 import {useTaskStore} from '@/stores/tasks'
 import {useProjectStore} from '@/stores/projects'
 import {useAuthStore} from '@/stores/auth'
 import {playPopSound} from '@/helpers/playPop'
+import {publishTasktraceTaskChanges} from '@/helpers/tasktraceTaskEvents'
 
 const props = withDefaults(defineProps<{
 	taskId: number,
@@ -368,9 +371,7 @@ watch(() => [props.taskId, props.initialRelatedTasks], async () => {
 const subtaskTitle = ref('')
 const subtaskSaving = ref(false)
 const subtaskMessage = ref('')
-const pendingSubtask = ref<ITask | null>(null)
-let subtaskUndoGroup = ''
-watch(() => props.taskId, () => { subtaskTitle.value = ''; pendingSubtask.value = null; subtaskMessage.value = '' })
+watch(() => props.taskId, () => { subtaskTitle.value = ''; subtaskMessage.value = '' })
 async function addSubtask() {
 	if (!props.editEnabled || subtaskSaving.value || !subtaskTitle.value.trim()) return
 	subtaskSaving.value = true
@@ -378,26 +379,25 @@ async function addSubtask() {
 	const projectId = props.projectId
 	try {
 		await assertCanAddSubtask(parentId)
-		let child = pendingSubtask.value
-		if (!child) {
-			subtaskUndoGroup = isLocalBuild ? crypto.randomUUID() : ''
-			const result = await tasksCreate({path: {project: projectId}, body: {
-				title: subtaskTitle.value.trim(),
-				priority: isLocalBuild ? TASKTRACE_DEFAULT_STORED_PRIORITY : undefined,
-			}, headers: undoGroupHeaders(subtaskUndoGroup)})
-			if (!result.data.id) throw new Error('Missing task ID')
-			child = new TaskModel({id: result.data.id, title: result.data.title, projectId})
-			if (props.taskId === parentId) pendingSubtask.value = child
-		}
-		await tasksRelationsCreate({path: {task: parentId}, body: {other_task_id: child.id, relation_kind: 'subtask'}, headers: undoGroupHeaders(subtaskUndoGroup)})
+		const result = await tasksCreate({path: {project: projectId}, body: {
+			title: subtaskTitle.value.trim(),
+			parent_task_id: parentId,
+			priority: isLocalBuild ? TASKTRACE_DEFAULT_STORED_PRIORITY : undefined,
+		}, headers: undoGroupHeaders()})
+		if (!result.data.id) throw new Error('Missing task ID')
 		if (props.taskId !== parentId) return
+		const child = new TaskModel({id: result.data.id, title: result.data.title, projectId})
 		relatedTasks.value.subtask = [...(relatedTasks.value.subtask || []), child]
-		pendingSubtask.value = null
+		publishTasktraceTaskChanges([{task_id: parentId, project_id: projectId, related_task_id: child.id}])
 		subtaskTitle.value = ''
 		subtaskMessage.value = '子任务已添加，可点击名称查看和记录进展。'
-	} catch (error) {
-		if (error instanceof Error && error.message === TASK_DEPTH_MESSAGE) { taskDepth.value = MAX_TASK_DEPTH; subtaskMessage.value = TASK_DEPTH_MESSAGE; return }
-		if (props.taskId === parentId) subtaskMessage.value = pendingSubtask.value ? '事项已创建，但关联失败。点击“重试关联”，不会重复创建。' : '添加失败，名称已保留，请重试。'
+	} catch (cause) {
+		if (cause instanceof Error && cause.message === TASK_DEPTH_MESSAGE) { taskDepth.value = MAX_TASK_DEPTH; subtaskMessage.value = TASK_DEPTH_MESSAGE; return }
+		if (props.taskId === parentId) {
+			const detail = getErrorText(cause)
+			const outcome = '子任务添加失败，名称已保留，请重试。'
+			subtaskMessage.value = detail ? `${outcome} 原因：${detail}` : outcome
+		}
 	} finally { subtaskSaving.value = false }
 }
 const renamingId = ref<number | null>(null)
@@ -425,8 +425,11 @@ async function saveSubtaskName() {
 		if (child) child.title = title
 		renamingId.value = null
 		subtaskMessage.value = '子任务名称已保存。'
-	} catch {
-		if (props.taskId === parentId) subtaskMessage.value = '名称保存失败，输入已保留，请重试。'
+	} catch (cause) {
+		if (props.taskId === parentId) {
+			const detail = getErrorText(cause)
+			subtaskMessage.value = `名称保存失败，输入已保留，请重试。${detail ? ` 原因：${detail}` : ''}`
+		}
 	} finally { renameSaving.value = false }
 }
 const query = ref('')
@@ -510,11 +513,16 @@ async function addTaskRelation() {
 		return
 	}
 
-	await taskRelationService.create(new TaskRelationModel({
-		taskId: props.taskId,
-		otherTaskId: newTaskRelation.task.id,
-		relationKind: newTaskRelation.kind,
-	}))
+	try {
+		await taskRelationService.create(new TaskRelationModel({
+			taskId: props.taskId,
+			otherTaskId: newTaskRelation.task.id,
+			relationKind: newTaskRelation.kind,
+		}))
+	} catch (cause) {
+		subtaskMessage.value = `关联失败：${getErrorText(cause)}。所选事项已保留，请检查权限后重试。`
+		return
+	}
 	relatedTasks.value[newTaskRelation.kind] = [
 		...(relatedTasks.value[newTaskRelation.kind] || []),
 		newTaskRelation.task,
@@ -529,25 +537,40 @@ async function addTaskRelation() {
 }
 
 const relationToDelete = ref<Partial<ITaskRelation>>()
+const relationDeleting = ref(false)
+function cancelRelationDelete() {
+	if (!relationDeleting.value) relationToDelete.value = undefined
+}
 
 function setRelationToDelete(relation: Partial<ITaskRelation>) {
 	relationToDelete.value = relation
 }
 
 async function removeTaskRelation() {
+	if (relationDeleting.value) return
+	const parentId = props.taskId
+	const projectId = props.projectId
 	const relation = relationToDelete.value
 	if (!relation || !relation.relationKind || !relation.otherTaskId) {
 		relationToDelete.value = undefined
 		return
 	}
+	relationDeleting.value = true
 	try {
 		const relationKind = relation.relationKind
-		await taskRelationService.delete(new TaskRelationModel({
-			relationKind,
-			taskId: props.taskId,
-			otherTaskId: relation.otherTaskId,
-		}))
-
+		if (isLocalBuild && relationKind === 'subtask') {
+			const child = relatedTasks.value.subtask?.find(task => task.id === relation.otherTaskId)
+			if (!child) throw new Error('子任务已删除或移出，请重新读取。')
+			await taskStore.delete(child)
+		} else {
+			await taskRelationService.delete(new TaskRelationModel({
+				relationKind,
+				taskId: props.taskId,
+				otherTaskId: relation.otherTaskId,
+			}))
+		}
+		publishTasktraceTaskChanges([{task_id: parentId, project_id: projectId, related_task_id: relation.otherTaskId}])
+		if (props.taskId !== parentId) return
 		relatedTasks.value[relationKind] = relatedTasks.value[relationKind]?.filter(
 			({id}) => id !== relation.otherTaskId,
 		)
@@ -556,21 +579,46 @@ async function removeTaskRelation() {
 		setTimeout(() => {
 			saved.value = false
 		}, 2000)
+	} catch (cause) {
+		if (props.taskId === parentId) subtaskMessage.value = `${isLocalBuild && relation.relationKind === 'subtask' ? '删除子任务' : '移除关联'}失败：${getErrorText(cause)}`
 	} finally {
 		relationToDelete.value = undefined
+		relationDeleting.value = false
 	}
 }
 
 async function createAndRelateTask(title: string) {
 	if (newTaskRelation.kind === 'subtask') await assertCanAddSubtask(props.taskId)
 	if (newTaskRelation.kind === 'parenttask' && await taskHierarchySpan(props.taskId, 'subtask') >= MAX_TASK_DEPTH) throw new Error(TASK_DEPTH_MESSAGE)
-	const newTask = await taskStore.createNewTask({title, projectId: props.projectId})
-	newTaskRelation.task = newTask
-	await addTaskRelation()
+	const parentId = props.taskId
+	const kind = newTaskRelation.kind
+	try {
+		const newTask = await taskStore.createNewTask({title, projectId: props.projectId, parentTaskId: kind === 'subtask' ? parentId : undefined})
+		if (props.taskId !== parentId) return
+		if (kind === 'subtask') {
+			relatedTasks.value.subtask = [...(relatedTasks.value.subtask || []), newTask]
+			publishTasktraceTaskChanges([{task_id: parentId, project_id: props.projectId, related_task_id: newTask.id}])
+			newTaskRelation.task = new TaskModel()
+			showNewRelationForm.value = false
+			subtaskMessage.value = '子任务已添加，可点击名称查看和记录进展。'
+			return
+		}
+		newTaskRelation.task = newTask
+		await addTaskRelation()
+	} catch (cause) {
+		if (props.taskId === parentId) subtaskMessage.value = `添加失败，名称已保留。原因：${getErrorText(cause)}`
+	}
 }
 
 async function toggleTaskDone(task: ITask) {
-	await taskStore.update(task)
+	const requestedDone = task.done
+	try {
+		await taskStore.update(task)
+	} catch (cause) {
+		task.done = !requestedDone
+		error(cause)
+		return
+	}
 	
 	if (task.done) {
 		playPopSound()

@@ -3,6 +3,15 @@ import {notify} from '@kyvg/vue3-notification'
 
 export function getErrorText(r): string {
 	const data = r?.reason?.response?.data || r?.response?.data || r
+	const status = r?.reason?.response?.status ?? r?.response?.status ?? data?.status
+	const detailsText = [data?.detail, data?.message, ...(Array.isArray(data?.errors) ? data.errors.map((item: {message?: string} | null) => item?.message) : [])].filter(Boolean).join(' ')
+	const needsAdministrator = /windows administrator authorization required|需要.*管理员授权/i.test(detailsText)
+	if (status === 403 && !needsAdministrator) {
+		return '操作失败：当前账户没有相应的读写权限。请联系任务所属人检查任务或遗留事项的权限；权限更新后可直接重试。'
+	}
+	if (!needsAdministrator && /access is denied|access denied|permission denied|拒绝访问|系统错误 5/i.test(detailsText)) {
+		return `操作失败：数据目录或团队共享目录的读写权限不足，请检查文件夹权限后重试。${detailsText ? `（${detailsText}）` : ''}`
+	}
 
 	if (data?.code) {
 		const path = `error.${data.code}`
