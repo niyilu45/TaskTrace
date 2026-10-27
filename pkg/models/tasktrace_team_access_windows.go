@@ -207,24 +207,25 @@ $acl=if($legacyAclApi){$directory.GetAccessControl([Security.AccessControl.Acces
 $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow'})
 $previousRight=if($existing.AccessRight -contains 'Full'){'Full'}elseif($existing.AccessRight -contains 'Change'){'Change'}elseif($existing.Count -gt 0){'Read'}else{''}
   $sharePermissionChanged=$true
-  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop}
+  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop | Out-Null}
   $shareRight=if($Access -eq 'read'){'Read'}else{'Change'}
   Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight $shareRight -Force -ErrorAction Stop | Out-Null
   $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
   $rights=if($Access -eq 'read'){[Security.AccessControl.FileSystemRights]::ReadAndExecute}else{[Security.AccessControl.FileSystemRights]::Modify}
-  $acl.PurgeAccessRules($sid)
+  [void]$acl.PurgeAccessRules($sid)
   $rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
   [void]$acl.AddAccessRule($rule)
-  if($legacyAclApi){$directory.SetAccessControl($acl)}else{[IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}
+  if($legacyAclApi){[void]$directory.SetAccessControl($acl)}else{[void][IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}
 } catch {
   if($sharePermissionChanged){
-    Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue
+    Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction SilentlyContinue | Out-Null
     if($previousRight){Grant-SmbShareAccess -Name $share.Name -AccountName $canonical -AccessRight $previousRight -Force -ErrorAction SilentlyContinue | Out-Null}
   }
-  if($shareWasCreated){Remove-SmbShare -Name $share.Name -Force -ErrorAction SilentlyContinue}
+  if($shareWasCreated){Remove-SmbShare -Name $share.Name -Force -ErrorAction SilentlyContinue | Out-Null}
   throw
 }
-[ordered]@{account_name=$canonical;username=$username;access=$Access} | ConvertTo-Json -Compress`
+$grantResult=[ordered]@{account_name=$canonical;username=$username;access=$Access} | ConvertTo-Json -Compress
+Write-Output ('` + taskTraceTeamGrantResultPrefix + `'+$grantResult)`
 
 const taskTraceTeamRemoveAccessScript = taskTraceTeamFindShareScript + `$Root=$env:TASKTRACE_TEAM_ROOT
 $Member=$env:TASKTRACE_TEAM_MEMBER
@@ -235,13 +236,13 @@ $canonical=$sid.Translate([Security.Principal.NTAccount]).Value
 $share=Find-TaskTraceShare $rootPath
 if($null -ne $share){
   $existing=@(Get-SmbShareAccess -Name $share.Name -ErrorAction Stop | Where-Object {$_.AccountName -ieq $canonical -and $_.AccessControlType -eq 'Allow'})
-  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop}
+  if($existing.Count -gt 0){Revoke-SmbShareAccess -Name $share.Name -AccountName $canonical -Force -ErrorAction Stop | Out-Null}
 }
 $directory=[IO.DirectoryInfo]::new($rootPath)
 $legacyAclApi=@($directory.PSObject.Methods.Name) -contains 'GetAccessControl'
 $acl=if($legacyAclApi){$directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Access)}else{[IO.FileSystemAclExtensions]::GetAccessControl($directory,[Security.AccessControl.AccessControlSections]::Access)}
-$acl.PurgeAccessRules($sid)
-if($legacyAclApi){$directory.SetAccessControl($acl)}else{[IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}`
+[void]$acl.PurgeAccessRules($sid)
+if($legacyAclApi){[void]$directory.SetAccessControl($acl)}else{[void][IO.FileSystemAclExtensions]::SetAccessControl($directory,$acl)}`
 
 func taskTraceTeamPowerShellContext(parent context.Context, timeout time.Duration, script string, environment ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -350,13 +351,29 @@ func taskTraceTeamSetWindowsAccessWithOptions(root, member, access string, optio
 		return "", taskTraceTeamClassifyWindowsAccessError(err)
 	}
 	taskTraceWindowsAccessCache.invalidate(root)
+	return taskTraceTeamDecodeGrantedAccount(output)
+}
+
+// A dedicated result frame separates the acknowledgement from PowerShell
+// warnings, formatting output and CIM objects returned by permission cmdlets.
+const taskTraceTeamGrantResultPrefix = "TASKTRACE_TEAM_ACCESS_RESULT:"
+
+func taskTraceTeamDecodeGrantedAccount(output []byte) (string, error) {
+	payload := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(output)), "\ufeff"))
+	if position := strings.LastIndex(payload, taskTraceTeamGrantResultPrefix); position >= 0 {
+		payload = strings.TrimSpace(strings.SplitN(payload[position+len(taskTraceTeamGrantResultPrefix):], "\n", 2)[0])
+	}
 	var value struct {
 		AccountName string `json:"account_name"`
 	}
-	if err := json.Unmarshal(output, &value); err != nil || value.AccountName == "" {
-		return "", fmt.Errorf("Windows did not return the granted account")
+	if err := json.Unmarshal([]byte(payload), &value); err != nil {
+		return "", fmt.Errorf("decode Windows permission acknowledgement: %w", err)
 	}
-	return value.AccountName, nil
+	account := strings.TrimSpace(value.AccountName)
+	if account == "" {
+		return "", errors.New("windows permission acknowledgement did not contain an authorized account")
+	}
+	return account, nil
 }
 
 func taskTraceTeamAccessEnvironment(root, member, access string, options TaskTraceTeamAccessOptions) []string {
@@ -507,13 +524,7 @@ func taskTraceTeamGrantWindowsAccessElevatedWithOptions(root, member, access str
 		return "", err
 	}
 	taskTraceWindowsAccessCache.invalidate(root)
-	var value struct {
-		AccountName string `json:"account_name"`
-	}
-	if err := json.Unmarshal([]byte(result), &value); err != nil || value.AccountName == "" {
-		return "", errors.New("Windows 未返回已授权的账户")
-	}
-	return value.AccountName, nil
+	return taskTraceTeamDecodeGrantedAccount([]byte(result))
 }
 
 func taskTraceTeamRemoveWindowsAccessWithElevation(root, member string, elevate bool) error {
