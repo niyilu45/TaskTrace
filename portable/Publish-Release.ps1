@@ -1,5 +1,5 @@
 param(
-    [string]$Version = 'v1.0.1',
+    [string]$Version = 'v1.0.2',
     [string]$Archive = 'Releases/TaskTrace-local-windows-x64.zip',
     [string]$Notes = 'Releases/RELEASE-NOTES.md'
 )

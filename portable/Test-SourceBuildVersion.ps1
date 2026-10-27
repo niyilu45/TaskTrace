@@ -81,9 +81,11 @@ try {
     Assert-Version ($resolved -is [string] -and $resolved -match ('^' + [regex]::Escape($TaskTraceSourceFallbackVersion) + '\+source\.[0-9]{14}$')) 'ZIP source resolution produced an invalid version or an array.'
     Assert-BuildVersionAccepted $resolved $true
     function Invoke-RestMethod { throw 'isolated API failure' }
-    function Invoke-WebRequest { param($Uri, $Headers, $TimeoutSec, $UseBasicParsing, $ErrorAction, $Proxy, $ProxyUseDefaultCredentials) return [pscustomobject]@{Content='<entry><link href="https://github.com/unused/repository/releases/tag/v1.0.1" /></entry>'} }
+    $feedBaseline = [version]($TaskTraceSourceFallbackVersion.TrimStart('v').Split('-')[0])
+    $feedFallbackVersion = 'v' + $feedBaseline.Major + '.' + $feedBaseline.Minor + '.' + ($feedBaseline.Build + 1)
+    function Invoke-WebRequest { param($Uri, $Headers, $TimeoutSec, $UseBasicParsing, $ErrorAction, $Proxy, $ProxyUseDefaultCredentials) return [pscustomobject]@{Content=('<entry><link href="https://github.com/unused/repository/releases/tag/' + $feedFallbackVersion + '" /></entry>')} }
     $resolved = Resolve-TaskTraceSourceBuildVersion '' 'unused/repository'
-    Assert-Version ($resolved -match '^v1\.0\.1\+source\.[0-9]{14}$') 'Release feed fallback produced an invalid stable source version.'
+    Assert-Version ($resolved -match ('^' + [regex]::Escape($feedFallbackVersion) + '\+source\.[0-9]{14}$')) 'Release feed fallback produced an invalid stable source version.'
     Assert-BuildVersionAccepted $resolved $true
     function Invoke-WebRequest { throw 'isolated offline failure' }
     $resolved = Resolve-TaskTraceSourceBuildVersion '' 'unused/repository'
