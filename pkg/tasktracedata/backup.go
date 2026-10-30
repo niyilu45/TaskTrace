@@ -337,12 +337,30 @@ func snapshotData(destination string) error {
 		"server.log":           true,
 		"server-error.log":     true,
 	}
-	if err := copyDirectoryFiltered(dataRoot(), destination, func(relative string, _ fs.DirEntry) bool {
-		return !skip[strings.ToLower(filepath.ToSlash(relative))]
+	if err := copyDirectoryFiltered(dataRoot(), destination, func(relative string, entry fs.DirEntry) bool {
+		return !skip[strings.ToLower(filepath.ToSlash(relative))] && (entry.IsDir() || !quickMemoBackupArtifact(relative))
 	}); err != nil {
 		return fmt.Errorf("copy personal data: %w", err)
 	}
 	return nil
+}
+
+// The memo writer replaces these files concurrently; only memo.html is committed content.
+func quickMemoBackupArtifact(relative string) bool {
+	name := strings.ToLower(strings.ReplaceAll(relative, `\`, "/"))
+	const prefix = "quick-memo/memo.html."
+	if name == prefix+"bak" {
+		return true
+	}
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".tmp") {
+		return false
+	}
+	version := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".tmp")
+	if len(version) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(version)
+	return err == nil
 }
 
 func snapshotSQLite(source, destination string) error {

@@ -242,6 +242,7 @@ internal sealed partial class FloatingWindow : Form {
         InitializeStartWithWindows(menu);
         var quickAlarms = new FloatingQuickAlarms(data, Font, Icon);
         menu.Items.Add(quickAlarms.Menu);
+        InitializeQuickMemo(menu);
         Disposed += delegate { quickAlarms.Dispose(); };
         menu.Items.Add("打开程序路径", null, delegate {
             try { Process.Start(new ProcessStartInfo(root) { UseShellExecute = true }); }
@@ -258,6 +259,7 @@ internal sealed partial class FloatingWindow : Form {
             if(!selfTest) try { var prefs = ReadObject(File.ReadAllText(Path.Combine(data, "simple-window.json"))); simpleSize = new Size(Math.Max(160, Convert.ToInt32(prefs["width"])), Math.Max(120, Convert.ToInt32(prefs["height"]))); if(Convert.ToBoolean(prefs["enabled"])) SetSimpleMode(true); } catch { }
             timer.Start(); if(selfTest) await TestFlow(); else if(openBrowser) await OpenFull(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) {
+            if(e.Cancel)return;
             if(e.CloseReason == CloseReason.UserClosing && !allowExit) {
                 e.Cancel = true; HideToTray();
                 return;

@@ -60,7 +60,9 @@ internal sealed partial class FloatingWindow {
             updateTimer.Start();
             await CheckForUpdates(false);
         };
-        FormClosing += delegate { updateTimer.Stop(); };
+        FormClosing += delegate(object sender,FormClosingEventArgs args) {
+            if(!args.Cancel && (allowExit || args.CloseReason!=CloseReason.UserClosing))updateTimer.Stop();
+        };
     }
 
     async Task UpdateTimerTick() {
