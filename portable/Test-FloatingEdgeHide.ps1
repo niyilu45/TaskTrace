@@ -31,9 +31,11 @@ internal sealed partial class FloatingWindow {
         tasks.SelectedNode=tasks.Nodes[0];
         tray.ContextMenuStrip=new ContextMenuStrip();
         tray.ContextMenuStrip.Items.Add("Test only");
+        InitializeEdgeHide(tray.ContextMenuStrip);
         InitializeSimpleModeRecovery(tray.ContextMenuStrip);
     }
     protected override bool ShowWithoutActivation {get{return true;}}
+    protected override CreateParams CreateParams {get {var value=base.CreateParams;value.ExStyle|=0x08000000;return value;}}
     static void EdgeAssert(bool pass,string message){if(!pass)throw new Exception(message);}
     static bool EdgeAligned(Rectangle visible,Rectangle area,EdgeDock edge) {
         return edge==EdgeDock.Left?visible.Left==area.Left:edge==EdgeDock.Right?visible.Right==area.Right:edge==EdgeDock.Top?visible.Top==area.Top:visible.Bottom==area.Bottom;
@@ -69,6 +71,65 @@ internal sealed partial class FloatingWindow {
         PollEdgeHide(outside,now,false);EdgeAssert(!edgeHidden,"Window hid without the departure delay");
         PollEdgeHide(outside,now.AddMilliseconds(499),false);EdgeAssert(!edgeHidden,"Window hid before 500 ms");
         PollEdgeHide(outside,now.AddMilliseconds(501),false);EdgeAssert(edgeHidden,"Docked window did not hide after pointer departure");
+    }
+    internal static void TestEdgeRecovery(string isolatedDirectory) {
+        using(var window=new FloatingWindow(isolatedDirectory)) {
+            var area=Screen.PrimaryScreen.WorkingArea;var outside=new Point(area.Right+200,area.Bottom+200);
+            var now=new DateTime(2030,1,1,0,0,0,DateTimeKind.Utc);
+            window.Show();Application.DoEvents();window.edgeHideEnabled=true;
+            // A restored/programmatically moved window need not receive native size/move messages.
+            window.Bounds=new Rectangle(area.Left,area.Top+80,420,580);window.RestoreFromEdge(true);
+            window.SimulateLeaveAndHide(outside,now);
+            EdgeAssert(window.edgeDock==EdgeDock.Left,"Idle polling did not rediscover the touched screen edge");
+            window.RestoreFromEdge(true);window.Hide();window.Show();Application.DoEvents();window.edgeHideTimer.Stop();
+            window.SimulateLeaveAndHide(outside,now);
+            EdgeAssert(window.edgeDock==EdgeDock.Left,"Hide/show recovery without a native move lost edge docking");
+            window.RestoreFromEdge(false);window.HandleEdgeHideWindowMessage(0x0231);
+            EdgeAssert(window.edgeSizing,"Size/move test did not enter its native loop");
+            window.Hide();window.Show();Application.DoEvents();window.edgeHideTimer.Stop();
+            EdgeAssert(!window.edgeSizing,"Hiding left an interrupted native size/move loop active");
+            window.SimulateLeaveAndHide(outside,now);
+            window.RestoreFromEdge(false);window.HandleEdgeHideWindowMessage(0x0231);window.RecreateHandle();
+            Application.DoEvents();window.edgeHideTimer.Stop();
+            EdgeAssert(!window.edgeSizing,"Recreating the native handle left size/move protection stuck");
+            window.SimulateLeaveAndHide(outside,now);
+            window.RestoreFromEdge(true);window.Bounds=new Rectangle(area.Left+130,area.Top+90,420,580);
+            window.ArmEdgeHideAfterLayoutChange(EdgeDock.Left,area);window.edgeHideTimer.Stop();
+            window.Location=new Point(area.Left+130,area.Top+90);var undocked=window.Bounds;
+            window.PollEdgeHide(outside,now,false);window.PollEdgeHide(outside,now.AddSeconds(1),false);
+            EdgeAssert(!window.edgeHidden && window.edgeDock==EdgeDock.None && window.Bounds==undocked,"Moving away from the edge snapped back to stale docking bounds");
+            window.ArmEdgeHideAfterLayoutChange(EdgeDock.Right,area);window.edgeHideTimer.Stop();
+            window.Bounds=window.AlignBoundsToEdge(new Rectangle(area.Right-320,area.Top+90,320,460),area,EdgeDock.Right);var resized=window.Bounds;
+            window.SimulateLeaveAndHide(outside,now);
+            EdgeAssert(window.Bounds.Size==resized.Size,"Hiding reverted to obsolete window dimensions");
+            var trigger=window.EdgeTriggerBounds();window.PollEdgeHide(trigger.Location,now.AddSeconds(2),false);
+            EdgeAssert(window.Bounds==resized,"Hover restore reverted a newer position or size");
+            window.RestoreFromEdge(true);window.Bounds=new Rectangle(area.Left+130,area.Top+90,420,580);
+            window.ArmEdgeHideAfterLayoutChange(EdgeDock.Right,area);window.edgeHideTimer.Stop();
+            window.SetSimpleMode(true);window.SetSimpleMode(false);window.Location=new Point(area.Left+130,area.Top+90);var latest=window.Bounds;
+            Application.DoEvents();window.edgeHideTimer.Stop();
+            EdgeAssert(window.Bounds==latest,"An obsolete queued layout moved a window after it was undocked");
+            window.RestoreFromEdge(true);window.SetSimpleMode(true);Application.DoEvents();
+            window.ArmEdgeHideAfterLayoutChange(EdgeDock.Bottom,area);window.edgeHideTimer.Stop();
+            window.ShowSimpleModeRestore();
+            EdgeAssert(EdgeAligned(window.Bounds,area,EdgeDock.Bottom),"Showing the simple action strip detached the bottom-docked window");
+            window.HideSimpleModeActions();
+            EdgeAssert(EdgeAligned(window.Bounds,area,EdgeDock.Bottom),"Hiding the simple action strip detached the bottom-docked window");
+            window.SimulateLeaveAndHide(outside,now);
+            window.UpdateSimpleModeState();
+            EdgeAssert(window.edgeHidden && EdgeStripOnly(window.Bounds,area,EdgeDock.Bottom),"An idle layout update revealed or resized the hidden strip incorrectly");
+            // Simulate a previously smaller work area; the OS display/taskbar is not changed.
+            var previousArea=area;previousArea.Height-=60;
+            window.edgeWorkingArea=previousArea;
+            window.edgeRestoreBounds=window.AlignBoundsToEdge(window.edgeRestoreBounds,previousArea,EdgeDock.Bottom);
+            window.Bounds=HiddenEdgeBounds(window.edgeRestoreBounds,previousArea,EdgeDock.Bottom,Padding.Empty);
+            window.PollEdgeHide(outside,now.AddSeconds(3),false);
+            EdgeAssert(window.edgeWorkingArea==area && window.edgeHidden && EdgeStripOnly(window.Bounds,area,EdgeDock.Bottom),"Working-area change left the hidden strip at an obsolete screen edge");
+            trigger=window.EdgeTriggerBounds();window.PollEdgeHide(trigger.Location,now.AddSeconds(4),false);
+            EdgeAssert(!window.edgeHidden && EdgeAligned(window.Bounds,area,EdgeDock.Bottom),"Working-area recovery failed to reveal the current docked bounds");
+            window.Hide();
+        }
+        Console.WriteLine("PASS recovery: rediscover docking; hide/show; interrupted size/move and handle recreation; move away; current size/position; stale queued layout; bottom action-strip resize; hidden layout; work-area recovery.");
     }
     internal static void TestEdgeLifecycle(string isolatedDirectory) {
         using(var window=new FloatingWindow(isolatedDirectory)) {
@@ -133,6 +194,7 @@ internal sealed partial class FloatingWindow {
 internal sealed class InvisibleEdgeEditor : Form {
     internal InvisibleEdgeEditor(){Opacity=0;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Location=new Point(-20000,-20000);}
     protected override bool ShowWithoutActivation {get{return true;}}
+    protected override CreateParams CreateParams {get {var value=base.CreateParams;value.ExStyle|=0x08000000;return value;}}
 }
 internal static class FloatingEdgeHideTests {
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
@@ -140,8 +202,8 @@ internal static class FloatingEdgeHideTests {
         var pointer=Cursor.Position;var foreground=GetForegroundWindow();
         try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            FloatingWindow.TestEdgeGeometry();FloatingWindow.TestEdgeLifecycle(args[0]);
-            if(Cursor.Position!=pointer || GetForegroundWindow()!=foreground)throw new Exception("The isolated test disturbed the user's pointer or foreground window");
+            FloatingWindow.TestEdgeGeometry();FloatingWindow.TestEdgeLifecycle(args[0]);FloatingWindow.TestEdgeRecovery(args[0]);
+            if(Cursor.Position!=pointer || GetForegroundWindow()!=foreground)throw new Exception("The isolated test changed pointer: "+(Cursor.Position!=pointer)+"; foreground window: "+(GetForegroundWindow()!=foreground));
             Console.WriteLine("PASS isolation: cursor and foreground window unchanged; no normal startup, database, server, session or task edits.");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }

@@ -152,6 +152,10 @@ internal sealed partial class FloatingWindow {
     }
     void PositionSimpleModeControls() {
         if(!simpleMode || simpleLayout || simpleWindowWasMinimized || closing || IsDisposed || WindowState!=FormWindowState.Normal)return;
+        var layoutBounds=edgeHidden?edgeRestoreBounds:Bounds;
+        var layoutArea=edgeHidden?edgeWorkingArea:Screen.FromRectangle(layoutBounds).WorkingArea;
+        var layoutEdge=edgeHideEnabled?(edgeHidden?edgeDock:TouchedEdge(layoutBounds,layoutArea)):EdgeDock.None;
+        bool wasHidden=edgeHidden;
         simpleLayout=true;
         try {
             int width=Math.Max(160,simpleSize.Width);
@@ -170,6 +174,16 @@ internal sealed partial class FloatingWindow {
             simpleActions.PerformLayout();
             if(simpleActionsShown)simpleActions.BringToFront();
         } finally {simpleLayout=false;}
+        if(layoutEdge!=EdgeDock.None && Size!=layoutBounds.Size && !edgeSizing) {
+            var restored=AlignBoundsToEdge(new Rectangle(layoutBounds.Location,Size),layoutArea,layoutEdge);
+            if(wasHidden) {
+                edgeRestoreBounds=restored;edgeWorkingArea=layoutArea;
+                Bounds=HiddenEdgeBounds(restored,layoutArea,layoutEdge,EdgeFrameInsets());
+            } else {
+                Bounds=restored;
+                ArmEdgeHideAfterLayoutChange(layoutEdge,layoutArea);
+            }
+        }
     }
     void QueueSimpleRestoreLayout() {
         if(!simpleMode || !simpleWindowWasMinimized || simpleRestoreLayoutQueued || closing || IsDisposed || !IsHandleCreated || !Visible || WindowState!=FormWindowState.Normal)return;

@@ -14,6 +14,7 @@ internal sealed partial class FloatingWindow {
     EdgeDock edgeDock;
     Rectangle edgeRestoreBounds, edgeWorkingArea;
     DateTime edgePointerLeftUtc = DateTime.MinValue;
+    long edgeLayoutRevision;
     const int EdgeSnapTolerance = 8;
     const int EdgeRevealStrip = 2;
     const int EdgeTriggerThickness = 5;
@@ -26,6 +27,8 @@ internal sealed partial class FloatingWindow {
         trayMenu.Items.Add(edgeHideMenu);
         trayMenu.Items.Add(new ToolStripSeparator());
         edgeHideTimer.Tick += delegate { PollEdgeHide(); };
+        HandleDestroyed += delegate { ResetEdgeHideSizeMove(); };
+        VisibleChanged += delegate { if(!Visible)ResetEdgeHideSizeMove(); };
         if(edgeHideEnabled)edgeHideTimer.Start();
         Shown += delegate { if(edgeHideEnabled)BeginInvoke(new Action(delegate { TryHideAtTouchedEdge(); })); };
     }
@@ -42,6 +45,10 @@ internal sealed partial class FloatingWindow {
         SaveBounds();
     }
 
+    void ResetEdgeHideSizeMove() {
+        // A hidden or destroyed native window cannot finish its old size/move loop.
+        edgeSizing=false;edgePointerLeftUtc=DateTime.MinValue;edgeLayoutRevision++;
+    }
     void HandleEdgeHideWindowMessage(int message) {
         const int EnterSizeMove = 0x0231, ExitSizeMove = 0x0232;
         if(message == EnterSizeMove) {
@@ -146,7 +153,12 @@ internal sealed partial class FloatingWindow {
 
     void RearmEdgeHideAfterLayoutChange(EdgeDock preferredEdge, Rectangle preferredArea) {
         if(!edgeHideEnabled || closing || IsDisposed)return;
-        BeginInvoke(new Action(delegate { ArmEdgeHideAfterLayoutChange(preferredEdge, preferredArea); }));
+        long revision=++edgeLayoutRevision;var requestedBounds=Bounds;
+        BeginInvoke(new Action(delegate {
+            // A later mode switch or move supersedes this queued layout.
+            if(revision!=edgeLayoutRevision || Bounds!=requestedBounds || edgeHidden)return;
+            ArmEdgeHideAfterLayoutChange(preferredEdge, preferredArea);
+        }));
     }
 
     void TryHideAtTouchedEdge() {
@@ -196,7 +208,7 @@ internal sealed partial class FloatingWindow {
     }
 
     bool CanPollEdgeHide() {
-        return edgeHideEnabled && edgeDock!=EdgeDock.None && !closing && !IsDisposed && Visible && WindowState==FormWindowState.Normal && !edgeSizing;
+        return edgeHideEnabled && !closing && !IsDisposed && Visible && WindowState==FormWindowState.Normal && !edgeSizing;
     }
 
     void PollEdgeHide() {
@@ -207,8 +219,23 @@ internal sealed partial class FloatingWindow {
     void PollEdgeHide(Point pointer, DateTime now, bool interactionActive) {
         if(!CanPollEdgeHide())return;
         if(edgeHidden) {
+            var currentArea=Screen.FromRectangle(edgeRestoreBounds).WorkingArea;
+            if(currentArea!=edgeWorkingArea) {
+                edgeWorkingArea=currentArea;
+                edgeRestoreBounds=AlignBoundsToEdge(edgeRestoreBounds,currentArea,edgeDock);
+                Bounds=HiddenEdgeBounds(edgeRestoreBounds,currentArea,edgeDock,EdgeFrameInsets());
+            }
             if(EdgeTriggerBounds().Contains(pointer))RestoreFromEdge(false);
             return;
+        }
+        // Native move messages are not guaranteed for tray restore, DPI or layout changes.
+        // Reconcile against current geometry so a stale dock cannot strand or teleport us.
+        var area=Screen.FromRectangle(Bounds).WorkingArea;
+        var edge=TouchedEdge(Bounds,area);
+        if(edge==EdgeDock.None) {edgeDock=EdgeDock.None;edgePointerLeftUtc=DateTime.MinValue;return;}
+        if(edge!=edgeDock || area!=edgeWorkingArea || Bounds!=edgeRestoreBounds) {
+            ArmEdgeHideAfterLayoutChange(edge,area);
+            edgePointerLeftUtc=DateTime.MinValue;
         }
         bool interacting = Bounds.Contains(pointer) || interactionActive;
         if(interacting) { edgePointerLeftUtc = DateTime.MinValue; return; }
