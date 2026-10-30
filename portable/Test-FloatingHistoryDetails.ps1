@@ -19,11 +19,36 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 internal sealed partial class FloatingWindow {
-    internal FloatingWindow(string isolatedDirectory){root=isolatedDirectory;data=isolatedDirectory;url="http://127.0.0.1:1";selfTest=true;}
+    internal FloatingWindow(string isolatedDirectory,bool testMode=true){root=isolatedDirectory;data=isolatedDirectory;url="http://127.0.0.1:1";selfTest=testMode;}
     static void Require(bool ok,string message){if(!ok)throw new Exception(message);}
     static Dictionary<string,object> HistoryNote(long id,string date,string html){return new Dictionary<string,object>{{"id",id},{"comment","<h3>每日进展: "+date+"</h3>"+html}};}
     static T FindControl<T>(Control parent) where T:Control {if(parent is T)return (T)parent;foreach(Control child in parent.Controls){var found=FindControl<T>(child);if(found!=null)return found;}return null;}
     static byte[] Picture(Color color,string text){using(var image=new Bitmap(260,75))using(var stream=new MemoryStream()){using(var graphics=Graphics.FromImage(image)){graphics.Clear(color);graphics.DrawString(text,SystemFonts.DefaultFont,Brushes.Black,12,28);}image.Save(stream,System.Drawing.Imaging.ImageFormat.Png);return stream.ToArray();}}
+    async Task TestImagePreviewTaskbar(Form owner,byte[] bytes) {
+        bool checkedWindow=false;Exception failure=null;Form preview=null;
+        using(var driver=new Timer{Interval=40}) {
+            driver.Tick+=async delegate {
+                if(checkedWindow)return;
+                preview=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text=="查看大图 · 任务栏恢复验收");
+                if(preview==null)return;checkedWindow=true;driver.Stop();
+                try {
+                    Require(preview.ShowInTaskbar && preview.ShowIcon && preview.Icon!=null && preview.MinimizeBox,"Enlarged image preview is missing its taskbar entry, icon or minimize button");
+                    Require(!preview.Modal && preview.Owner==null && owner.Enabled,"Enlarged image preview blocks another editor");
+                    preview.WindowState=FormWindowState.Minimized;await Task.Delay(100);
+                    Require(preview.WindowState==FormWindowState.Minimized && preview.ShowInTaskbar && owner.Enabled,"Minimized image cannot be found independently in the taskbar");
+                    preview.WindowState=FormWindowState.Normal;preview.Activate();await Task.Delay(100);
+                    Require(preview.WindowState==FormWindowState.Normal && preview.Visible && owner.Enabled,"Image preview cannot be restored independently after minimize");
+                    var image=FindControl<ZoomableImagePreview>(preview);Require(image!=null,"Restored preview lost its image control");
+                    image.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);Require(image.Zoom>1f,"Restored image preview lost wheel zoom");
+                }catch(Exception error){failure=error;}finally{preview.Close();}
+            };
+            driver.Start();var shown=ShowImagePreview(new GalleryImage{Bytes=bytes,Caption="任务栏恢复验收"},owner);
+            if(await Task.WhenAny(shown,Task.Delay(5000))!=shown){if(preview!=null && !preview.IsDisposed)preview.Close();throw new Exception("Taskbar image preview test timed out");}
+            await shown;
+        }
+        Require(checkedWindow,"Enlarged image preview did not open");if(failure!=null)throw failure;
+        Console.WriteLine("PASS enlarged-image taskbar icon; independent minimize/restore; owner remains enabled; wheel zoom after restore.");
+    }
     internal async Task TestHistoryDetails(Form owner) {
         using(var editor=new ProgressHtmlEditor{Dock=DockStyle.Fill}) {
             owner.Controls.Add(editor);editor.Html="<p>start</p>";
@@ -51,6 +76,7 @@ internal sealed partial class FloatingWindow {
         // Exercise the production history dialog and its Complete information button with inline images.
         var inlineNotes=notes.Select(note=>new Dictionary<string,object>(note)).ToList();
         foreach(var note in inlineNotes){string html=(string)note["comment"];for(int i=0;i<2;i++)html=html.Replace("/api/v1/tasks/42/attachments/"+(i+1),"data:image/png;base64,"+Convert.ToBase64String(bytes[i]));note["comment"]=html;}
+        using(var previewWindow=new FloatingWindow(data,false))await previewWindow.TestImagePreviewTaskbar(owner,bytes[0]);
         await ShowImagePreview(new GalleryImage{Bytes=bytes[0],Caption="small"},owner,true);
         using(var small=Image.FromFile(Path.Combine(data,"floating-image-preview-test.png")))Require(small.Width<650 && small.Height<480,"Small pictures still open in a large fixed window");
         using(var huge=new Bitmap(3000,2200))using(var stream=new MemoryStream()){

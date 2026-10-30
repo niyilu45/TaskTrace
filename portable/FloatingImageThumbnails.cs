@@ -96,7 +96,7 @@ internal sealed partial class FloatingWindow {
     }
     async Task ShowImagePreview(GalleryImage item,Form owner,bool verify=false) {
         bool loaded=false;Exception failure=null;
-        using(var preview=DpiDialog(new Form{Text="查看大图 · "+(item.Caption??"图片"),Size=new Size(900,700),MinimumSize=new Size(420,320),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+        using(var preview=DpiDialog(new Form{Text="查看大图 · "+(item.Caption??"图片"),Size=new Size(900,700),MinimumSize=new Size(420,320),Font=Font,Icon=this.Icon,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=true,MinimizeBox=true})) {
             string caption=item.Caption??"图片";
             var heading=new Label{Dock=DockStyle.Top,Height=40,Padding=new Padding(12,10,12,0),Text=caption+" · 滚轮缩放 · 100%",AutoEllipsis=true};
             var box=new ZoomableImagePreview{Dock=DockStyle.Fill};box.CopyFeedback=delegate(string message){heading.Text=message;};
