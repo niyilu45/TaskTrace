@@ -199,17 +199,21 @@ internal sealed partial class FloatingWindow {
     }
 
     async Task<List<Action>> PrepareUnsavedContentForUpdate() {
-        var dirty=new List<UnsavedUpdateEditor>();
-        foreach(var editor in unsavedUpdateEditors.ToArray())try{if(editor.IsDirty())dirty.Add(editor);}catch{dirty.Add(editor);}
-        if(dirty.Count==0)return new List<Action>();
-        DialogResult choice=ShowUnsavedUpdateDialog(dirty.Select(editor=>editor.Label).Distinct().ToList());
-        if(choice==DialogResult.Cancel)return null;
-        if(choice==DialogResult.Ignore)return dirty.Where(editor=>editor.Discard!=null).Select(editor=>editor.Discard).ToList();
-        for(int index=dirty.Count-1;index>=0;index--) {
-            bool saved=false;try{saved=await dirty[index].Save();}catch{}
-            if(!saved){MessageBox.Show("“"+dirty[index].Label+"”未能保存。更新已取消，编辑窗口和草稿均已保留，请检查内容后重试。","TaskTrace · 未保存内容",MessageBoxButtons.OK,MessageBoxIcon.Warning);return null;}
+        while(!closing && !IsDisposed) {
+            var dirty=new List<UnsavedUpdateEditor>();
+            foreach(var editor in unsavedUpdateEditors.ToArray())try{if(editor.IsDirty())dirty.Add(editor);}catch{dirty.Add(editor);}
+            if(dirty.Count==0)return new List<Action>();
+            DialogResult choice=ShowUnsavedUpdateDialog(dirty.Select(editor=>editor.Label).Distinct().ToList());
+            if(choice==DialogResult.Cancel)return null;
+            if(choice==DialogResult.Ignore)return dirty.Where(editor=>editor.Discard!=null).Select(editor=>editor.Discard).ToList();
+            for(int index=dirty.Count-1;index>=0;index--) {
+                bool saved=false;try{saved=await dirty[index].Save();}catch{}
+                if(closing || IsDisposed)return null;
+                if(!saved){MessageBox.Show("“"+dirty[index].Label+"”未能保存。更新已取消，编辑窗口和草稿均已保留，请检查内容后重试。","TaskTrace · 未保存内容",MessageBoxButtons.OK,MessageBoxIcon.Warning);return null;}
+            }
+            // Another editor may have changed while asynchronous saves were in flight.
         }
-        return new List<Action>();
+        return null;
     }
 
     DialogResult ShowUnsavedUpdateDialog(List<string> labels) {
@@ -226,14 +230,14 @@ internal sealed partial class FloatingWindow {
     }
 
     async Task DownloadAndStartUpdate(string version) {
-        if(updateBusy) return;
-        var discardAfterVerification=await PrepareUnsavedContentForUpdate();
-        if(discardAfterVerification==null)return;
-        if(MessageBox.Show(Form.ActiveForm??this,"更新需要关闭正在运行的 TaskTrace。\r\n\r\n是否关闭程序并继续更新？", "TaskTrace · 准备更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        updateBusy = true;
-        await Task.Yield();
+        if(updateBusy || closing || IsDisposed) return;
+        updateBusy=true;
         string temporaryArchive = "";
         try {
+            // Downloading is modeless, so the final handoff must check current editors again.
+            var initialPreparation=await PrepareUnsavedContentForUpdate();
+            if(initialPreparation==null || closing || IsDisposed)return;
+            if(MessageBox.Show(Form.ActiveForm??this,"更新需要关闭正在运行的 TaskTrace。\r\n\r\n是否关闭程序并继续更新？", "TaskTrace · 准备更新", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             var state = ReadUpdateState();
             if(!Bool(state, "available") || UpdateText(state, "latest_version") != version || UpdateText(state, "asset_url") == "") throw new Exception("所选版本已经失效，请重新检查更新。");
             state["status"] = "downloading"; state["error"] = ""; WriteUpdateState(state);
@@ -241,41 +245,58 @@ internal sealed partial class FloatingWindow {
             string archive = Path.Combine(folder, "TaskTrace-" + SafeVersion(version) + ".zip");
             temporaryArchive = archive + ".tmp";
             TryDelete(temporaryArchive);
-            bool completed = false;
-            using(var progress = new UpdateDownloadDialog(Font, TopMost, version)) {
-                Exception failure = null;
-                progress.Shown += async delegate {
-                    try {
-                        await DownloadUpdateArchive(state, temporaryArchive, progress);
-                        progress.SetPhase("正在校验更新包…", "校验通过后才会关闭当前程序。", 100, false);
-                        await VerifyUpdateArchive(state, temporaryArchive, progress.Token);
-                        progress.Token.ThrowIfCancellationRequested();
-                        if(File.Exists(archive)) File.Delete(archive);
-                        File.Move(temporaryArchive, archive);
-                        completed = true;
-                    } catch(OperationCanceledException e) {
-                        if(!progress.Token.IsCancellationRequested) failure=e;
-                    } catch(Exception e) { failure = e; }
-                    finally { progress.Finish(); }
-                };
-                progress.ShowDialog(Form.ActiveForm??this);
-                if(failure != null) throw failure;
-                if(!completed) {
-                    TryDelete(temporaryArchive);
-                    state["status"] = "idle"; state["error"] = ""; WriteUpdateState(state);
-                    MessageBox.Show("更新已取消，当前程序和数据没有变化。", "TaskTrace · 已取消更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    return;
-                }
+            bool completed = await ShowUpdateDownloadProgress(version,async delegate(UpdateDownloadDialog progress) {
+                await DownloadUpdateArchive(state, temporaryArchive, progress);
+                progress.SetPhase("正在校验更新包…", "校验通过后才会关闭当前程序。", 100, false);
+                await VerifyUpdateArchive(state, temporaryArchive, progress.Token);
+                progress.Token.ThrowIfCancellationRequested();
+                if(File.Exists(archive)) File.Delete(archive);
+                File.Move(temporaryArchive, archive);
+            });
+            if(closing || IsDisposed) {TryDelete(temporaryArchive);return;}
+            if(!completed) {
+                TryDelete(temporaryArchive);
+                state["status"] = "idle"; state["error"] = ""; WriteUpdateState(state);
+                MessageBox.Show("更新已取消，当前程序和数据没有变化。", "TaskTrace · 已取消更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
-            foreach(var discard in discardAfterVerification)try{discard();}catch{}
+            var discardAfterVerification=await PrepareUnsavedContentForUpdate();
+            if(closing || IsDisposed)return;
+            if(discardAfterVerification==null) {
+                state["status"]="idle";state["error"]="";WriteUpdateState(state);
+                return;
+            }
             File.WriteAllText(Path.Combine(data, "update-ready.json"), json.Serialize(new Dictionary<string,object> {{"version",version},{"archive",archive},{"install_root",root}}), new UTF8Encoding(false));
             state["status"] = "ready"; WriteUpdateState(state);
+            // Keep drafts intact if writing the handoff fails.
+            foreach(var discard in discardAfterVerification)try{discard();}catch{}
             Environment.ExitCode = 10; allowExit = true; Close();
         } catch(Exception e) {
             TryDelete(temporaryArchive);
+            if(closing || IsDisposed)return;
             var state = ReadUpdateState(); state["status"] = "error"; state["error"] = FriendlyUpdateError(e,true); WriteUpdateState(state);
             MessageBox.Show(FriendlyUpdateError(e,true), "TaskTrace · 更新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         } finally { updateBusy = false; }
+    }
+
+    async Task<bool> ShowUpdateDownloadProgress(string version,Func<UpdateDownloadDialog,Task> operation) {
+        using(var progress=new UpdateDownloadDialog(Font,TopMost,version){Icon=this.Icon}) {
+            bool completed=false;Exception failure=null;
+            progress.Shown+=async delegate {
+                try {await operation(progress);progress.Token.ThrowIfCancellationRequested();completed=true;}
+                catch(OperationCanceledException error) {if(!progress.Token.IsCancellationRequested)failure=error;}
+                catch(Exception error) {failure=error;}
+                finally {progress.Finish();}
+            };
+            FormClosingEventHandler cancelOnExit=delegate(object sender,FormClosingEventArgs args) {
+                if(allowExit || args.CloseReason!=CloseReason.UserClosing)progress.RequestCancel();
+            };
+            FormClosing+=cancelOnExit;
+            try {await ShowEditorWindowAsync(progress,this);}
+            finally {FormClosing-=cancelOnExit;}
+            if(failure!=null)throw failure;
+            return completed;
+        }
     }
 
     async Task DownloadUpdateArchive(Dictionary<string,object> state,string destination,UpdateDownloadDialog progress) {
@@ -318,7 +339,7 @@ internal sealed partial class FloatingWindow {
         token.ThrowIfCancellationRequested();
         string expected = ParseExpectedChecksum(sums, UpdateArchiveName);
         if(expected == "") throw new Exception("发布包校验文件中没有找到 " + UpdateArchiveName + "。更新已取消。");
-        string actual = Sha256(archive);
+        string actual = await Task.Run(()=>Sha256(archive),token);
         token.ThrowIfCancellationRequested();
         if(!string.Equals(expected, actual, StringComparison.OrdinalIgnoreCase)) throw new Exception("下载文件校验失败，更新已取消。请稍后重试。");
     }
@@ -331,9 +352,10 @@ internal sealed partial class FloatingWindow {
 
     sealed class UpdateDownloadDialog : Form {
         readonly Label phase = new Label(); readonly Label detail = new Label(); readonly ProgressBar bar = new ProgressBar(); readonly Button cancel = new Button();
-        readonly CancellationTokenSource cancellation = new CancellationTokenSource(); bool finished;
-        internal CancellationToken Token { get { return cancellation.Token; } }
+        readonly CancellationTokenSource cancellation = new CancellationTokenSource(); readonly CancellationToken downloadToken; bool finished;
+        internal CancellationToken Token { get { return downloadToken; } }
         internal UpdateDownloadDialog(System.Drawing.Font font,bool topMost,string version) {
+            downloadToken=cancellation.Token;
             Text="TaskTrace · 正在更新";Size=new System.Drawing.Size(540,220);MinimumSize=new System.Drawing.Size(460,210);StartPosition=FormStartPosition.CenterScreen;ShowInTaskbar=true;TopMost=topMost;Font=font;
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=4};
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
@@ -346,7 +368,7 @@ internal sealed partial class FloatingWindow {
         internal void SetPhase(string title,string description,int percent,bool indeterminate) {
             if(IsDisposed)return;phase.Text=title;detail.Text=description;bar.Style=indeterminate?ProgressBarStyle.Marquee:ProgressBarStyle.Continuous;if(!indeterminate)bar.Value=Math.Max(0,Math.Min(100,percent));
         }
-        void RequestCancel(){if(finished||cancellation.IsCancellationRequested)return;cancellation.Cancel();cancel.Enabled=false;cancel.Text="正在取消…";phase.Text="正在取消更新…";detail.Text="正在清理临时文件，当前程序不会被修改。";bar.Style=ProgressBarStyle.Marquee;}
+        internal void RequestCancel(){if(finished||IsDisposed||cancellation.IsCancellationRequested)return;cancel.Enabled=false;cancel.Text="正在取消…";phase.Text="正在取消更新…";detail.Text="正在清理临时文件，当前程序不会被修改。";bar.Style=ProgressBarStyle.Marquee;cancellation.Cancel();}
         internal void Finish(){finished=true;if(!IsDisposed)Close();}
         protected override void OnFormClosing(FormClosingEventArgs e){if(!finished&&e.CloseReason==CloseReason.UserClosing){e.Cancel=true;RequestCancel();return;}base.OnFormClosing(e);}
         protected override void Dispose(bool disposing){if(disposing)cancellation.Dispose();base.Dispose(disposing);}
