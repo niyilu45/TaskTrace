@@ -98,6 +98,42 @@ static class FloatingPasteUndoTests {
                 editor.Html="<p>昨天</p>";Caret(browser,true);Paste(browser);queue.Dequeue().SetResult("<span>昨天图<img src='"+first+"'></span>");await Task.Delay(70);Caret(browser,true);Paste(browser);var stale=queue.Dequeue();
                 editor.Html="<p>今天独立内容</p>";string today=editor.Html;await Shortcut(browser,Keys.Control|Keys.Z);Require(editor.Html==today&&!editor.IsPastePending,"Undo crossed task/date boundary");stale.SetResult("<img src='"+second+"'>");await Task.Delay(80);Require(editor.Html==today&&editor.ImageCount==0,"Stale result crossed task/date boundary");await Shortcut(browser,Keys.Control|Keys.Y);Require(editor.Html==today,"Redo crossed task/date boundary");
             },failures);
+            await Run("image-only and mixed paste retain caret and viewport at the insertion paragraph",async delegate{
+                foreach(bool mixed in new[]{false,true}) {
+                    var fixture=new StringBuilder();for(int n=0;n<80;n++)fixture.Append("<p id='line-"+n+"'>Line "+n+" - left:right</p>");editor.Html=fixture.ToString();
+                    Eval(browser,"(function(){var p=document.getElementById('line-45'),r=document.createRange(),s=window.getSelection();r.setStart(p.firstChild,14);r.collapse(true);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange();p.scrollIntoView(true);window.scrollBy(0,-20)})()");
+                    await Task.Delay(30);int before=Scroll(browser);Require(before>400,"Paste viewport fixture did not scroll");
+                    Paste(browser);queue.Dequeue().SetResult(mixed?"<span>before<img src='"+first+"'>between<img src='"+second+"'>after</span>":"<img src='"+first+"'>");await Task.Delay(160);
+                    string actual=Convert.ToString(Eval(browser,"(function(){var s=window.getSelection();if(!s.rangeCount)return 'no range';var r=s.getRangeAt(0),n=r.startContainer;while(n&&n.id!=='line-45')n=n.parentNode;return n&&r.collapsed?'line-45':'wrong paragraph'})()"));
+                    Require(actual=="line-45","Pasted caret jumped away from insertion paragraph: "+actual);
+                    Require(Math.Abs(Scroll(browser)-before)<=2,"Paste changed scroll from "+before+" to "+Scroll(browser));
+                    Typing(browser,"NEXT-TYPED");await Task.Delay(40);
+                    string paragraph=Convert.ToString(Eval(browser,"document.getElementById('line-45').innerHTML"));
+                    Require(paragraph.Contains("NEXT-TYPED")&&paragraph.IndexOf("NEXT-TYPED")>paragraph.LastIndexOf("<img",StringComparison.OrdinalIgnoreCase),"Typing after paste did not continue after the pasted image/block");
+                }
+            },failures);
+            await Run("direct image insertion keeps the current caret and viewport",async delegate{
+                var fixture=new StringBuilder();for(int n=0;n<80;n++)fixture.Append("<p id='direct-"+n+"'>Line "+n+" - image here</p>");editor.Html=fixture.ToString();
+                Eval(browser,"(function(){var p=document.getElementById('direct-45'),r=document.createRange(),s=window.getSelection();r.setStart(p.firstChild,10);r.collapse(true);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange();p.scrollIntoView(true);window.scrollBy(0,-20)})()");await Task.Delay(30);int before=Scroll(browser);
+                editor.InsertImage(Convert.FromBase64String(first.Substring(first.IndexOf(',')+1)));await Task.Delay(160);
+                Require(Math.Abs(Scroll(browser)-before)<=2,"Direct image insertion changed scroll from "+before+" to "+Scroll(browser));
+                Typing(browser,"DIRECT-NEXT");await Task.Delay(40);string paragraph=Convert.ToString(Eval(browser,"document.getElementById('direct-45').innerHTML"));
+                Require(paragraph.Contains("DIRECT-NEXT")&&paragraph.IndexOf("DIRECT-NEXT")>paragraph.LastIndexOf("<img",StringComparison.OrdinalIgnoreCase),"Direct insertion lost the caret after its image");
+            },failures);
+            await Run("context-menu paste restores the saved caret without jumping to the beginning",async delegate{
+                var fixture=new StringBuilder();for(int n=0;n<80;n++)fixture.Append("<p id='menu-"+n+"'>Line "+n+" - image here</p>");editor.Html=fixture.ToString();
+                Eval(browser,"(function(){var p=document.getElementById('menu-45'),r=document.createRange(),s=window.getSelection();r.setStart(p.firstChild,10);r.collapse(true);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange();p.scrollIntoView(true);window.scrollBy(0,-20);p.parentNode.blur();s.removeAllRanges()})()");await Task.Delay(30);int before=Scroll(browser);
+                var menu=(ContextMenuStrip)typeof(ProgressHtmlEditor).GetField("clipboardMenu",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(editor);
+                foreach(ToolStripItem item in menu.Items)if(item.Text=="\u7c98\u8d34")((ToolStripMenuItem)item).PerformClick();
+                Require(queue.Count==1,"Context-menu paste did not request clipboard content");queue.Dequeue().SetResult("<img src='"+first+"'>");await Task.Delay(160);
+                Require(Math.Abs(Scroll(browser)-before)<=2,"Context-menu image paste reset the viewport");Typing(browser,"MENU-NEXT");await Task.Delay(40);
+                Require(Convert.ToString(Eval(browser,"document.getElementById('menu-45').innerHTML")).Contains("MENU-NEXT"),"Context-menu paste lost its saved caret");
+            },failures);
+            await Run("deferred paste viewport never overrides newer user scrolling",async delegate{
+                var fixture=new StringBuilder();for(int n=0;n<80;n++)fixture.Append("<p>Line "+n+" - original content</p>");editor.Html=fixture.ToString();Caret(browser,true);Eval(browser,"window.scrollTo(0,800)");
+                Eval(browser,"insertTaskTraceHtml(\"<img src='"+first+"'>\",taskTraceRange());var wheel=document.createEvent('Event');wheel.initEvent('mousewheel',true,true);document.getElementById('progress-editor').dispatchEvent(wheel);window.scrollTo(0,180)");
+                await Task.Delay(100);Require(Math.Abs(Scroll(browser)-180)<=2,"A stale paste viewport overwrote newer user scrolling");
+            },failures);
             await Run("paste retains captured caret and undo restores editor scroll",async delegate{
                 var fixture=new StringBuilder();for(int n=0;n<80;n++)fixture.Append("<p>滚动行 "+n+"：保留原文</p>");editor.Html=fixture.ToString();Eval(browser,"(function(){var e=document.getElementById('progress-editor'),p=e.children[45],r=document.createRange(),s=window.getSelection();r.selectNodeContents(p);r.collapse(false);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange();p.scrollIntoView(true);window.scrollBy(0,-20)})()");await Task.Delay(30);int before=Scroll(browser);Require(before>400,"Scroll fixture not scrolled");string original=editor.Html;
                 Paste(browser);Caret(browser,false);queue.Dequeue().SetResult("<span>定位图片<img src='"+first+"'></span>");await Task.Delay(80);string html=editor.Html;Require(html.IndexOf("滚动行 45")<html.IndexOf("定位图片")&&html.IndexOf("定位图片")<html.IndexOf("滚动行 46"),"Paste followed later caret");await Shortcut(browser,Keys.Control|Keys.Z);Require(editor.Html==original,"Undo scroll fixture did not restore content");Require(Math.Abs(Scroll(browser)-before)<=2,"Undo changed scroll from "+before+" to "+Scroll(browser));

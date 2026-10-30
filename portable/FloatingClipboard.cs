@@ -234,7 +234,25 @@ function taskTraceInside(node){var editor=document.getElementById('progress-edit
 function taskTraceRange(){if(taskTraceSelectedImage&&taskTraceInside(taskTraceSelectedImage)){var selected=document.createRange();selected.selectNode(taskTraceSelectedImage);return selected;}var editor=document.getElementById('progress-editor'),selection=window.getSelection(),range=selection&&selection.rangeCount?selection.getRangeAt(0):null;if(range){if(taskTraceInside(range.commonAncestorContainer))return range.cloneRange();var bounds=document.createRange();bounds.selectNodeContents(editor);if(range.compareBoundaryPoints(0,bounds)<=0&&range.compareBoundaryPoints(2,bounds)>=0)return bounds;}if(document.selection&&document.selection.type==='Control'){var control=document.selection.createRange();if(control.length===1&&taskTraceInside(control.item(0))){range=document.createRange();range.selectNode(control.item(0));return range;}}return null;}
 function rememberTaskTraceRange(){var range=taskTraceRange();if(range)taskTraceSavedRange=range;}
 function restoreTaskTraceRange(range){var editor=document.getElementById('progress-editor'),selection=window.getSelection();range=range||taskTraceRange()||taskTraceSavedRange;if(!range||!taskTraceInside(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}editor.focus();selection.removeAllRanges();selection.addRange(range);return range;}
-function insertTaskTraceHtml(html,range){var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false'||!html)return false;range=restoreTaskTraceRange(range);taskTraceSelectedImage=null;taskTraceImageInteraction++;range.deleteContents();var holder=typeof html==='string'?document.createElement('div'):html;if(typeof html==='string')holder.innerHTML=html;var fragment=document.createDocumentFragment(),last;while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);if(last)range.setStartAfter(last);range.collapse(true);ensureTaskTraceImageCarets();var selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);rememberTaskTraceRange();window.external.NotifyPaste();return true;}
+function retainTaskTracePasteViewport(view,images){
+ var generation=taskTraceImageInteraction;
+ function restore(){if(generation===taskTraceImageInteraction)restoreTaskTraceViewport(view);}
+ restore();setTimeout(restore,0);
+ for(var i=0;i<images.length;i++)if(!images[i].complete)(function(image){
+  function loaded(){image.removeEventListener('load',loaded);image.removeEventListener('error',loaded);restore();}
+  image.addEventListener('load',loaded);image.addEventListener('error',loaded);
+ })(images[i]);
+}
+function insertTaskTraceHtml(html,range){
+ var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false'||!html)return false;
+ var viewport=taskTraceViewport(null);range=restoreTaskTraceRange(range);taskTraceSelectedImage=null;taskTraceImageInteraction++;range.deleteContents();
+ var holder=typeof html==='string'?document.createElement('div'):html;if(typeof html==='string')holder.innerHTML=html;
+ var images=holder.querySelectorAll('img'),fragment=document.createDocumentFragment(),last;
+ while(holder.firstChild){last=holder.firstChild;fragment.appendChild(last);}range.insertNode(fragment);ensureTaskTraceImageCarets();
+ var caret=document.createRange();if(last)caret.setStartAfter(last);else caret=range.cloneRange();caret.collapse(true);
+ var selection=window.getSelection();selection.removeAllRanges();selection.addRange(caret);taskTraceSavedRange=caret.cloneRange();
+ retainTaskTracePasteViewport(viewport,images);window.external.NotifyPaste();return true;
+}
 var taskTracePendingPastes={},taskTracePasteOrder=[],taskTracePasteSequence=0;
 function completeTaskTracePaste(id,html){var pending=taskTracePendingPastes[id];if(!pending)return;pending.html=html;pending.ready=true;while(taskTracePasteOrder.length){var first=taskTracePasteOrder[0],next=taskTracePendingPastes[first];if(!next||!next.ready)break;taskTracePasteOrder.shift();delete taskTracePendingPastes[first];var following=[];if(next.range.collapsed)for(var key in taskTracePendingPastes){var other=taskTracePendingPastes[key];if(other.range.collapsed&&other.range.compareBoundaryPoints(0,next.range)===0)following.push(other);}if(insertTaskTraceHtml(cleanTaskTracePaste(next.html,true),next.range))for(var i=0;i<following.length;i++)following[i].range=taskTraceSavedRange.cloneRange();}}
 function resetTaskTracePastes(){taskTracePendingPastes={};taskTracePasteOrder=[];}
