@@ -203,7 +203,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
 
     void NotifyChanged() {
         changeTimer.Stop();
-        if(notifying || changing || !ready || browser.Document == null)return;
+        if(IsDisposed || Disposing || notifying || changing || !ready || browser.Document == null)return;
         var editor=browser.Document.GetElementById("progress-editor");
         string current=editor==null?CleanHtml(pendingHtml):CleanHtml(editor.InnerHtml);
         if(String.Equals(current,observedHtml,StringComparison.Ordinal))return;
@@ -223,7 +223,8 @@ internal sealed class ProgressHtmlEditor : UserControl {
 
     internal bool IsPastePending {get{return ready && browser.Document!=null && Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"taskTracePasteOrder.length>0"}));}}
     public int ImageCount { get { return !ready || browser.Document==null?Regex.Matches(pendingHtml??"",@"<img\b",RegexOptions.IgnoreCase).Count:browser.Document.Images.Count; } }
-    public int ChangeVersion { get { if(changeTimer.Enabled)NotifyChanged();return changeVersion; } }
+    // Some embedded-browser input paths omit oninput; saving must inspect the live document.
+    public int ChangeVersion { get { NotifyChanged();return changeVersion; } }
     internal int ImageDoubleClickCountForTest { get { return imageDoubleClickCount; } }
 
     public void InsertImage(byte[] bytes) {

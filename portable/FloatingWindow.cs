@@ -696,7 +696,7 @@ internal sealed partial class FloatingWindow : Form {
                 collaboratorProgress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"协作成员进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
-                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"",originalDescriptionEditorHtml="",originalProgressEditorHtml="",originalReferenceSnapshot="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();int originalDescriptionVersion=0,originalProgressVersion=0;bool collaborativeProgress=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,progressDraftRestored=false,updateDiscarded=false;
+                string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"",originalDescriptionEditorHtml="",originalProgressEditorHtml="",originalReferenceSnapshot="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();int originalDescriptionVersion=0,originalProgressVersion=0;bool collaborativeProgress=false,needsProgressMerge=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,progressDraftRestored=false,updateDiscarded=false;
                 taskName.CanSave=delegate{return !submitting && !descriptionSaving;};
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;originalDescriptionVersion=descriptionEditor.ChangeVersion;
                 WarnIfTeamReadOnly(id,dialog,feedback);
@@ -749,7 +749,7 @@ internal sealed partial class FloatingWindow : Form {
                     string collaboratorHtml=String.Join("",ProgressHistoryRows(id,otherRecords).Select(row=>row.Html));
                     collaboratorProgress.Html=await PrepareInlineEditorHtml(id,collaboratorHtml,true,true);
                     collaboratorGroup.Visible=otherRecords.Count>0;layout.RowStyles[4].Height=otherRecords.Count>0?180:0;
-                    commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));
+                    commentId=records.Count==0?0:records.Max(note=>Convert.ToInt64(note["id"]));needsProgressMerge=records.Count>1;
                     mergedIds=records.Select(note=>Convert.ToInt64(note["id"])).Concat(records.SelectMany(note=>MergedIds((string)note["comment"]))).Where(value=>value!=commentId).Distinct().ToList();
                     currentTeamId=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).LastOrDefault()??"";
                     mergedTeamIds=records.Select(note=>ReadFloatingTeamMarker((string)note["comment"])).Where(marker=>marker!=null).Select(marker=>marker.id).Concat(records.SelectMany(note=>TeamMergedIds((string)note["comment"]))).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -795,11 +795,13 @@ internal sealed partial class FloatingWindow : Form {
                 removeReference.Click+=delegate{if(submitting || referenceList.SelectedIndex<0)return;references.RemoveAt(referenceList.SelectedIndex);refreshReferences();feedback.Text="引用已移除，保存后生效；原记录不变。";};
                 previewReference.Click+=async delegate {var item=referenceList.SelectedItem as ProgressReference;if(item!=null)await ShowReferenceSnapshot(item,dialog);};
                 Func<bool,Task<bool>> write=async delegate(bool finish) {
+                    if(loadingDay || switchingDay){feedback.Text="正在读取所选日期的进展，请读取完成后再保存。";return false;}
                     if(progress.IsPastePending){feedback.Text="正在读取粘贴的图文，请完成后再保存。";return false;}
-                    if(submitting || taskName.Saving || (String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0))return false;
-                    if(!progressDirty() && mergedIds.Count==0){if(finish)feedback.Text="没有需要保存的修改。";return true;}
+                    if(submitting || descriptionSaving || taskName.Saving){feedback.Text="正在保存其他内容，请稍后再试。";return false;}
+                    if(String.IsNullOrWhiteSpace(Plain(progress.Html)) && progress.ImageCount==0 && references.Count==0 && commentId==0){feedback.Text="请先填写当天进展、粘贴图片或添加历史引用，再保存。";return false;}
+                    if(!progressDirty() && !needsProgressMerge){if(finish)feedback.Text="没有需要保存的修改。";return true;}
 
-                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);
+                    submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);feedback.Text="正在保存当天进展…";
                     try {
                         using(BeginUndoGroup()) {
                         var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
@@ -814,11 +816,11 @@ internal sealed partial class FloatingWindow : Form {
                             var saved=await Api("POST","/tasks/"+id+"/comments",new {comment=comment});
                             commentId=Convert.ToInt64(saved["id"]);mergedIds=absorbedIds;mergedTeamIds=absorbedTeamIds;currentTeamId=newTeamId;
                         } else commentId=await SaveProgress(id,day.Value,Plain(body),"",null,commentId,body,mergedIds,references);
-                        originalBody=body;originalText=Plain(body);progress.Html=await PrepareProgressEditorHtml(id,body);originalProgressEditorHtml=progress.Html;originalProgressVersion=progress.ChangeVersion;progressDraftRestored=false;originalReferenceSnapshot=referenceSnapshot();lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
+                        needsProgressMerge=false;originalBody=body;originalText=Plain(body);progress.Html=await PrepareProgressEditorHtml(id,body);originalProgressEditorHtml=progress.Html;originalProgressVersion=progress.ChangeVersion;progressDraftRestored=false;originalReferenceSnapshot=referenceSnapshot();lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
                         history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text="当天进展已正式保存，可以继续编辑。";
                         }
                         return true;
-                    } catch {feedback.Text="保存失败，内容已保留，请重试。";return false;}
+                    } catch(Exception error){feedback.Text="保存失败，内容已保留："+error.Message;return false;}
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}
                 };
                 save.Click+=async delegate {await write(true);};
