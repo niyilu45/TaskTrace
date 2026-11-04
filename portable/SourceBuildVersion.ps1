@@ -1,4 +1,4 @@
-$TaskTraceSourceFallbackVersion = 'v1.0.3'
+$TaskTraceSourceFallbackVersion = 'v1.0.4'
 $TaskTraceSourceVersionFile = Join-Path $PSScriptRoot 'LATEST-RELEASE.txt'
 if (Test-Path -LiteralPath $TaskTraceSourceVersionFile -PathType Leaf) {
     $bundledReleaseVersion = ([IO.File]::ReadAllText($TaskTraceSourceVersionFile)).Trim()
