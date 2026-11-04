@@ -188,6 +188,69 @@ internal sealed partial class FloatingWindow {
         Console.WriteLine("PASS reentry: update busy acquired before first await; second update rejected; shutdown aborts before network or handoff.");
     }
 
+    void TestUpdateBadges() {
+        string versionPath = Path.Combine(root, "VERSION.txt");
+        File.WriteAllText(versionPath, "1.0.0");
+        var state = new Dictionary<string,object> {
+            {"current_version","v1.0.0"}, {"status","idle"}, {"available",true},
+            {"notify",true}, {"latest_version","v1.1.0"}
+        };
+        tray.Icon = Icon;
+        WriteUpdateState(state);
+
+        using(var menu = new ContextMenuStrip()) {
+            InitializeUpdates(menu);
+            UpdateAssert(trayUpdateItem.Image != null && tray.Icon == trayUpdateIcon && tray.Icon != Icon,
+                "Previously discovered update did not mark the tray icon and menu on startup");
+            using(var rendered = tray.Icon.ToBitmap()) {
+                Color pixel = rendered.GetPixel(rendered.Width * 3 / 4, rendered.Height * 3 / 4);
+                UpdateAssert(pixel.R > 180 && pixel.G < 85 && pixel.B < 105,
+                    "Tray badge icon did not render the red dot");
+            }
+            var markedIcon = tray.Icon;
+            state["status"] = "checking";
+            WriteUpdateState(state);
+            state["status"] = "error";
+            WriteUpdateState(state);
+            UpdateAssert(tray.Icon == markedIcon && trayUpdateItem.Image != null,
+                "A recheck removed the last confirmed update badge");
+
+            // The web process writes the ignored version separately from the desktop.
+            var settings = ReadUpdateSettings();
+            settings["ignored_version"] = "v1.1.0";
+            WriteJsonAtomic(Path.Combine(data, "update-settings.json"), settings);
+            RefreshUpdateBadge(ReadUpdateSettings());
+            UpdateAssert(tray.Icon == Icon && trayUpdateItem.Image == null,
+                "Ignoring the release in the web UI did not clear the tray and menu badges");
+
+            state["status"] = "idle";
+            state["latest_version"] = "v1.2.0";
+            WriteUpdateState(state);
+            UpdateAssert(tray.Icon == markedIcon && trayUpdateItem.Image != null,
+                "A newer release did not restore both badges");
+            IgnoreUpdateVersion("v1.2.0");
+            UpdateAssert(tray.Icon == Icon && trayUpdateItem.Image == null && !Bool(ReadUpdateState(), "notify"),
+                "Ignoring the release from the tray did not clear both badges and shared notification");
+
+            state["latest_version"] = "v1.3.0";
+            WriteUpdateState(state);
+            UpdateAssert(trayUpdateItem.Image != null, "A new successful check did not show the red dot");
+            state["available"] = false;
+            state["notify"] = false;
+            WriteUpdateState(state);
+            UpdateAssert(tray.Icon == Icon && trayUpdateItem.Image == null,
+                "A successful check without an update did not clear both badges");
+
+            File.WriteAllText(versionPath, "1.3.0");
+            state["available"] = true;
+            state["notify"] = true;
+            WriteUpdateState(state);
+            UpdateAssert(tray.Icon == Icon && trayUpdateItem.Image == null,
+                "A stale result marked a version that is already installed");
+        }
+        Console.WriteLine("PASS: tray and menu red dots, startup, recheck, ignored releases, newer releases and installed versions.");
+    }
+
     internal static async Task TestUpdateWindows(FloatingWindow window) {
         await window.TestUpdateSuccess();
         await window.TestUpdateCancellation("button");await window.TestUpdateCancellation("close");await window.TestUpdateCancellation("shutdown");
@@ -196,6 +259,7 @@ internal sealed partial class FloatingWindow {
         await window.TestDirtyEditorAddedDuringSave();await window.TestUpdateBusyBeforeAwait();
         UpdateAssert(window.unsavedUpdateEditors.Count==0,"Unsaved editor registrations leaked between cases");
         UpdateAssert(!Directory.EnumerateFileSystemEntries(window.data).Any(path=>Path.GetFileName(path)=="update-ready.json" || Path.GetFileName(path)=="update-state.json" || Path.GetFileName(path)=="updates"),"Isolated test wrote an update handoff or download");
+        window.TestUpdateBadges();
         Console.WriteLine("PASS isolation: no normal startup, data, sessions, clipboard, network, archives, install handoff or real application exit.");
     }
     internal static FloatingWindow CreateUpdateTestWindow(string directory){return new FloatingWindow(directory);}

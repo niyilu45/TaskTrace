@@ -253,10 +253,9 @@ internal sealed partial class FloatingWindow : Form {
             catch(Exception e) { MessageBox.Show(this, "无法打开程序路径。\r\n\r\n" + e.Message, "TaskTrace", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         });
         InitializeTeamSyncMenu(menu);
-        menu.Items.Add("检查更新", null, async delegate { await CheckForUpdates(true); });
+        InitializeUpdates(menu);
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
-        InitializeUpdates();
         InitializeAutoRefresh();
         InitializeReminders();
         Shown += async delegate { ApplyDpiMetrics(); await Reload();
@@ -1499,5 +1498,5 @@ internal sealed partial class FloatingWindow : Form {
         } catch(Exception e) { File.WriteAllText(Path.Combine(data, "floating-test.txt"), "FAIL: " + e); Environment.ExitCode = 1; }
         finally { allowExit = true; Close(); }
     }
-    protected override void Dispose(bool disposing) { if(disposing) { DisposeEdgeHide(); DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); http.Dispose(); markdownExportHttp.Dispose(); } base.Dispose(disposing); }
+    protected override void Dispose(bool disposing) { if(disposing) { DisposeEdgeHide(); DisposeAutoRefresh(); timer.Dispose(); hoverTimer.Dispose(); progressTip.Dispose(); tray.Dispose(); DisposeUpdateNotifications(); http.Dispose(); markdownExportHttp.Dispose(); } base.Dispose(disposing); }
 }

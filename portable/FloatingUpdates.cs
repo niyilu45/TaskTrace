@@ -2,11 +2,14 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -19,6 +22,11 @@ internal sealed partial class FloatingWindow {
     const string UpdateReleasesUrl = "https://github.com/niyilu45/TaskTrace/releases";
     readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer { Interval = 2000 };
     bool updateBusy;
+    ToolStripMenuItem trayUpdateItem;
+    Bitmap updateMenuDot;
+    Icon trayUpdateIcon;
+    string pendingUpdateVersion = "";
+    bool updateBadgeVisible;
     DateTime lastAutomaticUpdateCheck = DateTime.MinValue;
     readonly List<UnsavedUpdateEditor> unsavedUpdateEditors = new List<UnsavedUpdateEditor>();
 
@@ -53,7 +61,12 @@ internal sealed partial class FloatingWindow {
         return client;
     }
 
-    void InitializeUpdates() {
+    void InitializeUpdates(ContextMenuStrip menu) {
+        trayUpdateItem = new ToolStripMenuItem("检查更新");
+        trayUpdateItem.Click += async delegate { await CheckForUpdates(true); };
+        menu.Items.Add(trayUpdateItem);
+        menu.Opening += delegate { RefreshUpdateBadge(ReadUpdateSettings()); };
+        SetUpdateBadgeState(ReadUpdateState());
         updateTimer.Tick += async delegate { await UpdateTimerTick(); };
         Shown += async delegate {
             if(selfTest) return;
@@ -66,13 +79,18 @@ internal sealed partial class FloatingWindow {
     }
 
     async Task UpdateTimerTick() {
-        if(updateBusy || closing || selfTest) return;
+        if(closing || selfTest) return;
+        var settings = ReadUpdateSettings();
+        RefreshUpdateBadge(settings);
+        if(updateBusy) return;
         string commandPath = Path.Combine(data, "update-command.json");
         if(File.Exists(commandPath)) {
             await ProcessUpdateCommand(commandPath);
             return;
         }
-        int minutes = ReadUpdateIntervalMinutes();
+        int minutes;
+        if(!int.TryParse(UpdateText(settings, "check_interval_minutes"), out minutes) || minutes < 5 || minutes > 10080)
+            minutes = 60;
         if(lastAutomaticUpdateCheck != DateTime.MinValue && DateTime.UtcNow - lastAutomaticUpdateCheck >= TimeSpan.FromMinutes(minutes)) {
             await CheckForUpdates(false);
         }
@@ -92,12 +110,18 @@ internal sealed partial class FloatingWindow {
         if(updateBusy) return;
         updateBusy = true;
         try {
-            WriteUpdateState(new Dictionary<string,object> {
-                {"current_version", CurrentPackageVersion()}, {"status", "checking"}, {"notify", false}, {"available", false}, {"error", ""}
-            });
+            string currentVersion = CurrentPackageVersion();
+            var checkingState = ReadUpdateState();
+            checkingState["current_version"] = currentVersion;
+            checkingState["status"] = "checking";
+            checkingState["error"] = "";
+            if(CompareVersions(UpdateText(checkingState, "latest_version"), currentVersion) <= 0) {
+                checkingState["available"] = false;
+                checkingState["notify"] = false;
+            }
+            WriteUpdateState(checkingState);
             Dictionary<string,object> latest = null;
             var newerReleases = new List<Dictionary<string,object>>();
-            string currentVersion = CurrentPackageVersion();
             using(var client = CreateUpdateHttpClient()) {
                 string response = await client.GetStringAsync("https://api.github.com/repos/niyilu45/TaskTrace/releases?per_page=30");
                 var releases = json.DeserializeObject(response) as IEnumerable;
@@ -133,11 +157,17 @@ internal sealed partial class FloatingWindow {
             lastAutomaticUpdateCheck = DateTime.UtcNow;
             if(interactive) await ShowInteractiveUpdateResult(state);
         } catch(Exception e) {
-            WriteUpdateState(new Dictionary<string,object> {
-                {"current_version", CurrentPackageVersion()}, {"checked_at", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)}, {"status", "error"}, {"available", false}, {"notify", false}, {"error", FriendlyUpdateError(e)}, {"release_url", UpdateReleasesUrl}
-            });
+            // A failed connection does not invalidate a previously confirmed release.
+            var state = ReadUpdateState();
+            string error = FriendlyUpdateError(e);
+            state["current_version"] = CurrentPackageVersion();
+            state["checked_at"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+            state["status"] = "error";
+            state["error"] = error;
+            if(UpdateText(state, "release_url") == "") state["release_url"] = UpdateReleasesUrl;
+            WriteUpdateState(state);
             lastAutomaticUpdateCheck = DateTime.UtcNow;
-            if(interactive) ShowUpdateCheckFailure(FriendlyUpdateError(e));
+            if(interactive) ShowUpdateCheckFailure(error);
         } finally { updateBusy = false; }
     }
 
@@ -385,12 +415,71 @@ internal sealed partial class FloatingWindow {
         try { return ReadObject(File.ReadAllText(Path.Combine(data, "update-state.json"), Encoding.UTF8)); }
         catch { return new Dictionary<string,object> {{"current_version", CurrentPackageVersion()}, {"status", "idle"}}; }
     }
-    int ReadUpdateIntervalMinutes() { int result; return int.TryParse(UpdateText(ReadUpdateSettings(), "check_interval_minutes"), out result) && result >= 5 && result <= 10080 ? result : 60; }
+    void SetUpdateBadgeState(Dictionary<string,object> state) {
+        string latestVersion = UpdateText(state, "latest_version");
+        pendingUpdateVersion = Bool(state, "available") && Bool(state, "notify") && latestVersion != "" &&
+            CompareVersions(latestVersion, CurrentPackageVersion()) > 0 ? latestVersion : "";
+        RefreshUpdateBadge(ReadUpdateSettings());
+    }
+
+    void RefreshUpdateBadge(Dictionary<string,object> settings) {
+        if(trayUpdateItem == null || closing || IsDisposed) return;
+        bool visible = pendingUpdateVersion != "" && pendingUpdateVersion != UpdateText(settings, "ignored_version");
+        if(visible == updateBadgeVisible) return;
+        if(visible) {
+            if(updateMenuDot == null) {
+                updateMenuDot = new Bitmap(16, 16);
+                using(var graphics = Graphics.FromImage(updateMenuDot)) {
+                    graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                    using(var red = new SolidBrush(Color.FromArgb(218, 40, 55)))
+                        graphics.FillEllipse(red, 4, 4, 8, 8);
+                }
+            }
+            if(trayUpdateIcon == null) trayUpdateIcon = CreateTrayUpdateIcon(Icon);
+        }
+        trayUpdateItem.Image = visible ? updateMenuDot : null;
+        trayUpdateItem.AccessibleName = visible ? "检查更新，有可用更新" : "检查更新";
+        tray.Icon = visible ? trayUpdateIcon : Icon;
+        tray.Text = visible ? "TaskTrace · 有可用更新" : "TaskTrace · 悬浮事项";
+        updateBadgeVisible = visible;
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool DestroyIcon(IntPtr handle);
+
+    static Icon CreateTrayUpdateIcon(Icon source) {
+        using(var bitmap = new Bitmap(source.Width, source.Height)) {
+            using(var graphics = Graphics.FromImage(bitmap)) {
+                graphics.DrawIcon(source, new Rectangle(Point.Empty, bitmap.Size));
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                float size = Math.Min(bitmap.Width, bitmap.Height) * 0.49f;
+                float left = bitmap.Width - size, top = bitmap.Height - size;
+                float border = size * 0.15f;
+                graphics.FillEllipse(Brushes.White, left, top, size, size);
+                using(var red = new SolidBrush(Color.FromArgb(218, 40, 55)))
+                    graphics.FillEllipse(red, left + border, top + border, size - border * 2, size - border * 2);
+            }
+            IntPtr handle = bitmap.GetHicon();
+            try { return (Icon)Icon.FromHandle(handle).Clone(); }
+            finally { DestroyIcon(handle); }
+        }
+    }
+
+    void DisposeUpdateNotifications() {
+        updateTimer.Dispose();
+        if(trayUpdateItem != null && !trayUpdateItem.IsDisposed) trayUpdateItem.Image = null;
+        if(updateMenuDot != null) updateMenuDot.Dispose();
+        if(trayUpdateIcon != null) trayUpdateIcon.Dispose();
+    }
+
     void IgnoreUpdateVersion(string version) {
         var settings = ReadUpdateSettings(); settings["ignored_version"] = version; WriteJsonAtomic(Path.Combine(data, "update-settings.json"), settings);
         var state = ReadUpdateState(); state["notify"] = false; WriteUpdateState(state);
     }
-    void WriteUpdateState(Dictionary<string,object> state) { WriteJsonAtomic(Path.Combine(data, "update-state.json"), state); }
+    void WriteUpdateState(Dictionary<string,object> state) {
+        WriteJsonAtomic(Path.Combine(data, "update-state.json"), state);
+        SetUpdateBadgeState(state);
+    }
     void WriteJsonAtomic(string path, object value) { string temporary=path+".tmp"; File.WriteAllText(temporary,json.Serialize(value),new UTF8Encoding(false)); if(File.Exists(path))File.Delete(path);File.Move(temporary,path); }
     string CurrentPackageVersion() { try { string v=File.ReadAllText(Path.Combine(root,"VERSION.txt")).Trim();return v.StartsWith("v")?v:"v"+v; } catch { return "v0.0.0"; } }
     static string FindReleaseAsset(Dictionary<string,object> release,string name) { var assets=release.ContainsKey("assets")?release["assets"] as IEnumerable:null;if(assets!=null)foreach(object item in assets){var asset=item as Dictionary<string,object>;if(asset!=null&&UpdateText(asset,"name")==name)return UpdateText(asset,"browser_download_url");}return ""; }
