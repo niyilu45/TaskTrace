@@ -212,7 +212,7 @@ internal sealed partial class FloatingWindow {
             else if(projects.SelectedItem==null)simpleEmpty.Text="暂无项目。";
             else if(search.Text.Trim().Length>0)simpleEmpty.Text="搜索无匹配事项。";
             else if(PriorityFilterActive)simpleEmpty.Text=PriorityFilterEmptyMessage;
-            else if(SelectedDisplayStatuses().Length<4)simpleEmpty.Text="暂无符合显示选项的事项。";
+            else if(!ShowTaskRows || !ShowOutstandingRows || SelectedDisplayStatuses().Length<4)simpleEmpty.Text="暂无符合显示选项的事项。";
             else simpleEmpty.Text="当前项目暂无事项。";
             simpleEmpty.BringToFront();
         }

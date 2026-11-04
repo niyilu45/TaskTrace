@@ -51,7 +51,8 @@ internal sealed partial class FloatingWindow {
         http.Dispose();http=new HttpClient(api);token="fixture";
         projects.Items.Add(new Project{Id=1,Title="Fixture project"});projects.SelectedIndex=0;projectsDirty=false;
         ShowInTaskbar=false;Opacity=0;ClientSize=new Size(450,300);
-        Controls.Add(tasks);tasks.CreateControl();taskSurface.Bind(tasks);showCompleted.Checked=true;
+        Controls.Add(tasks);tasks.CreateControl();taskSurface.Bind(tasks);showCompleted.Checked=true;InitializeDisplayStatusFilter();
+        toolbar=new FlowLayoutPanel();Disposed+=delegate {toolbar.Dispose();};
     }
     bool HasVisibleLeaf(string id) {return OutstandingDescendants(tasks.Nodes).Any(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Id==id);}
     async Task ReadVisibility(bool background=false) {
@@ -131,13 +132,83 @@ internal sealed partial class FloatingWindow {
         if(!SelectedDisplayStatuses().SequenceEqual(new[]{"doing","hold"}))throw new Exception("Status preferences did not survive reload.");
         SetDisplayStatuses(new string[0]);SaveBounds();SetDisplayStatuses(displayStates);LoadBounds();
         if(SelectedDisplayStatuses().Length!=0)throw new Exception("Empty saved selection was reset to defaults.");
-        InitializeDisplayStatusFilter();RefreshDisplayStatusMenu();
+        RefreshDisplayStatusMenu();
         var all=displayStatusMenu.Items.OfType<ToolStripMenuItem>().First();if(all.CheckState!=CheckState.Unchecked)throw new Exception("All checkbox is not empty.");
         SetDisplayStatuses(new[]{"to-do"});if(all.CheckState!=CheckState.Indeterminate)throw new Exception("All checkbox does not reflect a partial selection.");
         SetDisplayStatuses(displayStates);if(all.CheckState!=CheckState.Checked)throw new Exception("All checkbox did not reflect all four states.");
         api.Tasks[3]["done"]=false;api.Tasks[5]["done"]=false;
         foreach(var task in api.Tasks)task.Remove("status");completedHideDelayMinutes=0;recentlyCompletedTasks.Clear();recentlyCompletedTaskStates.Clear();
         Console.WriteLine("PASS all 16 status selections, full/simple parity, ancestor retention, outstanding states, done grace, local preference reload and all/partial/none checkbox states.");
+    }
+    internal async Task TestRowTypeFilters() {
+        visiblePriorities.Clear();
+        visiblePriorities.UnionWith(Enumerable.Range(0,10));
+        SetDisplayStatuses(displayStates);
+        search.Text="";
+        var taskItem=displayStatusMenu.Items.OfType<ToolStripMenuItem>().Single(item=>Convert.ToString(item.Tag)=="tasks");
+        var outstandingItem=displayStatusMenu.Items.OfType<ToolStripMenuItem>().Single(item=>Convert.ToString(item.Tag)=="outstanding");
+        Func<long,bool> hasTask=id=>tasks.Nodes.Find(id.ToString(),true).Length!=0;
+        foreach(bool simple in new[]{false,true}) {
+            simpleMode=simple;
+            singleLine.Checked=true;
+            tasks.SingleLinePaths=true;
+            RefreshDisplayStatusMenu();
+            await ReadVisibility();
+            if(!taskItem.Checked || !taskItem.Enabled || !outstandingItem.Checked || !outstandingItem.Enabled)
+                throw new Exception("Both row types should start selected and editable in flat mode.");
+            if(hasTask(1) || hasTask(2) || !hasTask(3) || !hasTask(10) || !HasVisibleLeaf("done-owner-leaf") ||
+                tasks.Nodes.Cast<TreeNode>().Any(row=>row.Parent!=null || row.Nodes.Count>0))
+                throw new Exception("Flat mode must show only deepest tasks and separate outstanding rows, even under the same task.");
+
+            search.Text="task 1";
+            await ReadVisibility();
+            if(hasTask(1) || hasTask(2) || hasTask(3))
+                throw new Exception("A search promoted a parent to a flat task row when its children were filtered.");
+            search.Text="";
+            await ChangeDisplayRowType(true);
+            if(taskItem.Checked || !taskItem.Enabled || SimpleTaskNodes(tasks.Nodes).Any() || !HasVisibleLeaf("root-leaf"))
+                throw new Exception("Turning off task rows in flat mode also removed independently visible outstanding rows.");
+            await ChangeDisplayRowType(false);
+            if(outstandingItem.Checked || !outstandingItem.Enabled || tasks.Nodes.Count!=0)
+                throw new Exception("Turning off both row types in flat mode should show no rows.");
+            displayTasks=true;
+            displayOutstanding=true;
+            LoadBounds();
+            RefreshDisplayStatusMenu();
+            if(taskItem.Checked || outstandingItem.Checked)
+                throw new Exception("Row-type choices did not survive reloading preferences.");
+
+            singleLine.Checked=false;
+            tasks.SingleLinePaths=false;
+            RefreshDisplayStatusMenu();
+            await ReadVisibility();
+            if(!taskItem.Checked || taskItem.Enabled || !outstandingItem.Enabled || outstandingItem.Checked ||
+                !hasTask(1) || tasks.Nodes.Find("3",true).Single().Parent!=tasks.Nodes.Find("2",true).Single() ||
+                OutstandingDescendants(tasks.Nodes).Any(row=>row.Tag is OutstandingLeaf))
+                throw new Exception("Tree mode did not retain the task hierarchy, lock task selection, and hide outstanding rows.");
+            await ChangeDisplayRowType(true);
+            await ChangeDisplayRowType(false);
+            if(!taskItem.Checked || taskItem.Enabled || !outstandingItem.Checked || !HasVisibleLeaf("root-leaf"))
+                throw new Exception("Tree mode must allow switching outstanding rows on while keeping task selection locked.");
+
+            singleLine.Checked=true;
+            tasks.SingleLinePaths=true;
+            RefreshDisplayStatusMenu();
+            await ReadVisibility();
+            if(taskItem.Checked || !taskItem.Enabled || SimpleTaskNodes(tasks.Nodes).Any() || !HasVisibleLeaf("root-leaf"))
+                throw new Exception("Tree mode overwrote the saved flat task choice.");
+            await ChangeDisplayRowType(true);
+            await ChangeDisplayRowType(false);
+            if(!taskItem.Checked || outstandingItem.Checked || !hasTask(10) ||
+                tasks.Nodes.Cast<TreeNode>().Any(row=>!(row.Tag is long)))
+                throw new Exception("Task-only flat mode lost a deepest task or showed outstanding rows.");
+            await ChangeDisplayRowType(false);
+        }
+        simpleMode=false;
+        singleLine.Checked=false;
+        tasks.SingleLinePaths=false;
+        RefreshDisplayStatusMenu();
+        Console.WriteLine("PASS: independent row-type filters, separate deepest task and outstanding rows, tree task lock, and preference reload in full/simple modes.");
     }
     internal async Task TestVisibility(VisibilityApi api) {
         await ReadVisibility();
@@ -190,7 +261,7 @@ internal static class FloatingVisibilityTests {
     [STAThread] static int Main(){
         Application.EnableVisualStyles();var api=new VisibilityApi();int result=0;
         using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
+            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestRowTypeFilters();await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
             Application.Run(app);
         }
         return result;

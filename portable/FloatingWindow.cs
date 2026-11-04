@@ -185,7 +185,11 @@ internal sealed partial class FloatingWindow : Form {
         content.Controls.Add(projectRow, 0, 0);
         InitializeDisplayStatusFilter();
         showCompleted.CheckedChanged += async delegate { RefreshDisplayStatusMenu(); if(!rendering) { page = 1; SaveBounds(); await Reload(); } };
-        singleLine.CheckedChanged += async delegate { ApplyTaskTreeLayout(); if(!rendering) { SaveBounds(); await Reload(); } };
+        singleLine.CheckedChanged += async delegate {
+            ApplyTaskTreeLayout();
+            RefreshDisplayStatusMenu();
+            if(!rendering) { SaveBounds(); await Reload(); }
+        };
         Hint(entry, "输入事项，按回车新增"); Hint(search, "搜索当前项目");
         InitializePriorityChoice(entryPriority, defaultPriority);
         addRow = TaskCreationRow(entry, entryPriority, "新事项名称", "添加事项", async delegate { await AddTask(); });
@@ -1241,6 +1245,8 @@ internal sealed partial class FloatingWindow : Form {
             if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
             if(saved.ContainsKey("displayStatuses") && saved["displayStatuses"] is IEnumerable) SetDisplayStatuses(((IEnumerable)saved["displayStatuses"]).Cast<object>().Select(Convert.ToString));
+            if(saved.ContainsKey("displayTasks")) displayTasks = Convert.ToBoolean(saved["displayTasks"]);
+            if(saved.ContainsKey("displayOutstanding")) displayOutstanding = Convert.ToBoolean(saved["displayOutstanding"]);
             if(saved.ContainsKey("singleLine")) singleLine.Checked = Convert.ToBoolean(saved["singleLine"]);
             if(saved.ContainsKey("edgeHide")) edgeHideEnabled = Convert.ToBoolean(saved["edgeHide"]);
             var bounds = new Rectangle(Convert.ToInt32(saved["x"]), Convert.ToInt32(saved["y"]), Math.Max(350, Convert.ToInt32(saved["width"])), Math.Max(300, Convert.ToInt32(saved["height"])));
@@ -1250,7 +1256,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, displayStatuses = SelectedDisplayStatuses(), singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, displayStatuses = SelectedDisplayStatuses(), displayTasks, displayOutstanding, singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -1366,7 +1372,7 @@ internal sealed partial class FloatingWindow : Form {
             var flatGrandchild=tasks.Nodes.Find(grandchildId.ToString(),true).Single();taskSurface.Rebuild(true);
             string expectedAncestors=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
             if(tasks.CurrentTaskText(flatGrandchild).EndsWith("下级子任务验收")==false || tasks.AncestorTaskText(flatGrandchild)!=expectedAncestors || flatGrandchild.Level!=0 || tasks.ShowLines || tasks.ShowPlusMinus || taskSurface.NodeBounds(flatGrandchild).IsEmpty || tasks.Nodes.Count!=2)throw new Exception("Single-line task path layout failed: current="+tasks.CurrentTaskText(flatGrandchild)+" ancestors="+tasks.AncestorTaskText(flatGrandchild)+" expected="+expectedAncestors+" level="+flatGrandchild.Level+" rootCount="+tasks.Nodes.Count+" lines="+tasks.ShowLines+" roots="+tasks.ShowRootLines+" plus="+tasks.ShowPlusMinus+" visible="+!taskSurface.NodeBounds(flatGrandchild).IsEmpty);
-            if(tasks.Nodes.Find(id.ToString(),true).Length!=0 || tasks.Nodes.Find(childId.ToString(),true).Length!=0)throw new Exception("Single-line mode retained a task that has child tasks or unfinished outstanding items");
+            if(tasks.Nodes.Find(id.ToString(),true).Length!=0 || tasks.Nodes.Find(childId.ToString(),true).Length!=0)throw new Exception("Single-line mode retained a task that has child tasks");
             sharedLeaf=tasks.Nodes.Cast<TreeNode>().Single(node=>node.Tag is OutstandingLeaf);leafState=(OutstandingLeaf)sharedLeaf.Tag;
             string expectedOutstandingPath=TaskTreeView.SingleLineSeparator+"子任务验收改名"+TaskTreeView.SingleLineSeparator+createdTitle;
             if(sharedLeaf.Parent!=null || tasks.AncestorTaskText(sharedLeaf)!=expectedOutstandingPath)throw new Exception("Single-line outstanding path layout failed");
