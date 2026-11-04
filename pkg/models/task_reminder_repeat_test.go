@@ -17,6 +17,8 @@
 package models
 
 import (
+	"html"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +28,7 @@ import (
 )
 
 const weeklyRuleFixture = `{"weekdays":[1,3,5],"startDate":"2026-10-12","endDate":"2026-10-23","time":"09:30"}`
+const weeklyRuleWithTimesFixture = `{"weekdays":[1,3,5],"startDate":"2026-10-12","endDate":"2026-10-23","time":"09:30","times":{"3":"15:05","5":"00:00"}}`
 
 func TestWeeklyReminderRule(t *testing.T) {
 	rule, err := parseReminderRepeatRule(weeklyRuleFixture)
@@ -49,6 +52,42 @@ func TestWeeklyReminderRule(t *testing.T) {
 		require.Error(t, err, raw)
 	}
 }
+func TestWeeklyReminderWeekdayTimes(t *testing.T) {
+	rule, err := parseReminderRepeatRule(weeklyRuleWithTimesFixture)
+	require.NoError(t, err)
+	zone := time.FixedZone("CST", 8*3600)
+	for date, clock := range map[string]string{
+		"2026-10-12": "09:30",
+		"2026-10-14": "15:05",
+		"2026-10-16": "00:00",
+		"2026-10-21": "15:05",
+	} {
+		day, parseErr := time.ParseInLocation("2006-01-02", date, zone)
+		require.NoError(t, parseErr)
+		due, matches := rule.onDate(day, zone)
+		require.True(t, matches, date)
+		require.Equal(t, date+" "+clock+" +0800", due.Format("2006-01-02 15:04 -0700"))
+	}
+
+	withOverrides := strings.TrimSuffix(weeklyRuleFixture, "}") + `,"times":`
+	for _, times := range []string{
+		`{"2":"15:05"}`,
+		`{"03":"15:05"}`,
+		`{"3":"9:30"}`,
+		`{"3":"24:00"}`,
+		`{"3":null}`,
+	} {
+		_, err = parseReminderRepeatRule(withOverrides + times + "}")
+		require.Error(t, err, times)
+	}
+
+	rule, err = parseReminderRepeatRule(withOverrides + `{"3":"09:30"}}`)
+	require.NoError(t, err)
+	canonical, err := rule.canonical()
+	require.NoError(t, err)
+	require.JSONEq(t, weeklyRuleFixture, canonical, "redundant overrides preserve legacy rule identity")
+}
+
 func TestWeeklyReminderPersistence(t *testing.T) {
 	db.LoadAndAssertFixtures(t)
 	s := db.NewSession()
@@ -56,7 +95,13 @@ func TestWeeklyReminderPersistence(t *testing.T) {
 	task := &Task{ID: 1}
 	require.NoError(t, task.ReadOne(s, &user.User{ID: 1}))
 	first := time.Date(2026, 10, 12, 1, 30, 0, 0, time.UTC)
-	task.Reminders = []*TaskReminder{{Reminder: first}, {Reminder: first, RepeatRule: weeklyRuleFixture}}
+	task.Reminders = []*TaskReminder{
+		{Reminder: first},
+		{
+			Reminder:   first,
+			RepeatRule: weeklyRuleWithTimesFixture,
+		},
+	}
 	require.NoError(t, task.updateReminders(s, task))
 	reminders, err := getRemindersForTasks(s, []int64{1})
 	require.NoError(t, err)
@@ -65,6 +110,7 @@ func TestWeeklyReminderPersistence(t *testing.T) {
 		count := 0
 		for _, r := range reminders {
 			if r.RepeatRule != "" {
+				require.JSONEq(t, weeklyRuleWithTimesFixture, r.RepeatRule)
 				count++
 			}
 		}
@@ -76,12 +122,12 @@ func TestWeeklyReminderPersistence(t *testing.T) {
 	require.NoError(t, s.Commit())
 }
 func TestWeeklyReminderOutstandingRoundTrip(t *testing.T) {
-	body := `<h3 data-tasktrace-comment-type="outstanding">list</h3><ul><li data-id="one" data-reminder="2026-10-12T01:30:00Z" data-reminder-repeat="{&quot;weekdays&quot;:[1,3,5],&quot;startDate&quot;:&quot;2026-10-12&quot;,&quot;endDate&quot;:&quot;2026-10-23&quot;,&quot;time&quot;:&quot;09:30&quot;}">item</li></ul>`
+	body := `<h3 data-tasktrace-comment-type="outstanding">list</h3><ul><li data-id="one" data-reminder="2026-10-12T01:30:00Z" data-reminder-repeat="` + html.EscapeString(weeklyRuleWithTimesFixture) + `">item</li></ul>`
 	items, order := taskTraceTeamOutstandingItems(body)
 	restored := taskTraceTeamOutstandingHTML(items, order)
 	_, nodes := taskTraceTeamOutstandingNodes(restored)
 	require.Len(t, nodes, 1)
-	require.JSONEq(t, weeklyRuleFixture, taskTraceAttribute(nodes[0], "data-reminder-repeat"))
+	require.JSONEq(t, weeklyRuleWithTimesFixture, taskTraceAttribute(nodes[0], "data-reminder-repeat"))
 	require.Contains(t, taskTraceOutstandingMetadata(nodes[0]), "data-reminder-repeat")
 }
 
@@ -93,9 +139,12 @@ func TestWeeklyReminderNotifications(t *testing.T) {
 	require.NoError(t, err)
 	task := &Task{ID: 1}
 	require.NoError(t, task.ReadOne(s, &user.User{ID: 1}))
-	task.Reminders = []*TaskReminder{{Reminder: time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC), RepeatRule: weeklyRuleFixture}}
+	task.Reminders = []*TaskReminder{{
+		Reminder:   time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC),
+		RepeatRule: weeklyRuleWithTimesFixture,
+	}}
 	require.NoError(t, task.updateReminders(s, task))
-	now := time.Date(2026, 10, 14, 9, 30, 0, 0, time.UTC)
+	now := time.Date(2026, 10, 14, 15, 5, 0, 0, time.UTC)
 	due, err := getTasksWithRemindersDueAndTheirUsers(s, now, nil)
 	require.NoError(t, err)
 	found := false

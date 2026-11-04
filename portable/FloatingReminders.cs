@@ -268,43 +268,121 @@ internal sealed partial class FloatingWindow {
         if(itemId==null)values=TaskReminderValues(task);
         else {shared=ReadShared(await ReadHistory(taskId));outstanding=shared.Items.FirstOrDefault(item=>item.Id==itemId);if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");title=OutstandingText(outstanding.Html,outstanding.NoteHtml,url);DateTimeOffset existing;if(TryReminderTime(outstanding.ReminderAt,out existing)){var reminder=AbsoluteReminder(existing.LocalDateTime);reminder["repeat_rule"]=outstanding.RepeatRule??"";values.Add(reminder);}}
         bool saved=false;
-        using(var dialog=DpiDialog(new Form{Text="设置提醒 · "+title,Size=new Size(650,600),MinimumSize=new Size(580,570),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
+        using(var dialog=DpiDialog(new Form{Text="设置提醒 · "+title,Size=new Size(670,640),MinimumSize=new Size(580,590),Font=Font,TopMost=TopMost,StartPosition=FormStartPosition.CenterParent,ShowInTaskbar=false})) {
             var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(14),ColumnCount=1,RowCount=8};
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,24));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));
-            var explanation=new Label{Text=itemId==null?"与网页模式共用同一组提醒。可添加多个提醒；选中后可修改或移除。":"遗留事项可设置单次或周期提醒，与网页该事项的提醒同步。",Dock=DockStyle.Fill,AutoEllipsis=true};
-            var list=new ListBox{Dock=DockStyle.Fill,IntegralHeight=false,AccessibleName="已设置的提醒"};
-            var fieldLabel=new Label{Text="提醒日期（周期开始日期）与时间",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft};
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,24));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,38));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,30));
+            var explanation=new Label{Text=itemId==null?"选中一条可修改；直接保存当前设置。添加多个提醒时，可先加入列表再新增。":"设置单次或每周提醒，点击保存后与网页同步。",Dock=DockStyle.Fill,AutoEllipsis=true};
+            var list=new ListBox{Dock=DockStyle.Fill,IntegralHeight=false,HorizontalScrollbar=true,AccessibleName="已设置的提醒"};
+            var fieldLabel=new Label{Text="提醒日期与时间",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft};
             var fields=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,62));fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,38));
-            var date=new DateTimePicker{Dock=DockStyle.Fill,Format=DateTimePickerFormat.Long};var time=new DateTimePicker{Dock=DockStyle.Fill,Format=DateTimePickerFormat.Custom,CustomFormat="HH:mm",ShowUpDown=true};fields.Controls.Add(date,0,0);fields.Controls.Add(time,1,0);
+            var date=new DateTimePicker{Dock=DockStyle.Fill,Format=DateTimePickerFormat.Long,AccessibleName="提醒日期或周期开始日期"};
+            var time=new DateTimePicker{Dock=DockStyle.Fill,Format=DateTimePickerFormat.Custom,CustomFormat="HH:mm",ShowUpDown=true,AccessibleName="提醒时间或每周默认时间"};
+            fields.Controls.Add(date,0,0);fields.Controls.Add(time,1,0);
             var repeatFields=new FloatingReminderRepeatFields();
-            var editActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};var add=new Button{Text=itemId==null?"添加提醒":"设置提醒",AutoSize=true};var remove=new Button{Text="移除选中",AutoSize=true,Enabled=false};var fresh=new Button{Text="新增一条",AutoSize=true,Visible=itemId==null};editActions.Controls.Add(add);editActions.Controls.Add(remove);editActions.Controls.Add(fresh);
-            var commitActions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var commit=new Button{Text="保存",Width=92,Height=32,AutoSize=true};var cancel=new Button{Text="取消",Width=92,Height=32,AutoSize=true};commitActions.Controls.Add(commit);commitActions.Controls.Add(cancel);
+            var editActions=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false};var add=new Button{Text=itemId==null?"添加提醒":"设置提醒",AutoSize=true};var remove=new Button{Text="移除选中",AutoSize=true,Enabled=false};var fresh=new Button{Text="新增一条",AutoSize=true,Visible=itemId==null};editActions.Controls.Add(add);editActions.Controls.Add(remove);editActions.Controls.Add(fresh);
+            var commitActions=new FlowLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var commit=new Button{Text="保存",Width=92,Height=32,AutoSize=true};var cancel=new Button{Text="取消",Width=92,Height=32,AutoSize=true};commitActions.Controls.Add(commit);commitActions.Controls.Add(cancel);
             var feedback=new Label{Text="尚未修改。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
             layout.Controls.Add(explanation);layout.Controls.Add(list);layout.Controls.Add(fieldLabel);layout.Controls.Add(fields);layout.Controls.Add(repeatFields);layout.Controls.Add(editActions);layout.Controls.Add(commitActions);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
-            Action refreshList=delegate {list.BeginUpdate();list.Items.Clear();foreach(var value in values){object raw;DateTimeOffset due;if(value.TryGetValue("reminder",out raw)&&TryReminderTime(raw,out due))list.Items.Add(new ReminderChoice{Value=value,Due=due});}list.EndUpdate();remove.Enabled=list.SelectedIndex>=0;};
-            DateTime initial=DateTime.Now.AddHours(1);initial=new DateTime(initial.Year,initial.Month,initial.Day,initial.Hour,initial.Minute,0);date.Value=initial.Date;time.Value=initial;
-            list.SelectedIndexChanged+=delegate {remove.Enabled=list.SelectedIndex>=0;var choice=list.SelectedItem as ReminderChoice;if(choice!=null){var rule=FloatingReminderRepeatRule.Parse(RepeatValue(choice.Value));date.Value=rule==null?choice.Due.LocalDateTime.Date:DateTime.ParseExact(rule.startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);time.Value=rule==null?choice.Due.LocalDateTime:date.Value.Date.Add(DateTime.ParseExact(rule.time,"HH:mm",CultureInfo.InvariantCulture).TimeOfDay);repeatFields.LoadRule(rule,date.Value);}};
-            fresh.Click+=delegate {list.ClearSelected();DateTime next=DateTime.Now.AddHours(1);date.Value=next.Date;time.Value=next;repeatFields.LoadRule(null,next);feedback.Text="填写时间后点击添加提醒。";};
-            add.Click+=delegate {FloatingReminderRepeatRule rule;try{rule=repeatFields.ReadRule(date.Value,time.Value);}catch(Exception error){feedback.Text=error.Message;return;}DateTime selected=rule==null?date.Value.Date.Add(time.Value.TimeOfDay):rule.FirstDate();var replacement=AbsoluteReminder(selected);replacement["repeat_rule"]=rule==null?"":rule.Serialize();int index=list.SelectedIndex;if(itemId!=null){values.Clear();values.Add(replacement);}else if(index>=0&&index<values.Count)values[index]=replacement;else values.Add(replacement);refreshList();if(values.Count>0)list.SelectedIndex=Math.Max(0,Math.Min(index<0?values.Count-1:index,values.Count-1));feedback.Text="提醒时间已加入，点击保存后同步。";};
-            remove.Click+=delegate {int index=list.SelectedIndex;if(index<0||index>=values.Count)return;values.RemoveAt(index);refreshList();feedback.Text="已移除，点击保存后同步。";};
+
+            bool writing=false,listChanged=false,addingNew=false,fillingEditor=false;
+            string loadedKey="";
+            Func<string> editorKey=()=>date.Value.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"|"+time.Value.ToString("HH:mm",CultureInfo.InvariantCulture)+"|"+repeatFields.EditKey();
+            Func<bool> editorChanged=()=>addingNew || editorKey()!=loadedKey;
+            Action updateFeedback=delegate {
+                if(!fillingEditor && !writing)feedback.Text=editorChanged() || listChanged?"有未保存的提醒设置，点击保存生效。":"尚未修改。";
+            };
+            Action<ReminderChoice> loadEditor=delegate(ReminderChoice choice) {
+                fillingEditor=true;
+                try {
+                    var rule=choice==null?null:FloatingReminderRepeatRule.Parse(RepeatValue(choice.Value));
+                    DateTime local=choice==null?DateTime.Now.AddHours(1):choice.Due.LocalDateTime;
+                    date.Value=rule==null?local.Date:DateTime.ParseExact(rule.startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);
+                    time.Value=rule==null?local:date.Value.Date.Add(DateTime.ParseExact(rule.time,"HH:mm",CultureInfo.InvariantCulture).TimeOfDay);
+                    repeatFields.LoadRule(rule,date.Value.Date.Add(time.Value.TimeOfDay));
+                    loadedKey=editorKey();addingNew=false;
+                } finally {fillingEditor=false;}
+            };
+            Action<Dictionary<string,object>> refreshList=delegate(Dictionary<string,object> selection) {
+                list.BeginUpdate();
+                try {
+                    list.Items.Clear();
+                    foreach(var value in values) {
+                        object raw;DateTimeOffset due;
+                        if(!value.TryGetValue("reminder",out raw) || !TryReminderTime(raw,out due))continue;
+                        int index=list.Items.Add(new ReminderChoice{Value=value,Due=due});
+                        if(Object.ReferenceEquals(value,selection))list.SelectedIndex=index;
+                    }
+                } finally {list.EndUpdate();}
+                remove.Enabled=list.SelectedIndex>=0;
+            };
+            list.SelectedIndexChanged+=delegate {
+                var choice=list.SelectedItem as ReminderChoice;remove.Enabled=choice!=null;
+                if(choice!=null)loadEditor(choice);
+                updateFeedback();
+            };
+            date.ValueChanged+=delegate {updateFeedback();};
+            time.ValueChanged+=delegate {repeatFields.SetDefaultTime(time.Value);updateFeedback();};
+            repeatFields.Weekly.CheckedChanged+=delegate {
+                fieldLabel.Text=repeatFields.Weekly.Checked?"周期开始日期（包含当天）与默认时间":"提醒日期与时间";
+                updateFeedback();
+            };
+            repeatFields.End.ValueChanged+=delegate {updateFeedback();};
+            foreach(var day in repeatFields.Days)day.CheckedChanged+=delegate {updateFeedback();};
+            foreach(var clock in repeatFields.DayTimes)clock.ValueChanged+=delegate {updateFeedback();};
+
+            Func<bool> stageEditor=delegate {
+                try {
+                    var rule=repeatFields.ReadRule(date.Value,time.Value);
+                    var selected=rule==null?date.Value.Date.AddHours(time.Value.Hour).AddMinutes(time.Value.Minute):rule.FirstDate();
+                    var replacement=AbsoluteReminder(selected);
+                    replacement["repeat_rule"]=rule==null?"":rule.Serialize();
+                    var choice=list.SelectedItem as ReminderChoice;
+                    int index=choice==null?-1:values.IndexOf(choice.Value);
+                    if(itemId!=null){values.Clear();values.Add(replacement);}
+                    else if(index>=0)values[index]=replacement;
+                    else values.Add(replacement);
+                    listChanged=true;
+                    refreshList(replacement);
+                    updateFeedback();
+                    return true;
+                } catch(Exception error){feedback.Text=error.Message;return false;}
+            };
+            fresh.Click+=delegate {
+                list.ClearSelected();loadEditor(null);addingNew=true;updateFeedback();
+            };
+            add.Click+=delegate {stageEditor();};
+            remove.Click+=delegate {
+                var choice=list.SelectedItem as ReminderChoice;
+                if(choice==null || !values.Remove(choice.Value))return;
+                listChanged=true;refreshList(null);loadEditor(null);updateFeedback();
+            };
             cancel.Click+=delegate {dialog.Close();};
-            bool writing=false;
             commit.Click+=async delegate {
-                if(writing)return;writing=true;commit.Enabled=false;editActions.Enabled=false;feedback.Text="正在同步提醒…";
+                if(writing)return;
+                // Save applies the current form too; staging is only needed when working on multiple entries.
+                if((editorChanged() || (!listChanged && values.Count==0)) && !stageEditor())return;
+                if(!listChanged){dialog.Close();return;}
+                writing=true;commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=cancel.Enabled=false;
+                feedback.Text="正在同步提醒…";
                 try {
                     if(itemId==null) {
                         await reminderMutationGate.WaitAsync();
                         try {await PatchTaskReminders(taskId,values);}finally{reminderMutationGate.Release();}
                     } else {
-                        DateTimeOffset newDue;string reminderAt=values.Count>0&&TryReminderTime(values[0]["reminder"],out newDue)?ReminderStamp(newDue):null;
+                        DateTimeOffset newDue;
+                        string reminderAt=values.Count>0 && TryReminderTime(values[0]["reminder"],out newDue)?ReminderStamp(newDue):null;
                         await SaveOutstandingReminder(taskId,itemId,reminderAt,values.Count>0?RepeatValue(values[0]):null);
                     }
                     InvalidateReminderSnapshot(taskId);saved=true;writing=false;dialog.Close();
                 } catch(Exception error){feedback.Text="提醒未保存："+error.Message;}
-                finally{writing=false;if(!dialog.IsDisposed){commit.Enabled=true;editActions.Enabled=true;}}
+                finally {
+                    writing=false;
+                    if(!dialog.IsDisposed){commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=cancel.Enabled=true;}
+                }
             };
-            refreshList();if(list.Items.Count>0)list.SelectedIndex=0;
-            dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};dialog.ShowDialog(owner??this);
+            loadEditor(null);refreshList(values.FirstOrDefault());
+            dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};
+            dialog.ShowDialog(owner??this);
         }
         return saved;
     }

@@ -5,7 +5,7 @@
 			:anchor="triggerEl"
 			sheet-on-mobile
 			:sheet-title="$t('task.attributes.reminders')"
-			@update:open="showFormSwitch = null"
+			@update:open="onOpenChange"
 		>
 			<template #trigger="{toggle}">
 				<SimpleButton
@@ -196,25 +196,20 @@ const reminderText = computed(() => {
 	return t('task.addReminder')
 })
 
-watch(
-	() => JSON.stringify(props.modelValue),
-	() => {
-		const newReminder = props.modelValue
-		if (newReminder) {
-			reminder.value = new TaskReminderModel(newReminder)
-			weeklyRule.value = parseRepeatRule(newReminder.repeatRule) || defaultRepeatRule(newReminder.reminder || new Date())
+function loadReminder() {
+	reminder.value = new TaskReminderModel(props.modelValue)
+	weeklyRule.value = parseRepeatRule(reminder.value.repeatRule) || defaultRepeatRule(reminder.value.reminder || new Date())
+	reminderDate.value = reminder.value.relativeTo === null && reminder.value.reminder !== null
+		? new Date(reminder.value.reminder)
+		: null
+}
 
-			if (newReminder.relativeTo === null && newReminder.reminder !== null) {
-				reminderDate.value = new Date(newReminder.reminder)
-			}
+watch(() => JSON.stringify(props.modelValue), loadReminder, {immediate: true})
 
-			return
-		}
-
-		reminder.value = new TaskReminderModel()
-	},
-	{immediate: true},
-)
+function onOpenChange(open: boolean) {
+	showFormSwitch.value = null
+	if (open) loadReminder()
+}
 
 function updateData() {
 	emit('update:modelValue', reminder.value)

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
 	"code.vikunja.io/api/pkg/web"
@@ -28,10 +29,11 @@ import (
 // Calendar dates are stored in a JSON rule, separate from absolute timestamps.
 // Weekdays follow time.Weekday / Date.getDay / DayOfWeek (Sunday = 0).
 type reminderRepeatRule struct {
-	Weekdays  []int  `json:"weekdays"`
-	StartDate string `json:"startDate"`
-	EndDate   string `json:"endDate"`
-	Time      string `json:"time"`
+	Weekdays  []int             `json:"weekdays"`
+	StartDate string            `json:"startDate"`
+	EndDate   string            `json:"endDate"`
+	Time      string            `json:"time"`
+	Times     map[string]string `json:"times,omitempty"`
 }
 type errReminderRepeat string
 
@@ -65,6 +67,18 @@ func parseReminderRepeatRule(raw string) (*reminderRepeatRule, error) {
 	if len(days) == 0 {
 		return nil, errReminderRepeat("Select at least one reminder weekday")
 	}
+	for key, clock := range rule.Times {
+		day, dayErr := strconv.Atoi(key)
+		if dayErr != nil || strconv.Itoa(day) != key || !days[day] {
+			return nil, errReminderRepeat("Reminder time overrides must match the selected weekdays")
+		}
+		if _, timeErr := time.Parse("15:04", clock); timeErr != nil || len(clock) != 5 {
+			return nil, errReminderRepeat("Select a valid time for each reminder weekday")
+		}
+		if clock == rule.Time {
+			delete(rule.Times, key)
+		}
+	}
 	rule.Weekdays = nil
 	for day := range days {
 		rule.Weekdays = append(rule.Weekdays, day)
@@ -86,16 +100,17 @@ func (r *reminderRepeatRule) onDate(date time.Time, location *time.Location) (ti
 	if key < r.StartDate || key > r.EndDate {
 		return time.Time{}, false
 	}
-	found := false
+	weekday := int(date.Weekday())
 	for _, day := range r.Weekdays {
-		if day == int(date.Weekday()) {
-			found = true
-			break
+		if day != weekday {
+			continue
 		}
+		clock := r.Times[strconv.Itoa(weekday)]
+		if clock == "" {
+			clock = r.Time
+		}
+		due, err := time.ParseInLocation("2006-01-02 15:04", key+" "+clock, location)
+		return due, err == nil
 	}
-	if !found {
-		return time.Time{}, false
-	}
-	due, err := time.ParseInLocation("2006-01-02 15:04", key+" "+r.Time, location)
-	return due, err == nil
+	return time.Time{}, false
 }

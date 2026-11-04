@@ -15,58 +15,152 @@ internal sealed class FloatingReminderRepeatRule {
     public string startDate {get;set;}
     public string endDate {get;set;}
     public string time {get;set;}
-    internal static readonly string[] DayNames={"\u5468\u65e5","\u5468\u4e00","\u5468\u4e8c","\u5468\u4e09","\u5468\u56db","\u5468\u4e94","\u5468\u516d"};
+    public Dictionary<string,string> times {get;set;}
+    internal static readonly string[] DayNames={"周日","周一","周二","周三","周四","周五","周六"};
+    internal static readonly int[] DisplayOrder={1,2,3,4,5,6,0};
+
     internal static FloatingReminderRepeatRule Parse(string raw) {
         try {var rule=new JavaScriptSerializer().Deserialize<FloatingReminderRepeatRule>(raw);rule.Validate();return rule;} catch {return null;}
     }
+
     internal void Validate() {
         DateTime start,end,clock;
-        if(weekdays==null||weekdays.Length==0||weekdays.Any(day=>day<0||day>6))throw new Exception("\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u661f\u671f\u3002");
-        if(!DateTime.TryParseExact(startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out start)||!DateTime.TryParseExact(endDate,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out end))throw new Exception("\u8bf7\u9009\u62e9\u6709\u6548\u7684\u5f00\u59cb\u548c\u7ed3\u675f\u65e5\u671f\u3002");
-        if(end<start)throw new Exception("\u7ed3\u675f\u65e5\u671f\u4e0d\u80fd\u65e9\u4e8e\u5f00\u59cb\u65e5\u671f\u3002");
-        if(!DateTime.TryParseExact(time,"HH:mm",CultureInfo.InvariantCulture,DateTimeStyles.None,out clock))throw new Exception("\u8bf7\u9009\u62e9\u63d0\u9192\u65f6\u95f4\u3002");
+        if(weekdays==null || weekdays.Length==0 || weekdays.Any(day=>day<0 || day>6))throw new Exception("请至少选择一个星期。");
+        if(!DateTime.TryParseExact(startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out start) ||
+            !DateTime.TryParseExact(endDate,"yyyy-MM-dd",CultureInfo.InvariantCulture,DateTimeStyles.None,out end))throw new Exception("请选择有效的开始和结束日期。");
+        if(end<start)throw new Exception("结束日期不能早于开始日期。");
+        if(!DateTime.TryParseExact(time,"HH:mm",CultureInfo.InvariantCulture,DateTimeStyles.None,out clock))throw new Exception("请选择有效的提醒时间。");
         weekdays=weekdays.Distinct().OrderBy(day=>day).ToArray();
-        if(!Enumerable.Range(0,7).Select(offset=>start.AddDays(offset)).Any(date=>date<=end&&weekdays.Contains((int)date.DayOfWeek)))throw new Exception("\u65e5\u671f\u8303\u56f4\u5185\u6ca1\u6709\u6240\u9009\u661f\u671f\uff0c\u8bf7\u8c03\u6574\u65e5\u671f\u6216\u661f\u671f\u3002");
+        if(times!=null) {
+            var normalized=new Dictionary<string,string>();
+            foreach(var entry in times.OrderBy(entry=>entry.Key,StringComparer.Ordinal)) {
+                int day;
+                if(!Int32.TryParse(entry.Key,NumberStyles.None,CultureInfo.InvariantCulture,out day) ||
+                    entry.Key!=DayKey(day) || !weekdays.Contains(day) ||
+                    !DateTime.TryParseExact(entry.Value,"HH:mm",CultureInfo.InvariantCulture,DateTimeStyles.None,out clock))
+                    throw new Exception("请为选中的星期设置有效的提醒时间。");
+                if(entry.Value!=time)normalized.Add(entry.Key,entry.Value);
+            }
+            times=normalized.Count==0?null:normalized;
+        }
+        if(!Enumerable.Range(0,7).Select(offset=>start.AddDays(offset)).Any(date=>date<=end && weekdays.Contains((int)date.DayOfWeek)))
+            throw new Exception("日期范围内没有所选星期，请调整日期或星期。");
     }
+
+    static string DayKey(int day){return day.ToString(CultureInfo.InvariantCulture);}
+    internal string TimeForDay(int day){string value;return times!=null && times.TryGetValue(DayKey(day),out value)?value:time;}
+
     internal DateTime FirstDate() {
-        Validate();DateTime start=DateTime.ParseExact(startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);
+        Validate();
+        DateTime start=DateTime.ParseExact(startDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);
         for(int i=0;i<7;i++){DateTime due;if(OnDate(start.AddDays(i),out due))return due;}
-        throw new Exception("\u65e5\u671f\u8303\u56f4\u5185\u6ca1\u6709\u6240\u9009\u661f\u671f\u3002");
+        throw new Exception("日期范围内没有所选星期。");
     }
+
     internal bool OnDate(DateTime date,out DateTime due) {
-        due=DateTime.MinValue;string day=date.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
-        if(String.CompareOrdinal(day,startDate)<0||String.CompareOrdinal(day,endDate)>0||!weekdays.Contains((int)date.DayOfWeek))return false;
-        return DateTime.TryParseExact(day+" "+time,"yyyy-MM-dd HH:mm",CultureInfo.InvariantCulture,DateTimeStyles.None,out due);
+        due=DateTime.MinValue;
+        string day=date.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
+        int weekday=(int)date.DayOfWeek;
+        if(String.CompareOrdinal(day,startDate)<0 || String.CompareOrdinal(day,endDate)>0 || !weekdays.Contains(weekday))return false;
+        return DateTime.TryParseExact(day+" "+TimeForDay(weekday),"yyyy-MM-dd HH:mm",CultureInfo.InvariantCulture,DateTimeStyles.None,out due);
     }
-    internal string Serialize(){Validate();return new JavaScriptSerializer().Serialize(this);}
-    public override string ToString(){return "\u6bcf\u5468 "+String.Join("\u3001",new[]{1,2,3,4,5,6,0}.Where(day=>weekdays.Contains(day)).Select(day=>DayNames[day]))+" "+time+"\uff08"+startDate+" \u81f3 "+endDate+"\uff09";}
+
+    internal string Serialize() {
+        Validate();
+        // Keep the old representation unchanged for shared-time rules and their dismissal keys.
+        var value=new Dictionary<string,object>{{"weekdays",weekdays},{"startDate",startDate},{"endDate",endDate},{"time",time}};
+        if(times!=null)value["times"]=times;
+        return new JavaScriptSerializer().Serialize(value);
+    }
+
+    public override string ToString() {
+        var selected=DisplayOrder.Where(day=>weekdays.Contains(day));
+        string schedule=times==null
+            ?String.Join("、",selected.Select(day=>DayNames[day]))+" "+time
+            :String.Join("、",selected.Select(day=>DayNames[day]+" "+TimeForDay(day)));
+        return "每周 "+schedule+"（"+startDate+" 至 "+endDate+"）";
+    }
 }
+
 internal sealed class FloatingReminderRepeatFields : TableLayoutPanel {
-    internal readonly CheckBox Weekly=new CheckBox{Text="\u6309\u5468\u91cd\u590d",AutoSize=true,Name="reminder-weekly"};
-    internal readonly DateTimePicker End=new DateTimePicker{Format=DateTimePickerFormat.Custom,CustomFormat="yyyy-MM-dd",Name="reminder-end",Width=150};
+    internal readonly CheckBox Weekly=new CheckBox{Text="按周重复",AutoSize=true,Name="reminder-weekly"};
+    internal readonly DateTimePicker End=new DateTimePicker{Format=DateTimePickerFormat.Custom,CustomFormat="yyyy-MM-dd",Name="reminder-end",Width=150,AccessibleName="结束日期"};
     internal readonly CheckBox[] Days=new CheckBox[7];
+    internal readonly DateTimePicker[] DayTimes=new DateTimePicker[7];
+    readonly bool[] customTime=new bool[7];
     readonly FlowLayoutPanel weekdaysRow=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,WrapContents=true};
     readonly FlowLayoutPanel endRow=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,WrapContents=true};
+    readonly Label hint=new Label{Text="各星期可单独调整时间；未调整的沿用上方默认时间。按本机时间提醒。",AutoSize=true,Dock=DockStyle.Fill,ForeColor=SystemColors.GrayText,MaximumSize=new Size(540,0)};
+    TimeSpan defaultTime;
+    bool loading;
+
     internal FloatingReminderRepeatFields() {
         Dock=DockStyle.Fill;AutoSize=true;ColumnCount=1;RowCount=4;Margin=Padding.Empty;
         for(int i=0;i<4;i++)RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        foreach(int day in new[]{1,2,3,4,5,6,0}) {Days[day]=new CheckBox{Text=FloatingReminderRepeatRule.DayNames[day],AutoSize=true,Name="reminder-day-"+day};weekdaysRow.Controls.Add(Days[day]);}
-        endRow.Controls.Add(new Label{Text="\u7ed3\u675f\u65e5\u671f\uff08\u5305\u542b\u5f53\u5929\uff09",AutoSize=true,Margin=new Padding(0,6,10,0)});endRow.Controls.Add(End);
-        Controls.Add(Weekly);Controls.Add(weekdaysRow);Controls.Add(endRow);
-        Controls.Add(new Label{Text="\u5f00\u59cb\u65e5\u671f\u4f7f\u7528\u4e0a\u65b9\u63d0\u9192\u65e5\u671f\u3002\u6309\u672c\u673a\u65f6\u95f4\u63d0\u9192\uff0c\u5173\u95ed\u4e00\u6b21\u4e0d\u5f71\u54cd\u540e\u7eed\u65e5\u671f\u3002",AutoSize=true,Dock=DockStyle.Fill,ForeColor=SystemColors.GrayText,MaximumSize=new Size(580,0)});
-        Weekly.CheckedChanged+=delegate{weekdaysRow.Enabled=endRow.Enabled=Weekly.Checked;};
+        foreach(int day in FloatingReminderRepeatRule.DisplayOrder) {
+            int weekday=day;
+            string name=FloatingReminderRepeatRule.DayNames[day];
+            var group=new FlowLayoutPanel{AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false,Margin=new Padding(0,0,8,4)};
+            Days[day]=new CheckBox{Text=name,AutoSize=true,Name="reminder-day-"+day,Margin=new Padding(0,5,3,0)};
+            DayTimes[day]=new DateTimePicker{Format=DateTimePickerFormat.Custom,CustomFormat="HH:mm",ShowUpDown=true,Width=78,Name="reminder-time-"+day,AccessibleName=name+"提醒时间",Margin=Padding.Empty};
+            Days[day].CheckedChanged+=delegate {DayTimes[weekday].Enabled=Weekly.Checked && Days[weekday].Checked;};
+            DayTimes[day].ValueChanged+=delegate {if(!loading)customTime[weekday]=Clock(DayTimes[weekday].Value)!=defaultTime;};
+            group.Controls.Add(Days[day]);group.Controls.Add(DayTimes[day]);weekdaysRow.Controls.Add(group);
+        }
+        endRow.Controls.Add(new Label{Text="结束日期（包含当天）",AutoSize=true,Margin=new Padding(0,6,10,0)});
+        endRow.Controls.Add(End);
+        Controls.Add(Weekly);Controls.Add(weekdaysRow);Controls.Add(endRow);Controls.Add(hint);
+        Weekly.CheckedChanged+=delegate{UpdateWeeklyFields();};
         LoadRule(null,DateTime.Now);
     }
-    internal void LoadRule(FloatingReminderRepeatRule rule,DateTime start) {
-        Weekly.Checked=rule!=null;
-        for(int i=0;i<7;i++)Days[i].Checked=rule==null?i==(int)start.DayOfWeek:rule.weekdays.Contains(i);
-        End.Value=rule==null?start.AddMonths(1):DateTime.ParseExact(rule.endDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);
-        weekdaysRow.Enabled=endRow.Enabled=Weekly.Checked;
+
+    static TimeSpan Clock(DateTime value){return new TimeSpan(value.Hour,value.Minute,0);}
+    void UpdateWeeklyFields() {
+        weekdaysRow.Visible=endRow.Visible=hint.Visible=Weekly.Checked;
+        for(int day=0;day<7;day++)DayTimes[day].Enabled=Weekly.Checked && Days[day].Checked;
     }
+
+    internal void SetDefaultTime(DateTime clock) {
+        defaultTime=Clock(clock);
+        bool wasLoading=loading;loading=true;
+        try {for(int day=0;day<7;day++)if(!customTime[day])DayTimes[day].Value=DateTime.Today.Add(defaultTime);}
+        finally {loading=wasLoading;}
+    }
+
+    internal void LoadRule(FloatingReminderRepeatRule rule,DateTime start) {
+        loading=true;
+        try {
+            Weekly.Checked=rule!=null;
+            defaultTime=rule==null?Clock(start):DateTime.ParseExact(rule.time,"HH:mm",CultureInfo.InvariantCulture).TimeOfDay;
+            for(int day=0;day<7;day++) {
+                Days[day].Checked=rule==null?day==(int)start.DayOfWeek:rule.weekdays.Contains(day);
+                TimeSpan clock=rule==null?defaultTime:DateTime.ParseExact(rule.TimeForDay(day),"HH:mm",CultureInfo.InvariantCulture).TimeOfDay;
+                customTime[day]=clock!=defaultTime;
+                DayTimes[day].Value=DateTime.Today.Add(clock);
+            }
+            End.Value=rule==null?start.AddMonths(1):DateTime.ParseExact(rule.endDate,"yyyy-MM-dd",CultureInfo.InvariantCulture);
+            UpdateWeeklyFields();
+        } finally {loading=false;}
+    }
+
+    internal string EditKey() {
+        if(!Weekly.Checked)return "";
+        return End.Value.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture)+"|"+
+            String.Join(",",Enumerable.Range(0,7).Where(day=>Days[day].Checked).Select(day=>day+":"+DayTimes[day].Value.ToString("HH:mm",CultureInfo.InvariantCulture)));
+    }
+
     internal FloatingReminderRepeatRule ReadRule(DateTime start,DateTime clock) {
         if(!Weekly.Checked)return null;
-        var rule=new FloatingReminderRepeatRule{weekdays=Enumerable.Range(0,7).Where(day=>Days[day].Checked).ToArray(),startDate=start.ToString("yyyy-MM-dd"),endDate=End.Value.ToString("yyyy-MM-dd"),time=clock.ToString("HH:mm")};
-        rule.Validate();return rule;
+        var rule=new FloatingReminderRepeatRule{
+            weekdays=Enumerable.Range(0,7).Where(day=>Days[day].Checked).ToArray(),
+            startDate=start.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),
+            endDate=End.Value.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),
+            time=clock.ToString("HH:mm",CultureInfo.InvariantCulture),
+            times=new Dictionary<string,string>(),
+        };
+        foreach(int day in rule.weekdays)if(customTime[day])rule.times[day.ToString(CultureInfo.InvariantCulture)]=DayTimes[day].Value.ToString("HH:mm",CultureInfo.InvariantCulture);
+        rule.Validate();
+        return rule;
     }
 }
 internal sealed partial class FloatingWindow {

@@ -17,12 +17,32 @@
 				</label>
 			</div>
 		</fieldset>
-		<label>提醒时间<input
+		<label>默认提醒时间<input
 			class="input"
 			type="time"
 			:value="modelValue.time"
 			@input="update('time', ($event.target as HTMLInputElement).value)"
 		></label>
+		<fieldset
+			v-if="selectedDays.length"
+			class="weekday-times"
+		>
+			<legend>各日提醒时间</legend>
+			<div class="weekday-time-inputs">
+				<label
+					v-for="day in selectedDays"
+					:key="day.value"
+				>
+					{{ day.label }}
+					<input
+						class="input"
+						type="time"
+						:value="reminderTimeOnDay(modelValue, day.value)"
+						@input="updateDayTime(day.value, ($event.target as HTMLInputElement).value)"
+					>
+				</label>
+			</div>
+		</fieldset>
 		<div class="date-range">
 			<label>开始日期<input
 				class="input"
@@ -52,17 +72,26 @@
 
 <script setup lang="ts">
 import {computed} from 'vue'
-import {REMINDER_WEEKDAYS, repeatRuleError, type ReminderRepeatRule} from '@/helpers/reminderRepeat'
+import {REMINDER_WEEKDAYS, reminderTimeOnDay, repeatRuleError, type ReminderRepeatRule} from '@/helpers/reminderRepeat'
 const props = defineProps<{modelValue: ReminderRepeatRule}>()
 const emit = defineEmits<{'update:modelValue': [ReminderRepeatRule]}>()
 const error = computed(() => repeatRuleError(props.modelValue))
+const selectedDays = computed(() => REMINDER_WEEKDAYS.filter(day => props.modelValue.weekdays.includes(day.value)))
+
 function update(key: 'time' | 'startDate' | 'endDate', value: string) {
 	emit('update:modelValue', {...props.modelValue, [key]: value})
 }
 function toggleDay(day: number, checked: boolean) {
 	const days = props.modelValue.weekdays.filter(value => value !== day)
+	const times = {...props.modelValue.times}
 	if (checked) days.push(day)
-	emit('update:modelValue', {...props.modelValue, weekdays: days})
+	else delete times[day]
+	emit('update:modelValue', {...props.modelValue, weekdays: days, times})
+}
+function updateDayTime(day: number, value: string) {
+	const times = {...props.modelValue.times, [day]: value}
+	if (value === props.modelValue.time) delete times[day]
+	emit('update:modelValue', {...props.modelValue, times})
 }
 </script>
 
@@ -94,6 +123,14 @@ label {
 	flex-direction: row;
 	align-items: center;
 	min-block-size: 1.75rem;
+}
+.weekday-times {
+	margin-block-start: .75rem;
+}
+.weekday-time-inputs {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+	gap: .5rem;
 }
 .date-range {
 	display: grid;
