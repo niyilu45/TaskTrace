@@ -32,7 +32,8 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
     readonly Dictionary<long,List<Dictionary<string,object>>> comments = new Dictionary<long,List<Dictionary<string,object>>>();
     long sequence=100;
     internal int DailyAttempts,DailyWrites,DailyPosts,DailyPuts,HistoryReads;
-    internal bool FailNextProgress;
+    internal bool FailNextProgress,FailNextOutstanding;
+    internal int OutstandingWrites,PriorityAttempts;
     internal TaskCompletionSource<bool> HeldHistory;
     internal const string Failure = "fixture write denied: progress remains editable";
     internal List<Dictionary<string,object>> Notes(long id) {
@@ -52,6 +53,11 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
         string path=request.RequestUri.AbsolutePath,method=request.Method.Method;
         if(path=="/api/v2/tasktrace/team" && method=="GET")return Reply(new {enabled=false});
         if(path=="/api/v2/tasktrace/undo" && method=="GET")return Reply(new {id=0,label=""});
+        if(path=="/api/v2/projects" && method=="GET")return Reply(new {items=new object[0],total=0});
+        if(path=="/api/v2/tasktrace/tasks/44/priority" && method=="PUT") {
+            PriorityAttempts++;
+            return Reply(new {message="fixture: secondary priority update failed"},HttpStatusCode.Forbidden);
+        }
         var parts=path.Split('/');
         if(parts.Length<5 || parts[1]!="api" || parts[2]!="v2" || parts[3]!="tasks")
             throw new InvalidOperationException("Unexpected fake API route: "+method+" "+path);
@@ -73,12 +79,18 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
                     DailyAttempts++;
                     if(FailNextProgress){FailNextProgress=false;return Reply(new {message=Failure},HttpStatusCode.Forbidden);}
                 }
+                bool outstanding=taskId==44 && html.StartsWith("<h3 data-tasktrace-comment-type=\"outstanding\">",StringComparison.Ordinal);
+                if(outstanding && FailNextOutstanding) {
+                    FailNextOutstanding=false;
+                    return Reply(new {message="fixture: outstanding content write failed"},HttpStatusCode.Forbidden);
+                }
                 Dictionary<string,object> saved;
                 if(method=="PUT") {
                     long id=Int64.Parse(parts[6]);
                     saved=Notes(taskId).Single(note=>Convert.ToInt64(note["id"])==id);saved["comment"]=html;
                 } else {saved=Note(++sequence,html);Notes(taskId).Add(saved);}
                 if(daily){DailyWrites++;if(method=="POST")DailyPosts++;else DailyPuts++;}
+                if(outstanding)OutstandingWrites++;
                 return Reply(saved);
             }
         }
@@ -217,12 +229,103 @@ internal sealed partial class FloatingWindow {
         if(active!=null)await CloseSaveUi(active);
         if(testFailure!=null)throw testFailure;
     }
+    async Task TestOutstandingFromTaskWindow(ProgressSaveHttp fake) {
+        const long id=44;
+        var parent=await OpenSaveUi(id);
+        Form child=null;Exception failure=null;
+        autoSaveEnabled=true;
+        autoSaveSeconds=1;
+        Func<Form> findOutstanding=()=>Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text=="遗留事项 · 所有日期共享");
+        try {
+            SaveControls(parent.Dialog).OfType<Button>().Single(button=>button.Text=="遗留事项 · 所有日期共享").PerformClick();
+            await SaveUntil(()=>(child=findOutstanding())!=null,"Task window did not open the outstanding editor");
+            var controls=SaveControls(child).ToList();
+            var input=controls.OfType<TextBox>().Single(box=>box.AccessibleName=="遗留事项内容");
+            var note=controls.OfType<ProgressHtmlEditor>().Single();
+            var priority=controls.OfType<ComboBox>().Single(box=>box.AccessibleName=="遗留事项优先级");
+            var save=controls.OfType<Button>().Single(button=>button.Text=="添加一条");
+            var feedback=child.Controls[0].Controls.OfType<Label>().Last();
+            var list=controls.OfType<ListBox>().Single();
+            var editor=unsavedUpdateEditors.Last();
+            var browser=(WebBrowser)note.Controls[0];
+            await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Outstanding note editor not ready");
+            input.Text="从任务窗口新增";
+            priority.SelectedIndex=3;
+            SaveCheck(note.SimulateUserHtmlForTest("<p>已经保存的备注</p>"),"Could not enter outstanding note");
+            await SaveUntil(()=>HasDraftCache("outstanding",id,"new"),"Outstanding draft was not cached before saving");
+            save.PerformClick();
+            await SaveUntil(()=>save.Enabled,"Outstanding save button stayed disabled");
+            SaveCheck(fake.OutstandingWrites==1,"Outstanding add wrote "+fake.OutstandingWrites+" records; feedback: "+feedback.Text);
+            var savedItems=ReadShared(fake.Notes(id)).Items;
+            SaveCheck(savedItems.Count==1,"Expected one persisted outstanding item, got "+savedItems.Count);
+            var stored=savedItems[0];
+            SaveCheck(OutstandingEditorText(stored.Html)=="从任务窗口新增" && Plain(stored.NoteHtml)=="已经保存的备注" && stored.Priority==3,
+                "The single content write did not retain the text, note and selected priority");
+            SaveCheck(fake.PriorityAttempts==0 && !editor.IsDirty() && !HasDraftCache("outstanding",id,"new") &&
+                input.Text=="" && list.Items.Count==1 && feedback.Text.Contains("已正式保存"),
+                "OUTSTANDING_SAVED_BUT_DIRTY: priority requests="+fake.PriorityAttempts+", draft="+HasDraftCache("outstanding",id,"new")+", input="+json.Serialize(input.Text)+", note="+json.Serialize(note.Html)+", feedback="+feedback.Text);
+            child.Width=child.MinimumSize.Width;
+            child.PerformLayout();
+            save.Parent.PerformLayout();
+            var visibleButtons=controls.OfType<Button>().Where(button=>button.Parent==save.Parent && button.Visible).ToArray();
+            SaveCheck(visibleButtons.All(button=>save.Parent.ClientRectangle.Contains(button.Bounds)),
+                "Bottom actions are clipped at minimum width");
+            var taskButtons=visibleButtons.Select(button=>button==save?"save":button.Text).ToArray();
+            SaveCheck(taskButtons.Contains("编辑所属任务"),"Task-entry outstanding window is missing the shared parent-edit action");
+
+            // A later genuine change must still remain a draft if the content request fails.
+            input.Text="写入失败时保留";
+            fake.FailNextOutstanding=true;
+            save.PerformClick();
+            await SaveUntil(()=>!fake.FailNextOutstanding && save.Enabled,"Outstanding failure did not finish");
+            SaveCheck(fake.OutstandingWrites==1 && input.Text=="写入失败时保留" && editor.IsDirty() &&
+                feedback.Text.Contains("fixture: outstanding content write failed"),"A failed content write discarded the draft");
+            save.PerformClick();
+            await SaveUntil(()=>fake.OutstandingWrites==2 && save.Enabled,"Outstanding retry did not finish");
+            // The browser can add this caret placeholder when the cleared editor regains focus.
+            SaveCheck(note.SimulateUserHtmlForTest("<br>"),"Could not insert the browser's blank placeholder");
+            await Task.Delay(1100);
+            SaveCheck(ReadShared(fake.Notes(id)).Items.Count==2 && !editor.IsDirty() && !HasDraftCache("outstanding",id,"new") &&
+                feedback.Text.Contains("已正式保存"),"Retry or subsequent autosave recreated a saved draft: draft="+HasDraftCache("outstanding",id,"new")+", input="+json.Serialize(input.Text)+", note="+json.Serialize(note.Html)+", feedback="+feedback.Text);
+            SaveCheck(!unsavedUpdateEditors.First().IsDirty(),"Child save incorrectly marked the parent progress window dirty");
+
+            child.Close();
+            await SaveUntil(()=>child.IsDisposed,"Closing a saved outstanding window asked about a draft");
+            await SaveUntil(()=>unsavedUpdateEditors.Count==1,"Outstanding window did not release its editor registration");
+            WriteDraftCache("outstanding",id,"new",new OutstandingDraftCache{
+                DraftId=stored.Id,Text=OutstandingEditorText(stored.Html),NoteHtml=stored.NoteHtml,Priority=stored.Priority
+            });
+            SaveControls(parent.Dialog).OfType<Button>().Single(button=>button.Text=="遗留事项 · 所有日期共享").PerformClick();
+            await SaveUntil(()=>(child=findOutstanding())!=null,"Task window did not reopen outstanding editor");
+            SaveCheck(!unsavedUpdateEditors.Last().IsDirty() && !HasDraftCache("outstanding",id,"new"),
+                "An older draft for an already saved item was restored as unsaved content");
+            child.Close();
+            await SaveUntil(()=>child.IsDisposed && unsavedUpdateEditors.Count==1,"Reopened clean editor did not close");
+
+            ShowOutstandingItem(id,stored.Id);
+            await SaveUntil(()=>(child=findOutstanding())!=null,"Outstanding row did not open the editor");
+            var directSave=SaveControls(child).OfType<Button>().Single(button=>button.Text=="保存修改");
+            var directButtons=SaveControls(child).OfType<Button>().Where(button=>button.Parent==directSave.Parent && button.Visible)
+                .Select(button=>button==directSave?"save":button.Text).ToArray();
+            SaveCheck(taskButtons.SequenceEqual(directButtons) && !unsavedUpdateEditors.Last().IsDirty(),
+                "The task and outstanding-row entry points disagree on actions or reload saved content as dirty");
+            child.Close();
+            await SaveUntil(()=>child.IsDisposed,"Closing a reopened saved outstanding item asked about a draft");
+            Console.WriteLine("PASS nested outstanding save, genuine failure and retry, clean close/reopen, and identical actions from both entry points.");
+        } catch(Exception error){failure=error;}
+        if(child!=null && !child.IsDisposed){unsavedUpdateEditors.Last().Discard();child.Close();}
+        await CloseSaveUi(parent);
+        if(failure!=null)throw failure;
+    }
     internal static int RunProgressSaveFixture(string directory,bool baseline) {
         int code=0;Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
         using(var fake=new ProgressSaveHttp())
         using(var host=new FloatingWindow(directory,fake)) {
             host.Shown+=async delegate {
-                try {await host.TestProgressSaveButtons(fake,baseline);}
+                try {
+                    await host.TestProgressSaveButtons(fake,baseline);
+                    if(!baseline)await host.TestOutstandingFromTaskWindow(fake);
+                }
                 catch(Exception error){code=1;Console.Error.WriteLine(error);}
                 finally{host.Close();}
             };
