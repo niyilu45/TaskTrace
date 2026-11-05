@@ -51,14 +51,26 @@ internal sealed partial class FloatingWindow {
         http.Dispose();http=new HttpClient(api);token="fixture";
         projects.Items.Add(new Project{Id=1,Title="Fixture project"});projects.SelectedIndex=0;projectsDirty=false;
         ShowInTaskbar=false;Opacity=0;ClientSize=new Size(450,300);
-        Controls.Add(tasks);tasks.CreateControl();taskSurface.Bind(tasks);showCompleted.Checked=true;InitializeDisplayStatusFilter();
+        Controls.Add(taskSurface);taskSurface.Bind(tasks);showCompleted.Checked=true;InitializeDisplayStatusFilter();
         toolbar=new FlowLayoutPanel();Disposed+=delegate {toolbar.Dispose();};
     }
     bool HasVisibleLeaf(string id) {return OutstandingDescendants(tasks.Nodes).Any(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Id==id);}
+    static bool AncestorsExpanded(TreeNode node) {
+        for(var parent=node.Parent;parent!=null;parent=parent.Parent)if(!parent.IsExpanded)return false;
+        return true;
+    }
     async Task ReadVisibility(bool background=false) {
-        if(!await LoadTasks(background))throw new Exception("Current load was cancelled.");
-        taskSurface.Rebuild(false);
+        // The isolated HTTP handler completes synchronously. Wait for a physical
+        // user mouse gesture to finish before testing the production idle guard.
+        if(background)for(int attempt=0;AutoRefreshInteractionActive() && attempt<250;attempt++)await Task.Delay(20);
+        if(!await LoadTasks(background))throw new Exception("Current load was cancelled: visible="+Visible+
+            ", busy="+busy+", rendering="+rendering+", dragging="+dragging+", interacting="+AutoRefreshInteractionActive());
+        // Production keeps the native TreeView off-screen. Do not explicitly rebuild here:
+        // a completed data load must publish usable rows to the actual content surface.
+        await Task.Delay(20);
         var nodes=OutstandingDescendants(tasks.Nodes).ToList();
+        foreach(var node in nodes.Where(node=>AncestorsExpanded(node)))
+            if(taskSurface.NodeBounds(node).IsEmpty)throw new Exception("MODEL_LOADED_VIEW_BLANK: loaded task has no measured surface row: "+node.Text);
         if(nodes.GroupBy(RefreshNodeKey).Any(group=>group.Count()>1))throw new Exception("Refresh duplicated task/outstanding entries.");
     }
     void ExpectTaskIds(params long[] expected) {
@@ -210,6 +222,32 @@ internal sealed partial class FloatingWindow {
         RefreshDisplayStatusMenu();
         Console.WriteLine("PASS: independent row-type filters, separate deepest task and outstanding rows, tree task lock, and preference reload in full/simple modes.");
     }
+    internal async Task TestEmptyDataTransitions(VisibilityApi api) {
+        api.Tasks.Clear();
+        api.Notes.Clear();
+        search.Text="";
+        visiblePriorities.Clear();visiblePriorities.UnionWith(Enumerable.Range(0,10));
+        displayTasks=displayOutstanding=true;
+        SetDisplayStatuses(displayStates);
+        foreach(bool compact in new[]{false,true}) {
+            simpleMode=compact;
+            foreach(bool flat in new[]{false,true}) {
+                singleLine.Checked=flat;tasks.SingleLinePaths=flat;
+                await ReadVisibility();
+                if(tasks.Nodes.Count!=0 || taskSurface.ContentExtent.Height>4 || taskSurface.ScrollOffset!=Point.Empty ||
+                    !status.Text.Contains("没有匹配事项"))throw new Exception("Empty API result retained rows, scrolling or lost its status");
+                api.Tasks.Add(new Dictionary<string,object>{{"id",9001L},{"title","Task arriving after empty state"},{"done",false},{"priority",3},{"comment_count",0}});
+                await ReadVisibility();
+                if(tasks.Nodes.Count!=1 || taskSurface.NodeBounds(tasks.Nodes[0]).IsEmpty || simpleEmpty.Visible)
+                    throw new Exception("A task arriving after an empty API response was covered or not rendered");
+                api.Tasks.Clear();
+                await ReadVisibility();
+                if(tasks.Nodes.Count!=0 || taskSurface.ContentExtent.Height>4)
+                    throw new Exception("Returning to an empty API result retained the previous task row");
+            }
+        }
+        Console.WriteLine("PASS empty API results and new-task/empty transitions in full, compact, tree and flat views.");
+    }
     internal async Task TestVisibility(VisibilityApi api) {
         await ReadVisibility();
         if(SimpleTaskNodes(tasks.Nodes).Count()!=210 || api.TaskPages!=3 || !HasVisibleLeaf("child-leaf"))throw new Exception("Task/comment pagination dropped entries.");
@@ -261,7 +299,7 @@ internal static class FloatingVisibilityTests {
     [STAThread] static int Main(){
         Application.EnableVisualStyles();var api=new VisibilityApi();int result=0;
         using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestRowTypeFilters();await app.TestNewChildrenAndLegacyLists(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
+            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestRowTypeFilters();await app.TestNewChildrenAndLegacyLists(api);await app.TestEmptyDataTransitions(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
             Application.Run(app);
         }
         return result;

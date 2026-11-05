@@ -1117,7 +1117,15 @@ internal sealed partial class FloatingWindow : Form {
         SaveSimpleMode(); SaveBounds(); hoverTimer.Stop(); progressTip.Hide(tasks);
         restoreSimple.Visible = false; Hide();
     }
-    void RestoreWindow() { Show(); WindowState = FormWindowState.Normal; RestoreFromEdge(false); Activate(); }
+    void RestoreWindow() {
+        Show();
+        WindowState = FormWindowState.Normal;
+        RestoreFromEdge(false);
+        Activate();
+        UpdateSimpleModeState();
+        if(!simpleMode)RefreshFullLayout();
+        RefreshFloatingViewport();
+    }
     bool fittingFoldedToolbar;
     void FitFoldedToolbar() {
         if(!collapsed || simpleMode || simpleLayout || fittingFoldedToolbar || closing || toolbar==null || WindowState!=FormWindowState.Normal)return;

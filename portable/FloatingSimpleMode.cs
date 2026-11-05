@@ -191,7 +191,9 @@ internal sealed partial class FloatingWindow {
         BeginInvoke(new Action(delegate {
             simpleRestoreLayoutQueued=false;
             if(!simpleMode || closing || IsDisposed || !Visible || WindowState!=FormWindowState.Normal)return;
-            simpleWindowWasMinimized=false;PositionSimpleModeControls();UpdateSimpleActionState();
+            simpleWindowWasMinimized=false;
+            UpdateSimpleModeState();
+            RefreshFloatingViewport();
         }));
     }
     void ShowSimpleModeRestore() {
@@ -217,6 +219,11 @@ internal sealed partial class FloatingWindow {
             simpleEmpty.BringToFront();
         }
         PositionSimpleModeControls();UpdateSimpleActionState();
+    }
+    void RefreshFloatingViewport() {
+        taskSurface.Rebuild(true);
+        taskSurface.Invalidate();
+        if(simpleMode && simpleEmpty.Visible)simpleEmpty.Invalidate();
     }
     void RestoreFullFloatingWindow() {
         if(closing || IsDisposed)return;
@@ -253,7 +260,9 @@ internal sealed partial class FloatingWindow {
                 restored.X=Math.Max(area.Left,Math.Min(restored.X,area.Right-restored.Width));restored.Y=Math.Max(area.Top,Math.Min(restored.Y,area.Bottom-restored.Height));if(modeSwitchEdge!=EdgeDock.None)restored=AlignBoundsToEdge(restored,area,modeSwitchEdge);Bounds=restored;fullBounds=restored;
             }
         } finally {simpleLayout=false;content.ResumeLayout(true);ResumeLayout(true);}
-        PerformLayout();PositionSimpleModeControls();tasks.RefreshWrappedLayout();taskSurface.Rebuild(true);UpdateSimpleModeState();
+        PerformLayout();UpdateSimpleModeState();tasks.RefreshWrappedLayout();
+        // Measure and repaint only after the final parent, border and viewport layout.
+        RefreshFloatingViewport();
         if(selected!=null && selected.TreeView==tasks)tasks.SelectedNode=selected;
         if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
         tasks.Invalidate();SaveSimpleMode();

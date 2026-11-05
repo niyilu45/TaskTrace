@@ -63,6 +63,13 @@ internal sealed partial class TaskTreeSurface : Panel {
         if(!IsHandleCreated){rebuildQueued=false;return;}
         BeginInvoke(new Action(delegate {rebuildQueued=false;if(!IsDisposed)Rebuild(true);}));
     }
+    protected override void OnVisibleChanged(EventArgs e) {
+        base.OnVisibleChanged(e);
+        if(Visible && model!=null) {
+            QueueRebuild();
+            Invalidate();
+        }
+    }
     protected override void OnResize(EventArgs e) {base.OnResize(e);QueueRebuild();}
     protected override void OnFontChanged(EventArgs e) {base.OnFontChanged(e);QueueRebuild();}
     int VisibleHorizontalMaximum(int verticalOffset) {

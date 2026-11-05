@@ -16,6 +16,9 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
+internal sealed partial class TaskTreeSurface {
+    internal void RecreateSurfaceForTest(){RecreateHandle();}
+}
 internal sealed partial class FloatingWindow {
     FloatingWindow(string isolatedDirectory) {
         root=isolatedDirectory;data=isolatedDirectory;url="http://127.0.0.1:1";selfTest=true;
@@ -131,6 +134,176 @@ internal sealed partial class FloatingWindow {
         }
         Console.WriteLine("PASS recovery: rediscover docking; hide/show; interrupted size/move and handle recreation; move away; current size/position; stale queued layout; bottom action-strip resize; hidden layout; work-area recovery.");
     }
+    static void AssertTaskViewport(FloatingWindow window,string step) {
+        var surface=window.taskSurface;
+        EdgeAssert(surface.Visible && surface.Parent==(window.simpleMode?(Control)window:window.content),
+            step+": task surface is hidden or reparented incorrectly");
+        EdgeAssert(surface.Width>50 && surface.Height>40 && surface.Parent.ClientRectangle.IntersectsWith(surface.Bounds),
+            step+": task surface is outside its parent's client area: "+surface.Bounds);
+        bool intersects=false;
+        foreach(TreeNode node in window.tasks.Nodes) {
+            var bounds=surface.NodeBounds(node);
+            if(surface.ClientRectangle.IntersectsWith(bounds)){intersects=true;break;}
+        }
+        EdgeAssert(intersects,step+": all rendered task rows are outside the viewport; scroll="+surface.ScrollOffset+
+            ", client="+surface.ClientSize+", extent="+surface.ContentExtent);
+        using(var bitmap=new Bitmap(surface.Width,surface.Height)) {
+            surface.DrawToBitmap(bitmap,surface.ClientRectangle);
+            bool painted=false;
+            for(int y=3;y<bitmap.Height && !painted;y+=3)for(int x=3;x<bitmap.Width;x+=3) {
+                Color pixel=bitmap.GetPixel(x,y);
+                if(pixel.R<150 && pixel.G<150 && pixel.B<150){painted=true;break;}
+            }
+            EdgeAssert(painted,step+": viewport painted no task text or checkboxes");
+        }
+    }
+    internal static void TestModeViewportRecovery(string isolatedDirectory) {
+        using(var window=new FloatingWindow(isolatedDirectory)) {
+            var area=Screen.PrimaryScreen.WorkingArea;
+            window.Location=new Point(area.Left+100,area.Top+100);
+            for(int index=2;index<=100;index++)
+                window.tasks.Nodes.Add(new TaskNode(index+". [P7] Long task for scrolling and repeated mode changes "+index+" "+new String('X',index%9*15)){Tag=(long)index});
+            window.Show();Application.DoEvents();window.edgeHideTimer.Stop();
+            window.taskSurface.Rebuild(false);
+            var now=new DateTime(2030,1,1,0,0,0,DateTimeKind.Utc);
+            var outside=new Point(area.Right+200,area.Bottom+200);
+            foreach(bool flat in new[]{false,true}) {
+                window.rendering=true;
+                window.singleLine.Checked=flat;
+                window.rendering=false;
+                window.ApplyTaskTreeLayout();
+                for(int cycle=0;cycle<6;cycle++) {
+                    window.edgeHideEnabled=false;
+                    window.SetSimpleMode(true);
+                    window.Size=new Size(cycle%2==0?230:430,cycle%2==0?180:380);
+                    Application.DoEvents();
+                    window.taskSurface.TestScrollTo(Int32.MaxValue,Int32.MaxValue);
+                    AssertTaskViewport(window,"simple bottom "+flat+"/"+cycle);
+                    window.HideSimpleModeActions();Application.DoEvents();
+                    AssertTaskViewport(window,"simple deactivate "+flat+"/"+cycle);
+                    window.ShowSimpleModeRestore();Application.DoEvents();
+                    AssertTaskViewport(window,"simple activate "+flat+"/"+cycle);
+                    window.SetSimpleMode(false);Application.DoEvents();
+                    AssertTaskViewport(window,"full after simple "+flat+"/"+cycle);
+                    window.SetSimpleMode(true);Application.DoEvents();
+                    window.WindowState=FormWindowState.Minimized;
+                    window.RestoreWindow();Application.DoEvents();
+                    AssertTaskViewport(window,"simple minimize restore "+flat+"/"+cycle);
+                    window.edgeHideEnabled=true;
+                    foreach(var edge in new[]{EdgeDock.Left,EdgeDock.Right,EdgeDock.Top,EdgeDock.Bottom}) {
+                        window.ArmEdgeHideAfterLayoutChange(edge,area);window.edgeHideTimer.Stop();
+                        window.SimulateLeaveAndHide(outside,now);
+                        window.SetSimpleMode(false);Application.DoEvents();window.edgeHideTimer.Stop();
+                        AssertTaskViewport(window,"full from hidden "+edge);
+                        window.SetSimpleMode(true);Application.DoEvents();window.edgeHideTimer.Stop();
+                        window.SimulateLeaveAndHide(outside,now);
+                        var trigger=window.EdgeTriggerBounds();
+                        int invalidations=0;
+                        var scrollBefore=window.taskSurface.ScrollOffset;
+                        long layoutsBefore=window.taskSurface.LayoutBuildCount;
+                        InvalidateEventHandler repaint=delegate{invalidations++;};
+                        window.taskSurface.Invalidated+=repaint;
+                        try {
+                            window.PollEdgeHide(trigger.Location,now.AddSeconds(2),false);
+                            EdgeAssert(invalidations>0,"EDGE_RESTORE_NO_REPAINT: hover restoration did not invalidate the retained viewport: "+edge);
+                        } finally {window.taskSurface.Invalidated-=repaint;}
+                        Application.DoEvents();window.edgeHideTimer.Stop();
+                        EdgeAssert(window.taskSurface.ScrollOffset==scrollBefore && window.taskSurface.LayoutBuildCount==layoutsBefore,
+                            "Edge restore reset scrolling or remeasured unchanged rows");
+                        AssertTaskViewport(window,"simple edge restored "+edge);
+                    }
+                    window.RestoreFromEdge(true);
+
+                    // Queue work on the old HWND immediately before recreating it.
+                    window.taskSurface.QueueRebuild();
+                    window.taskSurface.RecreateSurfaceForTest();
+                    Application.DoEvents();
+                    long measured=window.taskSurface.LayoutBuildCount;
+                    window.tasks.Nodes[0].Text+=" updated";
+                    window.taskSurface.QueueRebuild();
+                    Application.DoEvents();
+                    EdgeAssert(window.taskSurface.LayoutBuildCount>measured,"A queued rebuild was stranded after recreating the surface handle");
+                    AssertTaskViewport(window,"surface handle restored "+flat+"/"+cycle);
+
+                    window.taskSurface.QueueRebuild();
+                    window.RecreateHandle();
+                    Application.DoEvents();window.edgeHideTimer.Stop();
+                    AssertTaskViewport(window,"whole window handle restored "+flat+"/"+cycle);
+                }
+            }
+            window.Hide();
+        }
+        Console.WriteLine("PASS viewport: wrapped/flat, scroll end, repeated full/simple switches, action strip, minimize and all edges render actual rows.");
+    }
+
+    static void AssertEmptyViewport(FloatingWindow window,string reason) {
+        EdgeAssert(window.simpleEmpty.Visible && !window.taskSurface.Visible && window.simpleEmpty.Text.Contains(reason),
+            "Empty compact viewport lost its explanation: expected="+reason+", actual="+window.simpleEmpty.Text);
+        EdgeAssert(window.simpleEmpty.Bounds.Width>100 && window.simpleEmpty.Bounds.Height>=54 &&
+            window.ClientRectangle.Contains(window.simpleEmpty.Bounds),"Empty explanation lies outside the compact window");
+        if(window.simpleActions.Visible)EdgeAssert(!window.simpleEmpty.Bounds.IntersectsWith(window.simpleActions.Bounds),
+            "Restore buttons obscure the empty explanation");
+    }
+    internal static void TestEmptyModeRecovery(string isolatedDirectory) {
+        using(var window=new FloatingWindow(isolatedDirectory)) {
+            var area=Screen.PrimaryScreen.WorkingArea;
+            var outside=new Point(area.Right+200,area.Bottom+200);
+            var now=new DateTime(2030,1,1,0,0,0,DateTimeKind.Utc);
+            window.Show();Application.DoEvents();
+            window.projects.Items.Add(new Project{Id=1,Title="Empty fixture"});window.projects.SelectedIndex=0;
+            window.SetDisplayStatuses(displayStates);
+            foreach(bool flat in new[]{false,true}) {
+                window.rendering=true;window.singleLine.Checked=flat;window.rendering=false;window.ApplyTaskTreeLayout();
+                foreach(string reason in new[]{"暂无事项","搜索","优先级","显示选项","暂无项目"}) {
+                    window.edgeHideEnabled=false;
+                    window.RestoreFromEdge(true);window.SetSimpleMode(false);
+                    window.tasks.Nodes.Clear();window.search.Text="";window.status.Text="";
+                    window.visiblePriorities.Clear();window.visiblePriorities.UnionWith(new[]{0,1,2,3,4,5,6,7,8,9});
+                    window.displayTasks=window.displayOutstanding=true;
+                    window.SetDisplayStatuses(displayStates);
+                    window.projects.SelectedIndex=reason=="暂无项目"?-1:0;
+                    if(reason=="搜索")window.search.Text="no matching task";
+                    if(reason=="优先级")window.visiblePriorities.Clear();
+                    if(reason=="显示选项")window.SetDisplayStatuses(new string[0]);
+                    window.SetSimpleMode(true);window.Size=new Size(230,220);Application.DoEvents();
+                    AssertEmptyViewport(window,reason);
+                    window.HideSimpleModeActions();Application.DoEvents();AssertEmptyViewport(window,reason);
+                    window.ShowSimpleModeRestore();Application.DoEvents();AssertEmptyViewport(window,reason);
+                    foreach(var edge in new[]{EdgeDock.Left,EdgeDock.Right,EdgeDock.Top,EdgeDock.Bottom}) {
+                        window.edgeHideEnabled=true;window.ArmEdgeHideAfterLayoutChange(edge,area);window.edgeHideTimer.Stop();
+                        window.SimulateLeaveAndHide(outside,now);
+                        var trigger=window.EdgeTriggerBounds();int repaints=0;
+                        InvalidateEventHandler repaint=delegate{repaints++;};
+                        window.simpleEmpty.Invalidated+=repaint;
+                        try {
+                            window.PollEdgeHide(trigger.Location,now.AddSeconds(2),false);
+                            EdgeAssert(repaints>0,"Empty explanation did not repaint on edge recovery: "+edge);
+                        } finally {window.simpleEmpty.Invalidated-=repaint;}
+                        Application.DoEvents();window.edgeHideTimer.Stop();AssertEmptyViewport(window,reason);
+                        window.SetSimpleMode(false);Application.DoEvents();window.edgeHideTimer.Stop();
+                        EdgeAssert(!window.simpleEmpty.Visible && window.taskSurface.Visible && window.taskSurface.ContentExtent.Height<=4 &&
+                            window.taskSurface.ScrollOffset==Point.Empty,"Empty full mode retained compact overlay or stale scrolling");
+                        window.SetSimpleMode(true);Application.DoEvents();window.edgeHideTimer.Stop();AssertEmptyViewport(window,reason);
+                    }
+                    window.RestoreFromEdge(true);window.edgeHideEnabled=false;
+                    window.WindowState=FormWindowState.Minimized;window.RestoreWindow();Application.DoEvents();
+                    AssertEmptyViewport(window,reason);
+                }
+
+                // A new item arriving after the empty state must remove the explanation.
+                window.projects.SelectedIndex=0;window.search.Text="";window.SetDisplayStatuses(displayStates);
+                window.tasks.Nodes.Add(new TaskNode("1. [P7] Newly arrived task"){Tag=101L});
+                window.tasks.Invalidate();window.UpdateSimpleModeState();Application.DoEvents();
+                EdgeAssert(!window.simpleEmpty.Visible,"Empty overlay remained on top of a newly populated viewport");
+                AssertTaskViewport(window,"empty to populated");
+                window.tasks.Nodes.Clear();window.tasks.Invalidate();window.UpdateSimpleModeState();Application.DoEvents();
+                AssertEmptyViewport(window,"暂无事项");
+            }
+            window.Hide();
+        }
+        Console.WriteLine("PASS empty: empty project, no project and search/priority/status filters, all edges and mode switches, minimize, then new content and empty again.");
+    }
+
     internal static void TestEdgeLifecycle(string isolatedDirectory) {
         using(var window=new FloatingWindow(isolatedDirectory)) {
             var area=Screen.PrimaryScreen.WorkingArea;
@@ -202,7 +375,7 @@ internal static class FloatingEdgeHideTests {
         var pointer=Cursor.Position;var foreground=GetForegroundWindow();
         try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            FloatingWindow.TestEdgeGeometry();FloatingWindow.TestEdgeLifecycle(args[0]);FloatingWindow.TestEdgeRecovery(args[0]);
+            FloatingWindow.TestEdgeGeometry();FloatingWindow.TestEdgeLifecycle(args[0]);FloatingWindow.TestEdgeRecovery(args[0]);FloatingWindow.TestModeViewportRecovery(args[0]);FloatingWindow.TestEmptyModeRecovery(args[0]);
             if(Cursor.Position!=pointer || GetForegroundWindow()!=foreground)throw new Exception("The isolated test changed pointer: "+(Cursor.Position!=pointer)+"; foreground window: "+(GetForegroundWindow()!=foreground));
             Console.WriteLine("PASS isolation: cursor and foreground window unchanged; no normal startup, database, server, session or task edits.");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}

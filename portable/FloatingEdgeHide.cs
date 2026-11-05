@@ -244,12 +244,18 @@ internal sealed partial class FloatingWindow {
     }
 
     void RestoreFromEdge(bool clearDock) {
-        if(edgeHidden && !edgeRestoreBounds.IsEmpty) {
-            Bounds = edgeRestoreBounds;
+        bool restored=edgeHidden && !edgeRestoreBounds.IsEmpty;
+        if(restored) {
+            // Bounds changes can run layout handlers synchronously.
             edgeHidden = false;
+            Bounds = edgeRestoreBounds;
         }
         edgePointerLeftUtc = DateTime.MinValue;
         if(clearDock)edgeDock = EdgeDock.None;
+        if(restored) {
+            // Moving a retained HWND back on-screen does not invalidate its child viewport.
+            RefreshFloatingViewport();
+        }
     }
 
     void ResetFloatingWindowPosition() {
