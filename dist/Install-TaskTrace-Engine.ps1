@@ -44,6 +44,36 @@ function Show-InstallResult([string]$Title, [string]$Message, [bool]$IsError = $
     }
 }
 
+function New-TaskTraceStartMenuShortcut(
+    [string]$Directory,
+    [string]$ProgramsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs, [Environment+SpecialFolderOption]::DoNotVerify)
+) {
+    $directoryPath = [IO.Path]::GetFullPath($Directory)
+    $launcher = Join-Path $directoryPath 'TaskTrace.exe'
+    if (!(Test-Path -LiteralPath $launcher -PathType Leaf)) { throw ('找不到启动程序：' + $launcher) }
+    if ([string]::IsNullOrWhiteSpace($ProgramsDirectory)) { throw '无法找到当前用户的开始菜单目录。' }
+
+    [void][IO.Directory]::CreateDirectory($ProgramsDirectory)
+    $shortcutPath = Join-Path $ProgramsDirectory 'TaskTrace.lnk'
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $null
+    try {
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        if ([IO.File]::Exists($shortcutPath) -and [IO.Path]::GetFileName($shortcut.TargetPath) -ine 'TaskTrace.exe') {
+            throw '开始菜单中已有同名快捷方式，已保留。'
+        }
+        $shortcut.TargetPath = $launcher
+        $shortcut.WorkingDirectory = $directoryPath
+        $shortcut.Arguments = ''
+        $shortcut.IconLocation = $launcher + ',0'
+        $shortcut.Description = '打开 TaskTrace'
+        $shortcut.Save()
+    } finally {
+        if ($null -ne $shortcut) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shortcut) }
+        [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)
+    }
+}
+
 function Confirm-LaunchInstalledApplication([string]$Title, [string]$Message) {
     Add-Type -AssemblyName System.Windows.Forms
     return [System.Windows.Forms.MessageBox]::Show($Message, $Title, [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Information, [System.Windows.Forms.MessageBoxDefaultButton]::Button2) -eq [System.Windows.Forms.DialogResult]::Yes
@@ -933,6 +963,14 @@ try {
     }
     $stage = '安装程序文件'
     Install-ProgramFiles $buildOutputDirectory $outputDirectory $programFileNames
+    $startMenuSummary = '已添加开始菜单快捷方式。搜索 TaskTrace，右击搜索结果即可选择「固定到开始屏幕」。'
+    try {
+        New-TaskTraceStartMenuShortcut $outputDirectory
+        Write-InstallLine $startMenuSummary
+    } catch {
+        $startMenuSummary = '程序已安装，开始菜单快捷方式创建失败：' + $_.Exception.GetBaseException().Message
+        Write-InstallLine $startMenuSummary Yellow
+    }
     Write-InstallLine ''
     Write-InstallLine '免安装程序生成并安装成功。' Green
     Write-InstallLine ('程序位置：' + (Join-Path $outputDirectory 'TaskTrace.exe')) Green
@@ -944,7 +982,7 @@ try {
     Write-InstallLine '安装完成，可以关闭本窗口。' Green
     $archiveSummary = if ($copyArchive) { '同时生成安全复制包：' + [Environment]::NewLine + $copyArchive } else { $archiveWarning + [Environment]::NewLine + '程序已经安装成功；请勿使用旧复制包更新其他电脑。' }
     $resultTitle = if ($copyArchive) { 'TaskTrace：安装成功' } else { 'TaskTrace：安装成功，复制包未生成' }
-    $resultMessage = ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
+    $resultMessage = ('TaskTrace 已安装到：' + [Environment]::NewLine + $outputDirectory + [Environment]::NewLine + [Environment]::NewLine + '只覆盖了程序文件。原有配置、data、teamData、.cache、backups 和其他用户文件均已保留。' + [Environment]::NewLine + [Environment]::NewLine + $archiveSummary + [Environment]::NewLine + [Environment]::NewLine + $startMenuSummary + [Environment]::NewLine + [Environment]::NewLine + '详细记录：' + $logFile)
     $installationSucceeded = $true
 } catch {
     if ($_.Exception -is [OperationCanceledException]) {

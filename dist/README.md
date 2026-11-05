@@ -14,6 +14,8 @@
 dist\TaskTrace-local\TaskTrace.exe
 ```
 
+安装成功后，安装器会在当前用户的开始菜单添加 TaskTrace 快捷方式。按 Windows 键搜索 **TaskTrace**，右击应用结果，选择「固定到‘开始’屏幕」。这个入口也适用于资源管理器的 EXE 右键菜单没有显示固定选项的电脑。
+
 如果选择的目录中已有 TaskTrace，安装器只替换程序文件，绝不会修改 `tasktrace-settings.json`、`data`、`teamData`、`.cache`、`backups` 以及其他用户文件。构建过程在系统临时目录完成，不会把构建电脑上的测试数据带入目标目录。
 
 也可以从命令行直接指定安装目录：
