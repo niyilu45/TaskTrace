@@ -30,7 +30,7 @@ internal sealed partial class FloatingWindow {
     protected override bool ShowWithoutActivation{get{return true;}}
     protected override CreateParams CreateParams{get{var value=base.CreateParams;value.ExStyle|=0x08000000;return value;}}
     [DllImport("user32.dll")]static extern bool PrintWindow(IntPtr window,IntPtr dc,uint flags);
-    void SaveHeader(string path){using(var bitmap=new Bitmap(Width,Height))using(var graphics=Graphics.FromImage(bitmap)){var dc=graphics.GetHdc();try{if(!PrintWindow(Handle,dc,2))throw new Exception("PrintWindow failed");}finally{graphics.ReleaseHdc(dc);}if(captionSettingsWindow!=null && captionSettingsWindow.Visible){var bounds=CaptionSettingsBounds();captionSettingsWindow.DrawToBitmap(bitmap,bounds);}bitmap.Save(path);}}
+    void SaveHeader(string path){using(var bitmap=new Bitmap(Width,Height))using(var graphics=Graphics.FromImage(bitmap)){var dc=graphics.GetHdc();try{if(!PrintWindow(Handle,dc,2))throw new Exception("PrintWindow failed");}finally{graphics.ReleaseHdc(dc);}if(captionSettingsWindow!=null && captionSettingsWindow.Visible){var bounds=CaptionSettingsBounds();var native=bitmap.GetPixel(Math.Min(bitmap.Width-1,bounds.Right+Math.Max(2,bounds.Width/8)),bounds.Top+Math.Max(2,bounds.Height/6));using(var gear=new Bitmap(bounds.Width,bounds.Height)){captionSettingsWindow.Settings.DrawToBitmap(gear,new Rectangle(Point.Empty,gear.Size));if((native.ToArgb()&0xFFFFFF)!=(gear.GetPixel(3,3).ToArgb()&0xFFFFFF))throw new Exception("Gear background differs from the native minimize button: "+native+" / "+gear.GetPixel(3,3));}captionSettingsWindow.DrawToBitmap(bitmap,bounds);}bitmap.Save(path);}}
     internal static void RunHeaderTests(string directory) {
         using(var window=new FloatingWindow(directory)) {
             window.Show();Application.DoEvents();window.UpdateSearchCount(100,100);
@@ -42,6 +42,19 @@ internal sealed partial class FloatingWindow {
                 window.SaveHeader(Path.Combine(directory,"header-"+width+".png"));
                 Console.WriteLine("PASS caption and filter geometry at "+width+"px: "+bounds+"; filter="+window.searchRow.Bounds);
             }
+            int reads=window.captionBackgroundReadCount;for(int repeat=0;repeat<100;repeat++)window.SyncCaptionSettings();
+            if(window.captionBackgroundReadCount!=reads)throw new Exception("Unchanged caption repeatedly captures the window");
+            using(var palette=new CaptionSettingsWindow(delegate{})) {
+                palette.ClientSize=new Size(48,30);palette.PerformLayout();
+                foreach(var background in new[]{Color.White,Color.FromArgb(243,243,243),Color.FromArgb(32,48,64)}) {
+                    palette.ApplyCaptionBackground(background);
+                    using(var bitmap=new Bitmap(48,30)) {
+                        palette.Settings.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));
+                        if(bitmap.GetPixel(3,3).ToArgb()!=background.ToArgb())throw new Exception("Caption button kept its own themed background after the caption color changed");
+                    }
+                }
+            }
+            Console.WriteLine("PASS caption colors: gear pixels match native minimize background; light, inactive and dark palettes apply to the button; unchanged sync reuses the captured color.");
             window.search.Text="测试";Application.DoEvents();
             var clear=window.search.Parent.Controls.OfType<FloatingFilterClearButton>().Single();
             if(!clear.Visible || clear.Left<window.search.Right || !window.search.Parent.ClientRectangle.Contains(clear.Bounds))throw new Exception("Inline clear overlaps typed text or lies outside the input");
@@ -58,9 +71,12 @@ internal sealed partial class FloatingWindow {
             window.SetSimpleMode(true);Application.DoEvents();if(!window.CaptionSettingsBounds().IsEmpty || window.captionSettingsWindow.Visible)throw new Exception("Compact mode retained a caption gear");
             window.SetSimpleMode(false);Application.DoEvents();if(window.CaptionSettingsBounds().IsEmpty || !window.captionSettingsWindow.Visible)throw new Exception("Returning to full mode lost the caption gear");
             window.WindowState=FormWindowState.Minimized;Application.DoEvents();if(window.captionSettingsWindow.Visible)throw new Exception("Minimizing left a detached settings button");window.RestoreWindow();Application.DoEvents();
+            if(window.EdgeHideInteractionActive())throw new Exception("Caption settings incorrectly blocks automatic edge hiding");
+            using(var editor=new Form{ShowInTaskbar=false,Opacity=0}){editor.Show(window);Application.DoEvents();if(!window.EdgeHideInteractionActive())throw new Exception("A real editor no longer protects edge hiding");editor.Close();}
             window.edgeHideEnabled=true;var area=Screen.PrimaryScreen.WorkingArea;
             foreach(var edge in new[]{EdgeDock.Left,EdgeDock.Right,EdgeDock.Top,EdgeDock.Bottom}) {
-                window.RestoreFromEdge(true);window.ArmEdgeHideAfterLayoutChange(edge,area);window.edgeHideTimer.Stop();window.HideDockedWindow();Application.DoEvents();
+                window.RestoreFromEdge(true);window.ArmEdgeHideAfterLayoutChange(edge,area);window.edgeHideTimer.Stop();window.edgePointerLeftUtc=DateTime.MinValue;var outside=new Point(area.Right+100,area.Bottom+100);var now=DateTime.UtcNow;window.PollEdgeHide(outside,now,window.EdgeHideInteractionActive());window.PollEdgeHide(outside,now.AddMilliseconds(501),window.EdgeHideInteractionActive());Application.DoEvents();
+                if(!window.edgeHidden)throw new Exception("The production interaction guard prevented timed edge hiding");
                 if(window.captionSettingsWindow.Visible)throw new Exception("Edge hiding left a detached settings button");
                 window.RestoreFromEdge(false);Application.DoEvents();
                 var caption=window.CaptionSettingsBounds();

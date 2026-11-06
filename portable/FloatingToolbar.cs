@@ -7,13 +7,16 @@ using System.Windows.Forms;
 
 internal sealed partial class FloatingWindow {
     CaptionSettingsWindow captionSettingsWindow;
-    bool captionSettingsInitialized,captionSettingsPaintQueued;
+    bool captionSettingsInitialized,captionSettingsPaintQueued,captionBackgroundDirty=true,captionBackgroundReading;
+    Color captionBackground=SystemColors.Window;
+    int captionBackgroundReadCount;
+    [DllImport("user32.dll",EntryPoint="PrintWindow")]static extern bool PrintCaptionWindow(IntPtr window,IntPtr dc,uint flags);
     [DllImport("dwmapi.dll")]static extern int DwmGetWindowAttribute(IntPtr window,int attribute,out uint value,int size);
     void InitializeCaptionSettings() {
         captionSettingsInitialized=true;
-        VisibleChanged+=delegate {SyncCaptionSettings();};
+        VisibleChanged+=delegate {captionBackgroundDirty=true;SyncCaptionSettings();};
         EnabledChanged+=delegate {SyncCaptionSettings();};
-        HandleDestroyed+=delegate {if(captionSettingsWindow!=null)captionSettingsWindow.Hide();captionSettingsPaintQueued=false;};
+        HandleDestroyed+=delegate {if(captionSettingsWindow!=null)captionSettingsWindow.Hide();captionSettingsPaintQueued=false;captionBackgroundDirty=true;};
         Disposed+=delegate {if(captionSettingsWindow!=null)captionSettingsWindow.Dispose();};
     }
     Rectangle CaptionSettingsBounds() {
@@ -30,14 +33,45 @@ internal sealed partial class FloatingWindow {
         return new Rectangle(Width-frame-button*(2+(MinimizeBox?1:0)+(MaximizeBox?1:0)),frame,button,SystemInformation.CaptionHeight);
     }
     void RefreshCaptionSettings(int message) {
-        if(!captionSettingsInitialized || (message!=0x85 && message!=0x86 && message!=0x0C && message!=0x47 && message!=0x31E))return;
+        if(!captionSettingsInitialized || captionBackgroundReading || IsDisposed || Disposing || closing)return;
+        bool themeChanged=message==0x86 || message==0x15 || message==0x1A || message==0x31A || message==0x31E || message==0x320 || message==0x02E0;
+        if(themeChanged)captionBackgroundDirty=true;
+        if(!themeChanged && message!=0x85 && message!=0x0C && message!=0x47)return;
         SyncCaptionSettings();
         if(captionSettingsPaintQueued || !IsHandleCreated || !Visible || simpleMode || closing)return;
         captionSettingsPaintQueued=true;
         BeginInvoke(new Action(delegate {captionSettingsPaintQueued=false;SyncCaptionSettings();}));
     }
+    Color ReadCaptionBackground(Rectangle bounds) {
+        if(!captionBackgroundDirty)return captionBackground;
+        captionBackgroundReading=true;
+        try {
+            // DWM's default color is a sentinel, not the rendered active/inactive
+            // caption color. Render only a caption-height strip; owned windows are
+            // excluded, so the gear can never sample its own previous background.
+            using(var bitmap=new Bitmap(Math.Max(1,Width),Math.Max(1,bounds.Bottom)))
+            using(var graphics=Graphics.FromImage(bitmap)) {
+                graphics.Clear(Color.Magenta);IntPtr dc=graphics.GetHdc();bool printed;
+                try {captionBackgroundReadCount++;printed=PrintCaptionWindow(Handle,dc,2);}
+                finally {graphics.ReleaseHdc(dc);}
+                int x=Math.Max(0,Math.Min(bitmap.Width-1,bounds.Left+bounds.Width/2));
+                int y=Math.Max(0,Math.Min(bitmap.Height-1,bounds.Top+Math.Max(2,bounds.Height/6)));
+                Color sample=bitmap.GetPixel(x,y);
+                if(printed && (sample.R!=255 || sample.G!=0 || sample.B!=255)) {
+                    captionBackground=Color.FromArgb(sample.R,sample.G,sample.B);
+                    captionBackgroundDirty=false;return captionBackground;
+                }
+            }
+            captionBackground=SystemInformation.HighContrast?(ContainsFocus?SystemColors.ActiveCaption:SystemColors.InactiveCaption):SystemColors.Window;
+            try {
+                uint color;if(!SystemInformation.HighContrast && DwmGetWindowAttribute(Handle,35,out color,4)==0 && color!=0xFFFFFFFF && color!=0xFFFFFFFE)
+                    captionBackground=Color.FromArgb((int)(color&255),(int)((color>>8)&255),(int)((color>>16)&255));
+            }catch(DllNotFoundException){}catch(EntryPointNotFoundException){}
+            captionBackgroundDirty=false;return captionBackground;
+        }finally {captionBackgroundReading=false;}
+    }
     void SyncCaptionSettings() {
-        if(!captionSettingsInitialized || IsDisposed || closing)return;
+        if(!captionSettingsInitialized || IsDisposed || Disposing || closing || captionBackgroundReading)return;
         var bounds=CaptionSettingsBounds();
         if(bounds.IsEmpty){if(captionSettingsWindow!=null)captionSettingsWindow.Hide();return;}
         if(captionSettingsWindow==null)captionSettingsWindow=new CaptionSettingsWindow(delegate {if(!closing && !simpleMode && !busy && Enabled)ShowAutoSaveSettings();});
@@ -45,12 +79,7 @@ internal sealed partial class FloatingWindow {
         if(captionSettingsWindow.Bounds!=position)captionSettingsWindow.Bounds=position;
         captionSettingsWindow.Enabled=Enabled && !busy;
         if(captionSettingsWindow.TopMost!=TopMost)captionSettingsWindow.TopMost=TopMost;
-        Color background=SystemInformation.HighContrast?(ContainsFocus?SystemColors.ActiveCaption:SystemColors.InactiveCaption):SystemColors.Window;
-        try {
-            uint color;if(!SystemInformation.HighContrast && DwmGetWindowAttribute(Handle,35,out color,4)==0 && color!=0xFFFFFFFF && color!=0xFFFFFFFE)
-                background=Color.FromArgb((int)(color&255),(int)((color>>8)&255),(int)((color>>16)&255));
-        }catch(DllNotFoundException){}catch(EntryPointNotFoundException){}
-        if(captionSettingsWindow.BackColor!=background)captionSettingsWindow.BackColor=background;
+        captionSettingsWindow.ApplyCaptionBackground(ReadCaptionBackground(bounds));
         if(!captionSettingsWindow.Visible)captionSettingsWindow.Show(this);
     }
 }
@@ -62,6 +91,19 @@ internal sealed class CaptionSettingsWindow : Form {
         StartPosition=FormStartPosition.Manual;MinimizeBox=MaximizeBox=false;Text="TaskTrace 设置";
         Settings.Dock=DockStyle.Fill;Controls.Add(Settings);hint.SetToolTip(Settings,"设置");
         Settings.Click+=delegate {open();};
+    }
+    internal void ApplyCaptionBackground(Color background) {
+        if(BackColor!=background)BackColor=background;
+        // Set the actual button too: its default themed fill is independent of
+        // the owning form's background, especially for inactive captions.
+        Settings.UseVisualStyleBackColor=false;
+        if(Settings.BackColor!=background)Settings.BackColor=background;
+        Color overlay=background.GetBrightness()<0.5f?Color.White:Color.Black;
+        Settings.FlatAppearance.MouseOverBackColor=BlendCaptionColor(background,overlay,26);
+        Settings.FlatAppearance.MouseDownBackColor=BlendCaptionColor(background,overlay,51);
+    }
+    static Color BlendCaptionColor(Color background,Color overlay,int alpha) {
+        return Color.FromArgb((background.R*(255-alpha)+overlay.R*alpha)/255,(background.G*(255-alpha)+overlay.G*alpha)/255,(background.B*(255-alpha)+overlay.B*alpha)/255);
     }
     protected override bool ShowWithoutActivation{get{return true;}}
     protected override CreateParams CreateParams{get{var value=base.CreateParams;value.ExStyle|=0x08000080;return value;}}

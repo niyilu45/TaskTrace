@@ -188,7 +188,7 @@ internal sealed partial class FloatingWindow {
     }
 
     bool EdgeHideInteractionActive() {
-        if(!Enabled || dragging || AutoRefreshInteractionActive() || OwnedForms.Any(form=>form.Visible))return true;
+        if(!Enabled || dragging || AutoRefreshInteractionActive() || OwnedForms.Any(form=>form.Visible && !(form is CaptionSettingsWindow)))return true;
         if(projects.DroppedDown || entryPriority.DroppedDown)return true;
         // Clicking a task or a toolbar button leaves focus in the full window. That alone
         // must not pin it open after the pointer leaves; focused text entry still stays open.
