@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 internal sealed partial class FloatingWindow {
-    readonly CheckBox showCompletion=new CheckBox{Text="显示完成度",AutoSize=true,AccessibleName="显示条目完成度"};
+    readonly ToolStripMenuItem showCompletion=new ToolStripMenuItem("显示完成度"){CheckOnClick=true,AccessibleName="显示条目完成度"};
     readonly Button sortOptions=new Button{Text="排序方式",AutoSize=true,AccessibleName="设置多级排序"};
     List<string> completionSort=new List<string>{"priority:asc"};
     bool settingCompletionSort;

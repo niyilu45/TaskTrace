@@ -142,18 +142,19 @@ internal sealed partial class FloatingWindow : Form {
         LoadBounds(); LoadAutoSaveSettings(); LoadLocalAppearance(); tasks.StrikeCompleted=strikeCompleted; LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 3, 0), WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
         var full = new Button { Text = "完整界面", AutoSize = true };
-        var settingsButton = new Button { Text = "设置", AutoSize = true };
+        var settingsButton = new FloatingSettingsButton();
+        progressTip.SetToolTip(settingsButton,"设置");
         settingsButton.Click += delegate { ShowAutoSaveSettings(); };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
-        foreach(Control control in new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions }) {
+        foreach(Control control in new Control[] { full, pin, settingsButton, simple, sortOptions }) {
             control.Margin = new Padding(0, 0, 6, 6);
             // FlowLayoutPanel centers each control vertically within its wrapped row.
             control.Anchor = AnchorStyles.Left;
         }
         newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
         newTaskButton.Click+=delegate {ShowNewTaskEditor();};
-        toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple, showCompletion, sortOptions });
+        toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple, sortOptions });
         tasks.ShowNodeToolTips = false;
         tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };

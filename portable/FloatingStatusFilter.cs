@@ -29,7 +29,7 @@ internal sealed partial class FloatingWindow {
     void RefreshDisplayStatusMenu() {
         int count=SelectedDisplayStatuses().Length;
         foreach(ToolStripMenuItem item in displayStatusMenu.Items.OfType<ToolStripMenuItem>()) {
-            if(item==displayTasksItem || item==displayOutstandingItem)continue;
+            if(item==displayTasksItem || item==displayOutstandingItem || item==showCompletion)continue;
             string state=Convert.ToString(item.Tag);
             item.CheckState=state=="all"?(count==4?CheckState.Checked:count==0?CheckState.Unchecked:CheckState.Indeterminate):
                 MatchesDisplayState(state)?CheckState.Checked:CheckState.Unchecked;
@@ -65,6 +65,8 @@ internal sealed partial class FloatingWindow {
         displayStatusMenu.Items.Add(new ToolStripSeparator());
         displayStatusMenu.Items.Add(displayTasksItem);
         displayStatusMenu.Items.Add(displayOutstandingItem);
+        displayStatusMenu.Items.Add(new ToolStripSeparator());
+        displayStatusMenu.Items.Add(showCompletion);
         displayTasksItem.Click+=async delegate {await ChangeDisplayRowType(true);};
         displayOutstandingItem.Click+=async delegate {await ChangeDisplayRowType(false);};
         displayStatusMenu.Opening+=delegate(object sender,System.ComponentModel.CancelEventArgs e){e.Cancel=busy||closing;RefreshDisplayStatusMenu();};

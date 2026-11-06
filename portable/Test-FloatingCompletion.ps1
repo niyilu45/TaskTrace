@@ -19,6 +19,14 @@ internal sealed partial class FloatingWindow {
     static void AssertCompletion(bool condition,string message){if(!condition)throw new Exception(message);}
     internal void TestCompletion() {
         AssertCompletion(!showCompletion.Checked,"Completion visibility should default off");
+        InitializeDisplayStatusFilter();
+        AssertCompletion(showCompletion.Owner==displayStatusMenu && showCompletion.CheckOnClick,"Completion visibility is not in display options");
+        showCompletion.PerformClick();RefreshDisplayStatusMenu();
+        AssertCompletion(showCompletion.Checked,"Opening display options cleared the completion selection");
+        SetDisplayStatuses(new string[0]);
+        AssertCompletion(showCompletion.Checked,"Status filters unexpectedly changed completion visibility");
+        showCompletion.PerformClick();RefreshDisplayStatusMenu();
+        AssertCompletion(!showCompletion.Checked,"Display-options menu did not turn off completion visibility");
         AssertCompletion(TaskManualCompletion(new Dictionary<string,object>())==0,"New or old tasks must default to zero");
         AssertCompletion(EffectiveCompletion(40,true)==100 && EffectiveCompletion(40,false)==40,"Done overwrote manual value");
         var menu=CreateProgressMenu();AssertCompletion(menu.DropDownItems.Count==11,"Expected 11 choices");
