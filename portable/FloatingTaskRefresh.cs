@@ -11,9 +11,9 @@ using System.Windows.Forms;
 internal sealed partial class FloatingWindow {
     int taskLoadVersion;
 
-    string TaskViewContext() {
+    string TaskViewContext(bool includeQuery=true) {
         var selected=projects.SelectedItem as Project;
-        return json.Serialize(new object[]{selected==null?0:selected.Id,search.Text,page,SelectedDisplayStatuses(),singleLine.Checked,ShowTaskRows,ShowOutstandingRows,
+        return json.Serialize(new object[]{selected==null?0:selected.Id,includeQuery?search.Text:"",includeQuery?page:1,SelectedDisplayStatuses(),singleLine.Checked,ShowTaskRows,ShowOutstandingRows,
             prioritySort.Checked,completionSort.ToArray(),showCompletion.Checked,visiblePriorities.OrderBy(value=>value).ToArray(),grayCompleted,strikeCompleted,completedHideDelayMinutes});
     }
     static string OutstandingCompletionKey(long taskId,string itemId) {return taskId+":"+itemId;}
@@ -164,19 +164,20 @@ internal sealed partial class FloatingWindow {
             }));
         }
     }
-    async Task<bool> LoadTasks(bool background=false) {
+    async Task<bool> LoadTasks(bool background=false,bool filterOnly=false) {
         DateTime nextCompletionRefreshUtc=DateTime.MaxValue;
         int version=++taskLoadVersion;
         string context=TaskViewContext();
         Func<bool> current=delegate{return TaskLoadCurrent(version,context,background);};
         var oldProject=projects.SelectedItem as Project;
         long requestedProject=oldProject==null?preferredProjectId:oldProject.Id;
-        var projectList=(projectsDirty || background)?await FetchProjects():projects.Items.Cast<Project>().ToList();
+        filterOnly=filterOnly && filterDataReady && !projectsDirty && filterProjectId==requestedProject && filterSnapshotContext==TaskViewContext(false);
+        var projectList=filterOnly?projects.Items.Cast<Project>().ToList():(projectsDirty || background)?await FetchProjects():projects.Items.Cast<Project>().ToList();
         if(!current())return false;
         var project=projectList.FirstOrDefault(item=>item.Id==requestedProject)??projectList.FirstOrDefault();
-        var all=new Dictionary<long,Dictionary<string,object>>();
-        var ordered=new List<long>();
-        if(project!=null)for(int fetchPage=1;;fetchPage++) {
+        var all=filterOnly?new Dictionary<long,Dictionary<string,object>>(taskCache):new Dictionary<long,Dictionary<string,object>>();
+        var ordered=filterOnly?new List<long>(filterTaskIds):new List<long>();
+        if(project!=null && !filterOnly)for(int fetchPage=1;;fetchPage++) {
             var result=await Api("GET","/projects/"+project.Id+"/tasks?per_page=100&page="+fetchPage+"&sort_by=id&order_by=desc&expand=comment_count",null);
             if(!current())return false;
             int count=0;
@@ -186,7 +187,7 @@ internal sealed partial class FloatingWindow {
             }
             if(count==0 || fetchPage>=Convert.ToInt32(result["total_pages"]))break;
         }
-        var order=project==null?new TaskOrderState():await FetchTaskOrder(project.Id,all);
+        var order=filterOnly?filterOrder:project==null?new TaskOrderState():await FetchTaskOrder(project.Id,all);
         if(!TaskLoadCurrent(version,context,background))return false;
         Func<long,double> position=delegate(long id){double value;return order.Positions.TryGetValue(id,out value)&&value>0?value:Double.MaxValue;};
         ordered=ordered.OrderBy(position).ThenBy(id=>id).ToList();
@@ -210,23 +211,27 @@ internal sealed partial class FloatingWindow {
         var included=new HashSet<long>();var matches=new HashSet<long>();var matchingTasks=new HashSet<long>();string query=search.Text.Trim();
         // A task's own visibility must not decide whether we read its outstanding
         // list. Completed/nonmatching owners can still contain matching entries.
-        var reminderSharedLists=new Dictionary<long,SharedList>();
-        if(visiblePriorities.Count>0 && (ShowTaskRows || ShowOutstandingRows))
+        var reminderSharedLists=filterOnly?new Dictionary<long,SharedList>(filterSharedLists):new Dictionary<long,SharedList>();
+        if(!filterOnly && visiblePriorities.Count>0 && (ShowTaskRows || ShowOutstandingRows))
             await ReadSharedLists(ordered,reminderSharedLists,all,current);
         if(!current())return false;
         var sharedLists=new Dictionary<long,SharedList>();
+        var parentIds=new HashSet<long>(parents.Values);int searchableCount=0,searchMatches=0;
         foreach(long id in ordered) {
             bool titleMatch=query.Length==0 || Convert.ToString(all[id]["title"]).IndexOf(query,StringComparison.OrdinalIgnoreCase)>=0;
             bool doneMatch=Convert.ToBoolean(all[id]["done"]);
-            bool taskMatch=ShowTaskRows && !HideCompletedTask(id,doneMatch,ref nextCompletionRefreshUtc) && (doneMatch || MatchesDisplayState(TaskStatusValue(all[id]))) && titleMatch && MatchesPriority(all[id]);
+            bool taskEligible=ShowTaskRows && !HideCompletedTask(id,doneMatch,ref nextCompletionRefreshUtc) && (doneMatch || MatchesDisplayState(TaskStatusValue(all[id]))) && MatchesPriority(all[id]);
+            bool taskMatch=taskEligible && titleMatch;
+            if(taskEligible && (!singleLine.Checked || !parentIds.Contains(id))){searchableCount++;if(titleMatch)searchMatches++;}
             if(taskMatch)matchingTasks.Add(id);
             SharedList saved;
             if(!reminderSharedLists.TryGetValue(id,out saved))saved=new SharedList();
             var filtered=new SharedList{CommentId=saved.CommentId};
             if(ShowOutstandingRows)foreach(var item in saved.Items) {
                 if(HideCompletedOutstanding(id,item,ref nextCompletionRefreshUtc) || !MatchesPriority(item))continue;
+                searchableCount++;
                 if(!titleMatch && OutstandingText(item.Html,item.NoteHtml,url).IndexOf(query,StringComparison.OrdinalIgnoreCase)<0)continue;
-                filtered.Items.Add(item);
+                searchMatches++;filtered.Items.Add(item);
             }
             sharedLists[id]=filtered;
             if(!taskMatch && filtered.Items.Count==0)continue;
@@ -267,6 +272,7 @@ internal sealed partial class FloatingWindow {
         string selectedKey=RefreshNodeKey(tasks.SelectedNode),topKey=RefreshNodeKey(tasks.TopNode);
         long selectedId=SelectedTaskId();
         taskCache=all;taskParents=parents;taskOrder=order.Positions;taskViewId=order.ViewId;
+        if(!filterOnly){filterDataReady=true;filterProjectId=project==null?0:project.Id;filterTaskIds=new List<long>(ordered);filterOrder=order;filterSharedLists=reminderSharedLists;}
         if(projectChanged) {
             rendering=true;projects.BeginUpdate();
             try {
@@ -275,6 +281,7 @@ internal sealed partial class FloatingWindow {
             }finally{projects.EndUpdate();rendering=false;}
         }
         projectsDirty=false;
+        if(!filterOnly)filterSnapshotContext=TaskViewContext(false);
         if(treeChanged) {
             InvalidateSimpleOutstanding();hoverTimer.Stop();hoverNode=null;progressTip.Hide(tasks);
             rendering=true;tasks.BeginUpdate();
@@ -290,13 +297,14 @@ internal sealed partial class FloatingWindow {
                 var selected=FindRefreshNode(selectedKey);if(selected!=null)tasks.SelectedNode=selected;
             }finally{tasks.EndUpdate();rendering=false;}
         }
+        UpdateSearchCount(searchMatches,searchableCount);
         int previousTotal=total;total=groupCount;
         int visibleCount=singleLine.Checked?visibleRoots.Length:matches.Count;
-        string nextStatus=project==null?"请先在完整界面建立项目。":visibleCount==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可调整搜索或显示选项。"):
+        string nextStatus=project==null?"请先在网页界面建立项目。":visibleCount==0?(PriorityFilterActive?PriorityFilterEmptyMessage:"没有匹配事项，可调整搜索或显示选项。"):
             singleLine.Checked?visibleCount+" 项":visibleCount+" 项 · "+total+" 个任务组";
         if(!background || treeChanged || projectChanged || previousTotal!=total || status.Text!=nextStatus) {
             if(!background || treeChanged || projectChanged)status.ForeColor=ForeColor;
-            if(status.Text!=nextStatus)status.Text=nextStatus;
+            SetTaskSummary(nextStatus);
             if(!background || treeChanged || projectChanged)UpdateSimpleModeState();
         }
         InvalidateSimpleOutstanding();

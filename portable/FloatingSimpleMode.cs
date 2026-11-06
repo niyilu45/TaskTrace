@@ -386,7 +386,7 @@ internal sealed partial class FloatingWindow {
             Action assertToolbar=delegate {
                 PerformLayout();toolbar.PerformLayout();
                 var controls=toolbar.Controls.Cast<Control>().Where(control=>control.Visible).ToArray();
-                if(!controls.Select(control=>String.IsNullOrEmpty(control.Text)?control.AccessibleName:control.Text).SequenceEqual(new[]{"完整界面","置顶","设置","简洁模式","排序方式"}))throw new Exception("Full toolbar controls are missing");
+                if(!controls.Select(control=>String.IsNullOrEmpty(control.Text)?control.AccessibleName:control.Text).SequenceEqual(new[]{"网页界面","简洁模式","排序方式"}))throw new Exception("Full toolbar controls are missing");
                 foreach(var first in controls)foreach(var second in controls)
                     if(first.Top<second.Bottom && second.Top<first.Bottom && Math.Abs((first.Top+first.Bottom)-(second.Top+second.Bottom))>2)
                         throw new Exception("Full toolbar controls are not vertically centered within their row");

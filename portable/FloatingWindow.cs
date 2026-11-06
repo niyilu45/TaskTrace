@@ -135,26 +135,23 @@ internal sealed partial class FloatingWindow : Form {
         http.Timeout = TimeSpan.FromSeconds(10);
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         tray.Icon = Icon; tray.Visible = true;
-        ShowInTaskbar = false; Text = "TaskTrace · 悬浮事项"; Font = AdaptiveUiFont();
+        ShowInTaskbar = false; Text = "TaskTrace"; Font = AdaptiveUiFont();
         BackColor = Color.FromArgb(247, 249, 252); ForeColor = Color.FromArgb(31, 41, 55);
         Size = new Size(400, 560); MinimumSize = new Size(350, 420); TopMost = true; StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea; Location = new Point(area.Right - Width - 24, area.Top + 60);
         LoadBounds(); LoadAutoSaveSettings(); LoadLocalAppearance(); tasks.StrikeCompleted=strikeCompleted; LoadTreePreferences(); status.Click += delegate { ShowErrorDetails(); }; KeyPreview = true;
         toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(9, 6, 3, 0), WrapContents = true, FlowDirection = FlowDirection.LeftToRight };
-        var full = new Button { Text = "完整界面", AutoSize = true };
-        var settingsButton = new FloatingSettingsButton();
-        progressTip.SetToolTip(settingsButton,"设置");
-        settingsButton.Click += delegate { ShowAutoSaveSettings(); };
+        var full = new Button { Text = "网页界面", AutoSize = true };
         var simple = new Button { Text = "简洁模式", AutoSize = true };
         simple.Click += delegate { SetSimpleMode(true); };
-        foreach(Control control in new Control[] { full, pin, settingsButton, simple, sortOptions }) {
+        foreach(Control control in new Control[] { full, simple, sortOptions }) {
             control.Margin = new Padding(0, 0, 6, 6);
             // FlowLayoutPanel centers each control vertically within its wrapped row.
             control.Anchor = AnchorStyles.Left;
         }
         newTaskButton.BackColor=Blue;newTaskButton.ForeColor=Color.White;newTaskButton.FlatStyle=FlatStyle.Flat;
         newTaskButton.Click+=delegate {ShowNewTaskEditor();};
-        toolbar.Controls.AddRange(new Control[] { full, pin, settingsButton, simple, sortOptions });
+        toolbar.Controls.AddRange(new Control[] { full, simple, sortOptions });
         tasks.ShowNodeToolTips = false;
         tasks.MouseMove += delegate(object sender, MouseEventArgs e) { var node = tasks.GetNodeAt(e.Location); if(!dragging && node != hoverNode) { hoverTimer.Stop(); progressTip.Hide(tasks); hoverNode = node; if(node != null && node.Tag is long) hoverTimer.Start(); } };
         tasks.MouseLeave += delegate { hoverTimer.Stop(); hoverNode = null; progressTip.Hide(tasks); };
@@ -174,10 +171,10 @@ internal sealed partial class FloatingWindow : Form {
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        content.RowStyles.Add(new RowStyle(SizeType.AutoSize, 0));
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         projectRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         projectRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
@@ -197,7 +194,7 @@ internal sealed partial class FloatingWindow : Form {
         AddBulkButton(addRow,async delegate{await ShowBulkRootTasks();});
         addRow.Visible=false;
         content.Controls.Add(addRow, 0, 1);
-        searchRow=Row(search, "查找事项", "搜索", async delegate { page = 1; await Reload(); });
+        searchRow=CreateFilterRow();
         content.Controls.Add(searchRow, 0, 2);
         tasks.Font=Font;taskSurface.Font=Font;tasks.BorderStyle = BorderStyle.FixedSingle; InitializeInteractions(); InitializeSimpleOutstanding(); InitializeTaskSurface(); ApplyTaskTreeLayout();
         content.Controls.Add(taskSurface, 0, 3);
@@ -209,12 +206,12 @@ internal sealed partial class FloatingWindow : Form {
         foreach(Control action in new Control[] {progressButton,newTaskButton,childrenButton,fullAddOutstanding}) {action.Height=27;action.Margin=new Padding(0,3,6,3);}
         fullAddOutstanding.Margin=new Padding(0,3,0,3);
         bottomActions.Controls.AddRange(new Control[] { progressButton, newTaskButton, childrenButton, fullAddOutstanding }); content.Controls.Add(bottomActions, 0, 4);
-        content.Controls.Add(status, 0, 5); Controls.Add(content); Controls.Add(toolbar);
+        content.Controls.Add(status, 0, 5); InitializeStatusRow(); Controls.Add(content); Controls.Add(toolbar);
         full.Click += async delegate { await OpenFull(); };
-        pin.CheckedChanged += delegate { TopMost = pin.Checked; };
+        pin.CheckedChanged += delegate { TopMost = pin.Checked; SaveBounds(); };
         projects.SelectedIndexChanged += async delegate { if (!rendering) { page = 1; SaveBounds(); await Reload(); } };
         entry.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; await AddTask(); } };
-        search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await Reload(); } };
+        search.KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; page = 1; await ApplySearchFilter(); } };
         KeyDown += async delegate(object sender, KeyEventArgs e) { if(e.KeyCode == Keys.F5) { e.Handled = true; projectsDirty = true; await Reload(); } };
         tasks.CompletionClicked = delegate(TreeNode node) {
             if(rendering || busy || closing || completionPending || node==null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)) || node.TreeView!=tasks)return;
@@ -242,7 +239,7 @@ internal sealed partial class FloatingWindow : Form {
         tray.DoubleClick += delegate { RestoreWindow(); };
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示悬浮窗", null, delegate { RestoreWindow(); });
-        menu.Items.Add("完整界面", null, async delegate { await OpenFull(); });
+        menu.Items.Add("网页界面", null, async delegate { await OpenFull(); });
         InitializeEdgeHide(menu);
         InitializeStartWithWindows(menu);
         var quickAlarms = new FloatingQuickAlarms(data, Font, Icon);
@@ -257,6 +254,7 @@ internal sealed partial class FloatingWindow : Form {
         InitializeUpdates(menu);
         menu.Items.Add("退出 TaskTrace", null, delegate { allowExit = true; Close(); }); tray.ContextMenuStrip = menu;
         InitializeSimpleModeRecovery(menu);
+        InitializeCaptionSettings();
         InitializeAutoRefresh();
         InitializeReminders();
         Shown += async delegate { ApplyDpiMetrics(); await Reload();
@@ -287,6 +285,7 @@ internal sealed partial class FloatingWindow : Form {
         }
         if(message.Msg == 0x02E0 && IsHandleCreated && !closing) BeginInvoke(new Action(ApplyDpiMetrics));
         HandleEdgeHideWindowMessage(message.Msg);
+        RefreshCaptionSettings(message.Msg);
     }
     void ApplyDpiMetrics() {
         if(IsDisposed || !IsHandleCreated)return;
@@ -585,10 +584,10 @@ internal sealed partial class FloatingWindow : Form {
             }); } catch { }
         });
     }
-    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; taskSurface.Enabled=!value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); } }
+    void SetBusy(bool value) { busy = value; if(!closing) { content.Enabled = !value; tasks.Enabled = !value; taskSurface.Enabled=!value; toolbar.Enabled = !value; UpdateUndoControls(); UpdateSimpleModeState(); SyncCaptionSettings(); } }
     async Task Reload() {
         if(busy || closing) return; SetBusy(true);
-        try { status.ForeColor = ForeColor; status.Text = "正在同步…"; await LoadTasks(); await RefreshUndo(); }
+        try { status.ForeColor = ForeColor; SetTaskSummary("正在同步…"); await LoadTasks(); await RefreshUndo(); }
         catch(Exception e) { Error(e); }
         finally { SetBusy(false); }
     }
@@ -1194,6 +1193,7 @@ internal sealed partial class FloatingWindow : Form {
     void ShowAutoSaveSettings(bool verify=false) {
         using(var settings = DpiDialog(new Form { Text = "设置", ClientSize = new Size(470, 625), FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, StartPosition = FormStartPosition.CenterParent, Font = Font, TopMost = TopMost, ShowInTaskbar = false })) {
             var enabled = new CheckBox { Text = "启用每日进展自动保存", Checked = autoSaveEnabled, Location = new Point(18, 18), AutoSize = true };
+            var keepOnTop = new CheckBox { Text = "悬浮窗置顶", Checked = pin.Checked, Location = new Point(320, 18), AutoSize = true, AccessibleName = "悬浮窗置顶" };
             var label = new Label { Text = "检查间隔（秒）", Location = new Point(18, 55), AutoSize = true };
             var seconds = new NumericUpDown { Minimum = 5, Maximum = 3600, Value = autoSaveSeconds, Location = new Point(155, 52), Width = 100 };
             var help = new Label { Text = "仅内容变化时保存；编辑期间更新同一条进展。\n设置保存在本机目录，网页设置需在网页中配置。", Location = new Point(18, 92), Size = new Size(430, 48) };
@@ -1220,6 +1220,7 @@ internal sealed partial class FloatingWindow : Form {
                     File.WriteAllText(Path.Combine(data, "autosave.json"), json.Serialize(new { enabled = enabled.Checked, seconds = (int)seconds.Value, default_priority = (int)priority.Value, completed_gray = completedGray.Checked, completed_strikeout = completedStrike.Checked, completed_hide_delay_minutes = (int)hideDelay.Value }));
                     autoSaveEnabled = enabled.Checked; autoSaveSeconds = (int)seconds.Value;defaultPriority=(int)priority.Value;entryPriority.SelectedIndex=defaultPriority;
                     grayCompleted=completedGray.Checked;strikeCompleted=completedStrike.Checked;completedHideDelayMinutes=(int)hideDelay.Value;tasks.StrikeCompleted=strikeCompleted;
+                    pin.Checked=keepOnTop.Checked;
                     SetStartWithWindows(startWithWindows.Checked);
                     ChangePrioritySelection(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
                     await Reload();
@@ -1232,10 +1233,11 @@ internal sealed partial class FloatingWindow : Form {
                 try { Process.Start(new ProcessStartInfo("powershell.exe", "-NoProfile -STA -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "Configure-TaskTrace.ps1") + "\"") { UseShellExecute = false, CreateNoWindow = true }); }
                 catch(Exception e) { MessageBox.Show(settings, e.Message); }
             };
-            settings.Controls.AddRange(new Control[] { enabled, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, completedLabel, completedGray, completedStrike, hideDelayLabel, hideDelay, hideDelayUnit, apply, startWithWindows, dataLabel, chooseData });
+            settings.Controls.AddRange(new Control[] { enabled, keepOnTop, label, seconds, help, priorityLabel, priority, visibleLabel, visibleChoices, selectAll, selectNone, completedLabel, completedGray, completedStrike, hideDelayLabel, hideDelay, hideDelayUnit, apply, startWithWindows, dataLabel, chooseData });
             Exception verificationError=null;
             if(verify)settings.Shown+=delegate {
                 try {
+                    if(keepOnTop.Checked!=pin.Checked || !settings.ClientRectangle.Contains(keepOnTop.Bounds))throw new Exception("Topmost setting is stale or clipped");
                     var checkedPriorities=new HashSet<int>(Enumerable.Range(0,10).Where(index=>visibleChoices.GetItemChecked(index)));
                     if((int)priority.Value!=defaultPriority || priority.AccessibleName!="默认新增任务优先级" || !priorityLabel.Text.Contains("0 最高，9 最低"))throw new Exception("Default priority setting is missing or incorrect");
                     if(visibleChoices.Items.Count!=10 || visibleChoices.AccessibleName!="悬浮窗展示优先级" || !checkedPriorities.SetEquals(visiblePriorities) || visibleChoices.Bottom>settings.ClientSize.Height || chooseData.Bottom>settings.ClientSize.Height)throw new Exception("Visible priority settings are missing, stale, or clipped");
@@ -1254,6 +1256,7 @@ internal sealed partial class FloatingWindow : Form {
     void LoadBounds() {
         try {
             var saved = ReadObject(File.ReadAllText(Path.Combine(data, "floating-window.json")));
+            if(saved.ContainsKey("topMost")){pin.Checked=Convert.ToBoolean(saved["topMost"]);TopMost=pin.Checked;}
             if(saved.ContainsKey("projectId")) preferredProjectId = Convert.ToInt64(saved["projectId"]);
             if(saved.ContainsKey("showCompleted")) showCompleted.Checked = Convert.ToBoolean(saved["showCompleted"]);
             if(saved.ContainsKey("displayStatuses") && saved["displayStatuses"] is IEnumerable) SetDisplayStatuses(((IEnumerable)saved["displayStatuses"]).Cast<object>().Select(Convert.ToString));
@@ -1268,7 +1271,7 @@ internal sealed partial class FloatingWindow : Form {
         } catch { }
     }
     void SaveBounds() {
-        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, showCompleted = showCompleted.Checked, displayStatuses = SelectedDisplayStatuses(), displayTasks, displayOutstanding, singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
+        try { var selectedProject = projects.SelectedItem as Project; if(selectedProject != null) preferredProjectId = selectedProject.Id; var b = simpleMode ? fullBounds : (edgeHidden ? edgeRestoreBounds : (WindowState == FormWindowState.Normal ? Bounds : RestoreBounds)); File.WriteAllText(Path.Combine(data, "floating-window.json"), json.Serialize(new { x = b.X, y = b.Y, width = b.Width, height = collapsed ? expandedHeight : b.Height, topMost = pin.Checked, showCompleted = showCompleted.Checked, displayStatuses = SelectedDisplayStatuses(), displayTasks, displayOutstanding, singleLine = singleLine.Checked, edgeHide = edgeHideEnabled, projectId = preferredProjectId })); } catch { }
     }
     async Task TestFlow() {
         try {
@@ -1301,7 +1304,7 @@ internal sealed partial class FloatingWindow : Form {
             TestEdgeHideBehavior();
             if(newTaskButton.Parent!=bottomActions || !newTaskButton.Visible || addRow.Visible)throw new Exception("Bottom new-item button entry point missing");
             newTaskButton.PerformClick();
-            if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || entryPriority.SelectedIndex!=defaultPriority || entryPriority.AccessibleDescription!="0 最高，9 最低" || search.AccessibleDescription!="查找事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !entryPriority.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="优先级") || !search.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="查找事项")) throw new Exception("Labeled task fields or default priority missing");
+            if(!addRow.Visible || entry.AccessibleDescription!="新事项名称" || entryPriority.SelectedIndex!=defaultPriority || entryPriority.AccessibleDescription!="0 最高，9 最低" || search.AccessibleDescription!="筛选事项" || !entry.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="新事项名称") || !entryPriority.Parent.Controls.OfType<Label>().Any(label=>label.Visible && label.Text=="优先级") || (searchCountLabel==null || !searchCountLabel.Text.EndsWith("项"))) throw new Exception("Labeled task fields or default priority missing");
             TestResponsiveFullLayout();ShowNewTaskEditor();
             entry.Text = "悬浮窗验收 " + DateTime.Now.Ticks; string createdTitle = entry.Text; await AddTask();
             if(addRow.Visible)throw new Exception("New task editor stayed open after creation");

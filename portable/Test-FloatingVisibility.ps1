@@ -53,17 +53,20 @@ internal sealed partial class FloatingWindow {
         ShowInTaskbar=false;Opacity=0;ClientSize=new Size(450,300);
         Controls.Add(taskSurface);taskSurface.Bind(tasks);showCompleted.Checked=true;InitializeDisplayStatusFilter();
         toolbar=new FlowLayoutPanel();Disposed+=delegate {toolbar.Dispose();};
+        searchRow=CreateFilterRow();
+        for(int row=0;row<6;row++)content.RowStyles.Add(new RowStyle(SizeType.Absolute,0));
+        InitializeStatusRow();
     }
     bool HasVisibleLeaf(string id) {return OutstandingDescendants(tasks.Nodes).Any(node=>node.Tag is OutstandingLeaf && ((OutstandingLeaf)node.Tag).Id==id);}
     static bool AncestorsExpanded(TreeNode node) {
         for(var parent=node.Parent;parent!=null;parent=parent.Parent)if(!parent.IsExpanded)return false;
         return true;
     }
-    async Task ReadVisibility(bool background=false) {
+    async Task ReadVisibility(bool background=false,bool filterOnly=false) {
         // The isolated HTTP handler completes synchronously. Wait for a physical
         // user mouse gesture to finish before testing the production idle guard.
         if(background)for(int attempt=0;AutoRefreshInteractionActive() && attempt<250;attempt++)await Task.Delay(20);
-        if(!await LoadTasks(background))throw new Exception("Current load was cancelled: visible="+Visible+
+        if(!await LoadTasks(background,filterOnly))throw new Exception("Current load was cancelled: visible="+Visible+
             ", busy="+busy+", rendering="+rendering+", dragging="+dragging+", interacting="+AutoRefreshInteractionActive());
         // Production keeps the native TreeView off-screen. Do not explicitly rebuild here:
         // a completed data load must publish usable rows to the actual content surface.
@@ -76,6 +79,33 @@ internal sealed partial class FloatingWindow {
     void ExpectTaskIds(params long[] expected) {
         var actual=SimpleTaskNodes(tasks.Nodes).Select(node=>(long)node.Tag).OrderBy(id=>id);
         if(!actual.SequenceEqual(expected.OrderBy(id=>id)))throw new Exception("Task ancestor/sibling filtering failed: "+String.Join(",",actual));
+    }
+    internal async Task TestSearchCounters(VisibilityApi api) {
+        SetDisplayStatuses(displayStates);visiblePriorities.Clear();visiblePriorities.UnionWith(Enumerable.Range(0,10));
+        foreach(bool flat in new[]{false,true}) {
+            rendering=true;singleLine.Checked=flat;rendering=false;ApplyTaskTreeLayout();search.Text="";
+            await ReadVisibility();int count=searchTotalCount;
+            if(count<=210 || searchMatchedCount!=count || searchCountLabel.Text!=count+"项")
+                throw new Exception("Search total omitted tasks or outstanding items");
+            int reads=api.TaskPages+api.CommentReads;
+            search.Text="Needle";await ReadVisibility(false,true);
+            if(searchMatchedCount!=1 || searchTotalCount!=count || searchCountLabel.Text!="1项")
+                throw new Exception("Search counter counts contextual ancestors or changes the unfiltered total");
+            search.Text="not-a-real-task-or-item";await ReadVisibility(false,true);
+            if(searchMatchedCount!=0 || searchTotalCount!=count)throw new Exception("Zero matches lost the project total");
+            search.Text="";await ReadVisibility(false,true);
+            if(api.TaskPages+api.CommentReads!=reads)throw new Exception("Typing a filter reloaded server data instead of using the current snapshot");
+            if(searchMatchedCount!=count || content.RowStyles[5].Height!=0 || status.Visible)
+                throw new Exception("Normal search result retained a bottom status row");
+        }
+        status.Text="操作失败，点击查看错误";
+        if(!status.Visible || content.RowStyles[5].Height<=0)throw new Exception("Removing the count row hid actionable errors");
+        SetTaskSummary("正在同步…");
+        if(status.Visible || content.RowStyles[5].Height!=0)throw new Exception("Loading recreated the count row");
+        pin.Checked=false;SaveBounds();pin.Checked=true;LoadBounds();
+        if(pin.Checked || TopMost)throw new Exception("Topmost setting did not survive reload");
+        pin.Checked=true;rendering=true;singleLine.Checked=false;rendering=false;ApplyTaskTreeLayout();
+        Console.WriteLine("PASS search counters: tasks and outstanding entries, stable pre-search total, matching ancestors excluded, tree/flat modes, zero/cleared search, hidden count row and retained errors; local topmost preference reload.");
     }
     internal async Task TestNewChildrenAndLegacyLists(VisibilityApi api) {
         visiblePriorities.Clear();visiblePriorities.UnionWith(Enumerable.Range(0,10));showCompleted.Checked=true;search.Text="";
@@ -299,7 +329,7 @@ internal static class FloatingVisibilityTests {
     [STAThread] static int Main(){
         Application.EnableVisualStyles();var api=new VisibilityApi();int result=0;
         using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-            app.Shown+=async delegate{try{await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestRowTypeFilters();await app.TestNewChildrenAndLegacyLists(api);await app.TestEmptyDataTransitions(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
+            app.Shown+=async delegate{try{await app.TestSearchCounters(api);api.TaskPages=api.CommentReads=0;await app.TestVisibility(api);await app.TestStatusFilters(api);await app.TestRowTypeFilters();await app.TestNewChildrenAndLegacyLists(api);await app.TestEmptyDataTransitions(api);}catch(Exception ex){Console.Error.WriteLine(ex);result=1;}finally{app.Close();}};
             Application.Run(app);
         }
         return result;

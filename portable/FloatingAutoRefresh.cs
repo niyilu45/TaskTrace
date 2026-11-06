@@ -147,7 +147,7 @@ internal sealed partial class FloatingWindow {
         string message=count==0?"当前没有需要同步的协作任务。":errors.Count>0
             ?"同步未全部完成："+errors.Count+" / "+count+" 项协作任务同步失败。\r\n\r\n"+String.Join("\r\n\r\n",errors)
             :"本机与共享目录同步完成，共 "+count+" 项协作任务。";
-        if(conflicts>0)message+="\r\n\r\n有 "+conflicts+" 项冲突待处理，请打开完整界面的通知查看差异。";
+        if(conflicts>0)message+="\r\n\r\n有 "+conflicts+" 项冲突待处理，请打开网页界面的通知查看差异。";
         return message+"\r\n\r\n同步范围为本机所有协作任务的已保存内容；其他成员也需同步才能收到最新内容。";
     }
 
