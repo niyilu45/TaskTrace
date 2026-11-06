@@ -277,6 +277,7 @@ internal sealed partial class FloatingWindow {
         if(top!=null && top.TreeView==tasks)tasks.TopNode=top;
         tasks.Invalidate();SaveSimpleMode();
         RearmEdgeHideAfterLayoutChange(modeSwitchEdge,modeSwitchArea);
+        SyncCaptionSettings();
     }
     void SaveSimpleMode() {
         try {File.WriteAllText(Path.Combine(data,"simple-window.json"),json.Serialize(new {enabled=simpleMode,width=simpleSize.Width,height=simpleSize.Height}));}catch{}

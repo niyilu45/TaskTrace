@@ -20,7 +20,7 @@ internal sealed partial class FloatingWindow {
         Disposed+=delegate {if(captionSettingsWindow!=null)captionSettingsWindow.Dispose();};
     }
     Rectangle CaptionSettingsBounds() {
-        if(simpleMode || !IsHandleCreated || !Visible || edgeHidden || WindowState==FormWindowState.Minimized)return Rectangle.Empty;
+        if(simpleMode || !Enabled || !IsHandleCreated || !Visible || edgeHidden || WindowState==FormWindowState.Minimized)return Rectangle.Empty;
         EdgeFrameRect buttons;
         try {
             if(DwmGetWindowAttribute(Handle,5,out buttons,Marshal.SizeOf(typeof(EdgeFrameRect)))==0 && buttons.Right>buttons.Left && buttons.Bottom>buttons.Top) {
@@ -38,9 +38,19 @@ internal sealed partial class FloatingWindow {
         if(themeChanged)captionBackgroundDirty=true;
         if(!themeChanged && message!=0x85 && message!=0x0C && message!=0x47)return;
         SyncCaptionSettings();
-        if(captionSettingsPaintQueued || !IsHandleCreated || !Visible || simpleMode || closing)return;
+    }
+    void QueueCaptionBackgroundRefresh() {
+        if(!captionBackgroundDirty || captionSettingsPaintQueued || !IsHandleCreated || !Visible || simpleMode || closing || Disposing || IsDisposed)return;
         captionSettingsPaintQueued=true;
-        BeginInvoke(new Action(delegate {captionSettingsPaintQueued=false;SyncCaptionSettings();}));
+        BeginInvoke(new Action(delegate {
+            captionSettingsPaintQueued=false;
+            if(!IsHandleCreated || !Visible || simpleMode || simpleLayout || RecreatingHandle || closing || Disposing || IsDisposed)return;
+            var bounds=CaptionSettingsBounds();if(bounds.IsEmpty)return;
+            // PrintWindow can dispatch native messages. Only capture after the
+            // initiating caption/layout message has fully unwound.
+            captionSettingsWindow.ApplyCaptionBackground(ReadCaptionBackground(bounds));
+            SyncCaptionSettings();
+        }));
     }
     Color ReadCaptionBackground(Rectangle bounds) {
         if(!captionBackgroundDirty)return captionBackground;
@@ -72,15 +82,19 @@ internal sealed partial class FloatingWindow {
     }
     void SyncCaptionSettings() {
         if(!captionSettingsInitialized || IsDisposed || Disposing || closing || captionBackgroundReading)return;
-        var bounds=CaptionSettingsBounds();
+        var bounds=(simpleLayout || RecreatingHandle || FormBorderStyle==FormBorderStyle.None)?Rectangle.Empty:CaptionSettingsBounds();
         if(bounds.IsEmpty){if(captionSettingsWindow!=null)captionSettingsWindow.Hide();return;}
         if(captionSettingsWindow==null)captionSettingsWindow=new CaptionSettingsWindow(delegate {if(!closing && !simpleMode && !busy && Enabled)ShowAutoSaveSettings();});
         var position=new Rectangle(Left+bounds.Left,Top+bounds.Top,bounds.Width,bounds.Height);
         if(captionSettingsWindow.Bounds!=position)captionSettingsWindow.Bounds=position;
-        captionSettingsWindow.Enabled=Enabled && !busy;
+        // A disabled Form cannot be shown. Keep the caption host enabled and
+        // disable only its action while the workspace is busy.
+        captionSettingsWindow.Enabled=true;
+        captionSettingsWindow.Settings.Enabled=!busy;
         if(captionSettingsWindow.TopMost!=TopMost)captionSettingsWindow.TopMost=TopMost;
-        captionSettingsWindow.ApplyCaptionBackground(ReadCaptionBackground(bounds));
+        captionSettingsWindow.ApplyCaptionBackground(captionBackground);
         if(!captionSettingsWindow.Visible)captionSettingsWindow.Show(this);
+        QueueCaptionBackgroundRefresh();
     }
 }
 internal sealed class CaptionSettingsWindow : Form {

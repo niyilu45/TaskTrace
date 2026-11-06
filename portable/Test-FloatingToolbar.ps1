@@ -70,6 +70,9 @@ internal sealed partial class FloatingWindow {
             }
             window.SetSimpleMode(true);Application.DoEvents();if(!window.CaptionSettingsBounds().IsEmpty || window.captionSettingsWindow.Visible)throw new Exception("Compact mode retained a caption gear");
             window.SetSimpleMode(false);Application.DoEvents();if(window.CaptionSettingsBounds().IsEmpty || !window.captionSettingsWindow.Visible)throw new Exception("Returning to full mode lost the caption gear");
+            window.SetSimpleMode(true);window.SetBusy(true);window.SetSimpleMode(false);Application.DoEvents();
+            if(!window.captionSettingsWindow.Visible || window.captionSettingsWindow.Settings.Enabled)throw new Exception("Busy mode switch did not show a disabled caption action");
+            window.SetBusy(false);if(!window.captionSettingsWindow.Settings.Enabled)throw new Exception("Caption action remained disabled after saving");
             window.WindowState=FormWindowState.Minimized;Application.DoEvents();if(window.captionSettingsWindow.Visible)throw new Exception("Minimizing left a detached settings button");window.RestoreWindow();Application.DoEvents();
             if(window.EdgeHideInteractionActive())throw new Exception("Caption settings incorrectly blocks automatic edge hiding");
             using(var editor=new Form{ShowInTaskbar=false,Opacity=0}){editor.Show(window);Application.DoEvents();if(!window.EdgeHideInteractionActive())throw new Exception("A real editor no longer protects edge hiding");editor.Close();}
