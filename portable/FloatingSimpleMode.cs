@@ -41,7 +41,8 @@ internal sealed partial class FloatingWindow {
     readonly Button fullAddOutstanding = new Button {Text="新遗留", AutoSize=true, AccessibleName="为选中任务添加遗留事项"};
     Action<long> addOutstandingRequested;
     ToolStripMenuItem trayRestoreFull, treeRestoreFull;
-    bool simpleLayout, simpleActionsShown, simpleWindowWasMinimized, simpleRestoreLayoutQueued;
+    bool simpleLayout, simpleActionsShown, simpleRestoreNeeded, simpleRestoreLayoutQueued;
+    bool fullMaximizeBox=true;
     int simpleViewportHeight=200, simpleActionsHeight;
     const int SimpleEdge=7, SimpleActionGap=6, SimpleMinimumViewport=54;
 
@@ -141,8 +142,8 @@ internal sealed partial class FloatingWindow {
     }
     void SimpleModeResized() {
         if(!simpleMode || simpleLayout)return;
-        if(WindowState!=FormWindowState.Normal){simpleWindowWasMinimized=true;return;}
-        if(simpleWindowWasMinimized){QueueSimpleRestoreLayout();return;}
+        if(WindowState!=FormWindowState.Normal){simpleRestoreNeeded=true;if(WindowState==FormWindowState.Maximized)QueueSimpleRestoreLayout();return;}
+        if(simpleRestoreNeeded){QueueSimpleRestoreLayout();return;}
         // User resizing changes the viewport; focus only adds/removes the action strip below it.
         int previousExtra=simpleActionsShown?SimpleActionGap+simpleActionsHeight:0;
         simpleViewportHeight=Math.Max(SimpleMinimumViewport,ClientSize.Height-2*SimpleEdge-previousExtra);
@@ -151,7 +152,7 @@ internal sealed partial class FloatingWindow {
         PositionSimpleModeControls();
     }
     void PositionSimpleModeControls() {
-        if(!simpleMode || simpleLayout || simpleWindowWasMinimized || closing || IsDisposed || WindowState!=FormWindowState.Normal)return;
+        if(!simpleMode || simpleLayout || simpleRestoreNeeded || closing || IsDisposed || WindowState!=FormWindowState.Normal)return;
         var layoutBounds=edgeHidden?edgeRestoreBounds:Bounds;
         var layoutArea=edgeHidden?edgeWorkingArea:Screen.FromRectangle(layoutBounds).WorkingArea;
         var layoutEdge=edgeHideEnabled?(edgeHidden?edgeDock:TouchedEdge(layoutBounds,layoutArea)):EdgeDock.None;
@@ -186,12 +187,18 @@ internal sealed partial class FloatingWindow {
         }
     }
     void QueueSimpleRestoreLayout() {
-        if(!simpleMode || !simpleWindowWasMinimized || simpleRestoreLayoutQueued || closing || IsDisposed || !IsHandleCreated || !Visible || WindowState!=FormWindowState.Normal)return;
+        if(!simpleMode || !simpleRestoreNeeded || simpleRestoreLayoutQueued || closing || IsDisposed || !IsHandleCreated || !Visible || WindowState==FormWindowState.Minimized)return;
         simpleRestoreLayoutQueued=true;
         BeginInvoke(new Action(delegate {
             simpleRestoreLayoutQueued=false;
-            if(!simpleMode || closing || IsDisposed || !Visible || WindowState!=FormWindowState.Normal)return;
-            simpleWindowWasMinimized=false;
+            if(!simpleMode || closing || IsDisposed || !Visible || WindowState==FormWindowState.Minimized)return;
+            // Windows can maximize a borderless caption-dragged window independently
+            // of the compact viewport. Restore after the native size transition ends;
+            // never learn that temporary screen-sized client area as the user's size.
+            simpleLayout=true;
+            try { if(WindowState!=FormWindowState.Normal)WindowState=FormWindowState.Normal; }
+            finally { simpleLayout=false; }
+            simpleRestoreNeeded=false;
             UpdateSimpleModeState();
             RefreshFloatingViewport();
         }));
@@ -232,7 +239,7 @@ internal sealed partial class FloatingWindow {
     }
     void SetSimpleMode(bool enabled) {
         if(enabled==simpleMode){UpdateSimpleModeState();return;}
-        var modeSwitchBounds=edgeHidden && !edgeRestoreBounds.IsEmpty ? edgeRestoreBounds : Bounds;
+        var modeSwitchBounds=edgeHidden && !edgeRestoreBounds.IsEmpty ? edgeRestoreBounds : (WindowState==FormWindowState.Normal?Bounds:RestoreBounds);
         var modeSwitchArea=edgeHidden && !edgeWorkingArea.IsEmpty ? edgeWorkingArea : Screen.FromRectangle(modeSwitchBounds).WorkingArea;
         var modeSwitchLocation=modeSwitchBounds.Location;
         var modeSwitchEdge=edgeHidden ? edgeDock : TouchedEdge(modeSwitchBounds,modeSwitchArea);
@@ -240,8 +247,11 @@ internal sealed partial class FloatingWindow {
         var selected=tasks.SelectedNode;var top=tasks.TopNode;
         SuspendLayout();content.SuspendLayout();simpleLayout=true;
         try {
+            if(WindowState!=FormWindowState.Normal)WindowState=FormWindowState.Normal;
+            simpleRestoreNeeded=false;
             if(enabled) {
-                if(collapsed)ToggleFold();fullBounds=Bounds;simpleMode=true;
+                if(collapsed)ToggleFold();fullBounds=Bounds;fullMaximizeBox=MaximizeBox;simpleMode=true;
+                MaximizeBox=false;
                 UpdateSimpleActionState();
                 content.Controls.Remove(taskSurface);content.Visible=false;toolbar.Visible=false;
                 FormBorderStyle=FormBorderStyle.None;Padding=Padding.Empty;
@@ -253,8 +263,8 @@ internal sealed partial class FloatingWindow {
                 MinimumSize=new Size(160,SimpleMinimumViewport+2*SimpleEdge);ClientSize=new Size(Math.Max(160,simpleSize.Width),Math.Max(120,simpleSize.Height));
             } else {
                 // simpleSize already contains the stable expanded dimensions, even while unfocused.
-                simpleMode=false;simpleWindowWasMinimized=false;Controls.Remove(taskSurface);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
-                FormBorderStyle=FormBorderStyle.Sizable;MinimumSize=new Size(350,420);
+                simpleMode=false;simpleRestoreNeeded=false;Controls.Remove(taskSurface);Padding=Padding.Empty;simpleActions.Visible=false;simpleEmpty.Visible=false;
+                MaximizeBox=fullMaximizeBox;FormBorderStyle=FormBorderStyle.Sizable;MinimumSize=new Size(350,420);
                 content.Controls.Add(taskSurface,0,3);taskSurface.Dock=DockStyle.Fill;taskSurface.Visible=true;content.Visible=true;toolbar.Visible=true;
                 var restored=new Rectangle(modeSwitchLocation,fullBounds.Size);var area=modeSwitchArea;
                 restored.X=Math.Max(area.Left,Math.Min(restored.X,area.Right-restored.Width));restored.Y=Math.Max(area.Top,Math.Min(restored.Y,area.Bottom-restored.Height));if(modeSwitchEdge!=EdgeDock.None)restored=AlignBoundsToEdge(restored,area,modeSwitchEdge);Bounds=restored;fullBounds=restored;

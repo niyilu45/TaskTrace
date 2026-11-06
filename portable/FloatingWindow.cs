@@ -272,6 +272,10 @@ internal sealed partial class FloatingWindow : Form {
     }
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
     protected override void WndProc(ref Message message) {
+        // Compact mode is a user-sized widget, not a maximizable desktop surface.
+        if(simpleMode && message.Msg==0x0112 && (message.WParam.ToInt64()&0xFFF0)==0xF030) {
+            message.Result=IntPtr.Zero;return;
+        }
         base.WndProc(ref message);
         if(simpleMode && message.Msg == 0x84) {
             var point = PointToClient(Cursor.Position);

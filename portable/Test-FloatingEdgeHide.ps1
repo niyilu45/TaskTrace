@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = '.local-build/floating-edge-hide-tests')
+﻿param([string]$OutputDirectory = '.local-build/floating-edge-hide-tests')
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $testRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDirectory))
@@ -136,6 +136,7 @@ internal sealed partial class FloatingWindow {
     }
     static void AssertTaskViewport(FloatingWindow window,string step) {
         var surface=window.taskSurface;
+        if(window.simpleMode)AssertCompactFrame(window,step);
         EdgeAssert(surface.Visible && surface.Parent==(window.simpleMode?(Control)window:window.content),
             step+": task surface is hidden or reparented incorrectly");
         EdgeAssert(surface.Width>50 && surface.Height>40 && surface.Parent.ClientRectangle.IntersectsWith(surface.Bounds),
@@ -156,6 +157,49 @@ internal sealed partial class FloatingWindow {
             }
             EdgeAssert(painted,step+": viewport painted no task text or checkboxes");
         }
+    }
+    static void AssertCompactFrame(FloatingWindow window,string step) {
+        var viewport=new Rectangle(SimpleEdge,SimpleEdge,window.ClientSize.Width-2*SimpleEdge,window.simpleViewportHeight);
+        int footer=window.simpleActionsShown?SimpleActionGap+window.simpleActionsHeight:0;
+        EdgeAssert(window.WindowState==FormWindowState.Normal,step+": compact window stayed maximized while content retained its old dimensions: state="+window.WindowState+", client="+window.ClientSize+", viewport="+window.taskSurface.Bounds);
+        EdgeAssert(window.taskSurface.Bounds==viewport && window.simpleEmpty.Bounds==viewport &&
+            window.ClientSize.Height==viewport.Bottom+SimpleEdge+footer,
+            step+": background and content bounds disagree: client="+window.ClientSize+", viewport="+window.taskSurface.Bounds);
+    }
+    internal static void TestCompactWindowBounds(string isolatedDirectory) {
+        using(var window=new FloatingWindow(isolatedDirectory)) {
+            var area=Screen.PrimaryScreen.WorkingArea;
+            window.Location=new Point(area.Left+80,area.Top+80);window.Enabled=false;window.Show();Application.DoEvents();
+            window.edgeHideEnabled=false;
+            foreach(bool empty in new[]{false,true}) {
+                if(empty)window.tasks.Nodes.Clear();
+                window.SetSimpleMode(true);window.ClientSize=new Size(286,238);window.ShowSimpleModeRestore();Application.DoEvents();
+                EdgeAssert(!window.MaximizeBox,"Compact window exposes a maximize action");
+                var size=window.simpleSize;var client=window.ClientSize;var viewport=window.taskSurface.Bounds;var location=window.Location;
+                window.WindowState=FormWindowState.Maximized;Application.DoEvents();
+                AssertCompactFrame(window,"programmatic maximize / empty="+empty);
+                EdgeAssert(window.simpleSize==size && window.ClientSize==client && window.taskSurface.Bounds==viewport && window.Location==location,
+                    "Maximize recovery lost user compact size, content bounds or location");
+                SendSimpleMessage(window.Handle,0x0112,new IntPtr(0xF030),IntPtr.Zero);Application.DoEvents();
+                AssertCompactFrame(window,"native maximize / empty="+empty);
+                EdgeAssert(window.simpleSize==size && window.ClientSize==client,"Native maximize changed the compact size");
+                window.WindowState=FormWindowState.Minimized;window.WindowState=FormWindowState.Maximized;Application.DoEvents();
+                AssertCompactFrame(window,"minimize then maximize / empty="+empty);
+                EdgeAssert(window.simpleSize==size,"Minimize/maximize overwrote compact settings");
+                window.HideSimpleModeActions();Application.DoEvents();AssertCompactFrame(window,"inactive / empty="+empty);
+                window.ClientSize=new Size(420,340);window.ClientSize=new Size(222,190);Application.DoEvents();
+                AssertCompactFrame(window,"large then small resize / empty="+empty);
+                window.ShowSimpleModeRestore();Application.DoEvents();AssertCompactFrame(window,"active / empty="+empty);
+                using(var bitmap=new Bitmap(window.Width,window.Height)){window.DrawToBitmap(bitmap,window.ClientRectangle);bitmap.Save(Path.Combine(isolatedDirectory,empty?"compact-empty-bounds.png":"compact-populated-bounds.png"));}
+                window.SetSimpleMode(false);Application.DoEvents();
+                var full=window.Bounds;EdgeAssert(window.MaximizeBox,"Full window did not recover its maximize action");window.WindowState=FormWindowState.Maximized;Application.DoEvents();
+                window.SetSimpleMode(true);Application.DoEvents();AssertCompactFrame(window,"maximized full to compact / empty="+empty);
+                window.SetSimpleMode(false);Application.DoEvents();
+                EdgeAssert(window.WindowState==FormWindowState.Normal && window.Size==full.Size,"Full-to-compact transition retained maximized bounds");
+            }
+            window.Hide();
+        }
+        Console.WriteLine("PASS compact bounds: direct/native maximize, minimize/maximize, focus, resize and maximized-full switches preserve matching frame/content for populated and empty windows.");
     }
     internal static void TestModeViewportRecovery(string isolatedDirectory) {
         using(var window=new FloatingWindow(isolatedDirectory)) {
@@ -237,6 +281,7 @@ internal sealed partial class FloatingWindow {
     }
 
     static void AssertEmptyViewport(FloatingWindow window,string reason) {
+        AssertCompactFrame(window,"empty "+reason);
         EdgeAssert(window.simpleEmpty.Visible && !window.taskSurface.Visible && window.simpleEmpty.Text.Contains(reason),
             "Empty compact viewport lost its explanation: expected="+reason+", actual="+window.simpleEmpty.Text);
         EdgeAssert(window.simpleEmpty.Bounds.Width>100 && window.simpleEmpty.Bounds.Height>=54 &&
@@ -369,15 +414,50 @@ internal sealed class InvisibleEdgeEditor : Form {
     protected override bool ShowWithoutActivation {get{return true;}}
     protected override CreateParams CreateParams {get {var value=base.CreateParams;value.ExStyle|=0x08000000;return value;}}
 }
+internal sealed class TestForegroundGuard : IDisposable {
+    delegate void ForegroundCallback(IntPtr hook,uint eventType,IntPtr window,int objectId,int childId,uint thread,uint time);
+    [DllImport("user32.dll")]static extern IntPtr SetWinEventHook(uint first,uint last,IntPtr module,ForegroundCallback callback,uint process,uint thread,uint flags);
+    [DllImport("user32.dll")]static extern bool UnhookWinEvent(IntPtr hook);
+    delegate IntPtr ActivationCallback(int code,IntPtr value,IntPtr details);
+    [DllImport("user32.dll")]static extern IntPtr SetWindowsHookEx(int type,ActivationCallback callback,IntPtr module,uint thread);
+    [DllImport("user32.dll")]static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr value,IntPtr details);
+    [DllImport("user32.dll")]static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("kernel32.dll")]static extern uint GetCurrentThreadId();
+    readonly ActivationCallback activationCallback;
+    readonly IntPtr activationHook;
+    readonly ForegroundCallback callback;
+    readonly IntPtr hook;
+    internal bool Activated;
+    internal TestForegroundGuard() {
+        // Thread-local CBT hook vetoes activation/focus for test forms only.
+        // Native minimize/maximize/resize still run against the real HWND.
+        activationCallback=delegate(int code,IntPtr value,IntPtr details){return code==5 || code==9?new IntPtr(1):CallNextHookEx(activationHook,code,value,details);};
+        activationHook=SetWindowsHookEx(5,activationCallback,IntPtr.Zero,GetCurrentThreadId());
+        if(activationHook==IntPtr.Zero)throw new Exception("Cannot protect desktop focus during native layout tests");
+        callback=delegate {Activated=true;};
+        hook=SetWinEventHook(3,3,IntPtr.Zero,callback,(uint)System.Diagnostics.Process.GetCurrentProcess().Id,0,0);
+        if(hook==IntPtr.Zero){UnhookWindowsHookEx(activationHook);throw new Exception("Cannot observe test-process foreground activation");}
+    }
+    public void Dispose(){UnhookWinEvent(hook);UnhookWindowsHookEx(activationHook);GC.KeepAlive(callback);GC.KeepAlive(activationCallback);}
+}
 internal static class FloatingEdgeHideTests {
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [STAThread] static int Main(string[] args) {
         var pointer=Cursor.Position;var foreground=GetForegroundWindow();
-        try {
+        using(var focus=new TestForegroundGuard())try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            FloatingWindow.TestEdgeGeometry();FloatingWindow.TestEdgeLifecycle(args[0]);FloatingWindow.TestEdgeRecovery(args[0]);FloatingWindow.TestModeViewportRecovery(args[0]);FloatingWindow.TestEmptyModeRecovery(args[0]);
-            if(Cursor.Position!=pointer || GetForegroundWindow()!=foreground)throw new Exception("The isolated test changed pointer: "+(Cursor.Position!=pointer)+"; foreground window: "+(GetForegroundWindow()!=foreground));
-            Console.WriteLine("PASS isolation: cursor and foreground window unchanged; no normal startup, database, server, session or task edits.");return 0;
+            FloatingWindow.TestCompactWindowBounds(args[0]);
+            FloatingWindow.TestEdgeGeometry();
+            FloatingWindow.TestEdgeLifecycle(args[0]);
+            FloatingWindow.TestEdgeRecovery(args[0]);
+            FloatingWindow.TestModeViewportRecovery(args[0]);
+            FloatingWindow.TestEmptyModeRecovery(args[0]);
+            Application.DoEvents();
+            if(focus.Activated)throw new Exception("An isolated test window took foreground focus");
+            // The user may keep working during these tests. Observe this process's
+            // activation events rather than treating unrelated window switches as failures.
+            if(Cursor.Position!=pointer || GetForegroundWindow()!=foreground)Console.WriteLine("NOTE desktop: cursor or foreground changed outside the isolated test process.");
+            Console.WriteLine("PASS isolation: no test window became foreground; no injected input, normal startup, database, server, session or task edits.");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
 }
