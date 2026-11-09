@@ -150,6 +150,15 @@ func measureReaderSize(r io.ReadSeeker) (uint64, error) {
 	return uint64(end), nil
 }
 
+// CheckSizeLimit checks an observed file size before staging it.
+func CheckSizeLimit(size uint64) error {
+	maxMB := config.GetMaxFileSizeInMBytes()
+	if maxMB <= math.MaxUint64/uint64(datasize.MB) && size > maxMB*uint64(datasize.MB) {
+		return ErrFileIsTooLarge{Size: size}
+	}
+	return nil
+}
+
 func CreateWithMimeAndSession(s *xorm.Session, f io.ReadSeeker, realname string, realsize uint64, a web.Auth, mime string, checkFileSizeLimit bool) (file *File, err error) {
 	// Authoritative size comes from the reader, not the caller: the
 	// migration import path accepts attacker-controlled metadata
@@ -160,16 +169,8 @@ func CreateWithMimeAndSession(s *xorm.Session, f io.ReadSeeker, realname string,
 	}
 
 	if checkFileSizeLimit {
-		// Overflow-safe: exabyte-range configs would wrap uint64.
-		maxMB := config.GetMaxFileSizeInMBytes()
-		var maxBytes uint64
-		if maxMB > math.MaxUint64/uint64(datasize.MB) {
-			maxBytes = math.MaxUint64
-		} else {
-			maxBytes = maxMB * uint64(datasize.MB)
-		}
-		if measured > maxBytes {
-			return nil, ErrFileIsTooLarge{Size: measured}
+		if err := CheckSizeLimit(measured); err != nil {
+			return nil, err
 		}
 	}
 

@@ -3,7 +3,6 @@
 package models
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -946,39 +945,23 @@ func taskTraceTeamExportAttachments(s *xorm.Session, binding *TaskTraceTeamBindi
 		if err := attachment.File.LoadFileByID(); err != nil {
 			return nil, fmt.Errorf("read local attachment %q (task %d, attachment %d): %w", attachment.File.Name, taskID, attachment.ID, err)
 		}
-		content, readErr := io.ReadAll(attachment.File.File)
+		id, size, readErr := taskTraceTeamCopyAttachment(io.Discard, attachment.File.File)
 		_ = attachment.File.File.Close()
 		if readErr != nil {
 			return nil, readErr
 		}
-		sum := sha256.Sum256(content)
-		id := hex.EncodeToString(sum[:])
+		path := taskTraceTeamAttachmentBlobPath(binding, id)
+		if err := taskTraceTeamPublishAttachment(path, attachment.File, id, size); err != nil {
+			return nil, err
+		}
 		key := taskTraceTeamLocalAttachmentKey(nodeID, id)
 		if binding.LocalAttachments[key] == 0 {
 			binding.LocalAttachments[key] = attachment.ID
 		}
-		path := taskTraceTeamAttachmentBlobPath(binding, id)
-		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return nil, err
-			}
-			tmp := path + ".tmp-" + uuid.NewString()
-			if err := os.WriteFile(tmp, content, 0o600); err != nil {
-				return nil, err
-			}
-			if err := os.Rename(tmp, path); err != nil {
-				_ = os.Remove(tmp)
-				if _, existingErr := os.Stat(path); existingErr != nil {
-					return nil, err
-				}
-			}
-		} else if statErr != nil {
-			return nil, statErr
-		}
 		// Keep every source id even when multiple attachments have identical
 		// bytes. HTML may reference any of them and every source must be
 		// rewritten to the one local attachment selected above.
-		result = append(result, TaskTraceTeamAttachment{ID: id, Name: attachment.File.Name, Mime: attachment.File.Mime, Size: uint64(len(content)), SourceTaskID: taskID, SourceAttachmentID: attachment.ID})
+		result = append(result, TaskTraceTeamAttachment{ID: id, Name: attachment.File.Name, Mime: attachment.File.Mime, Size: size, SourceTaskID: taskID, SourceAttachmentID: attachment.ID})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return taskTraceTeamAttachmentSourceKey(result[i]) < taskTraceTeamAttachmentSourceKey(result[j])
@@ -2302,19 +2285,11 @@ func taskTraceTeamEnsureAttachments(s *xorm.Session, a web.Auth, binding *TaskTr
 				if shared.ID == "" || binding.LocalAttachments[key] != 0 {
 					continue
 				}
-				content, err := os.ReadFile(taskTraceTeamAttachmentBlobPath(binding, shared.ID))
+				localID, err := taskTraceTeamImportAttachment(s, a, binding, taskID, shared)
 				if err != nil {
-					return fmt.Errorf("read shared attachment %s: %w", shared.Name, err)
-				}
-				sum := sha256.Sum256(content)
-				if hex.EncodeToString(sum[:]) != shared.ID {
-					return fmt.Errorf("shared attachment %s failed integrity check", shared.Name)
-				}
-				attachment := &TaskAttachment{TaskID: taskID}
-				if err := attachment.NewAttachment(s, bytes.NewReader(content), shared.Name, uint64(len(content)), a); err != nil {
 					return err
 				}
-				binding.LocalAttachments[key] = attachment.ID
+				binding.LocalAttachments[key] = localID
 			}
 		}
 	}

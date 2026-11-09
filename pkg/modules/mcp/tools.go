@@ -75,7 +75,7 @@ func candidates(item *huma.PathItem) []candidate {
 	}
 	return out
 }
-func buildTools(oapi *huma.OpenAPI, groupPrefix string) (map[string]*tool, []*tool, error) {
+func indexTools(oapi *huma.OpenAPI, groupPrefix string) (map[string]*tool, []*tool, error) {
 	index := map[string]*tool{}
 	for _, item := range oapi.Paths {
 		if item == nil {
@@ -90,19 +90,13 @@ func buildTools(oapi *huma.OpenAPI, groupPrefix string) (map[string]*tool, []*to
 			if _, dup := index[name]; dup {
 				return nil, nil, fmt.Errorf("mcp: duplicate tool name %s", name)
 			}
-			spec, err := buildToolSpec(oapi, c.op)
-			if err != nil {
-				return nil, nil, err
-			}
 			ct, _ := bodyMedia(c.op)
 			index[name] = &tool{
 				name:        name,
 				op:          c.op,
 				echoPath:    groupPrefix + echoPath(c.op.Path),
 				typed:       typed,
-				spec:        spec,
 				contentType: ct,
-				description: describe(oapi, c.op, spec),
 			}
 		}
 	}

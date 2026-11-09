@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"code.vikunja.io/api/pkg/log"
 	"code.vikunja.io/api/pkg/models"
@@ -53,15 +54,30 @@ type Module struct {
 	order     []*tool
 	authorize func(token *models.APIToken, path, method string) bool
 
-	streamable  http.Handler
-	origin      *http.CrossOriginProtection
-	allowOrigin func(origin string) bool
+	prepareTools func() error
+	streamable   http.Handler
+	origin       *http.CrossOriginProtection
+	allowOrigin  func(origin string) bool
 }
 
 // Tools come from api's operations, so apiv2.RegisterAll must have run — AutoPatch adds its PATCH ops there.
 // allowOrigin (nil trusts none) admits the wildcard-port origins Vikunja's CORS config allows and the stdlib check does not.
 func New(api huma.API, allowOrigin func(origin string) bool) (*Module, error) {
-	index, order, err := buildTools(api.OpenAPI(), apiv2.GroupPrefix)
+	m, err := NewLazy(api, allowOrigin)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.prepareTools(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// NewLazy indexes routes immediately and builds tool schemas on the first
+// authorized MCP request. Connection settings only need the route index.
+func NewLazy(api huma.API, allowOrigin func(origin string) bool) (*Module, error) {
+	oapi := api.OpenAPI()
+	index, order, err := indexTools(oapi, apiv2.GroupPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +89,17 @@ func New(api huma.API, allowOrigin func(origin string) bool) (*Module, error) {
 		origin:      http.NewCrossOriginProtection(),
 		allowOrigin: allowOrigin,
 	}
+	m.prepareTools = sync.OnceValue(func() error {
+		for _, t := range order {
+			spec, err := buildToolSpec(oapi, t.op)
+			if err != nil {
+				return err
+			}
+			t.spec = spec
+			t.description = describe(oapi, t.op, spec)
+		}
+		return nil
+	})
 	m.streamable = m.newStreamableHandler()
 	return m, nil
 }
@@ -168,6 +195,10 @@ func (m *Module) handler(c *echo.Context) error {
 	}
 	if proceed, err := limitRequestBody(c, req); !proceed {
 		return err
+	}
+	if err := m.prepareTools(); err != nil {
+		log.Errorf("[mcp] could not prepare tool schemas: %s", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "could not prepare MCP tools")
 	}
 	http.StripPrefix(RoutePrefix, m.streamable).ServeHTTP(c.Response(), req)
 	return nil

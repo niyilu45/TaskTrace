@@ -54,6 +54,7 @@ package routes
 import (
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -496,7 +497,11 @@ func registerAPIRoutesV2(e *echo.Echo, a *echo.Group, noAuthRateLimit, refreshRa
 	// Start local backups only for the live server. Canonical OpenAPI generation
 	// also runs RegisterAll and must never touch a user's data.
 	tasktracedata.StartBackupScheduler()
-	m, err := mcpmodule.New(api, corsOriginAllowed)
+	newMCP := mcpmodule.New
+	if strings.TrimSpace(os.Getenv("TASKTRACE_DATA_ROOT")) != "" {
+		newMCP = mcpmodule.NewLazy
+	}
+	m, err := newMCP(api, corsOriginAllowed)
 	if err != nil {
 		panic(err)
 	}
