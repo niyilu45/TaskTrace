@@ -414,7 +414,7 @@ func (d *dbTaskSearcher) buildSubtaskRootCondition(opts *taskSearchOptions) (bui
 	predicates := []builder.Cond{
 		builder.Expr("task_relations.task_id = tasks.id"),
 		builder.Eq{"task_relations.relation_kind": RelationKindParenttask},
-		taskNotDeletedCond("parent_tasks"),
+		taskVisibleCond("parent_tasks"),
 	}
 	if len(scopes) > 0 {
 		predicates = append(predicates, builder.Or(scopes...))
@@ -471,7 +471,7 @@ func (d *dbTaskSearcher) fetchAccessibleSubtasks(rootIDs []int64) ([]*Task, erro
 			found := []*Task{}
 			if err := d.s.Where(builder.In("tasks.id", childIDs)).
 				And(accessible).
-				And(taskNotDeletedCond("tasks")).
+				And(taskVisibleCond("tasks")).
 				Find(&found); err != nil {
 				return nil, err
 			}
@@ -629,7 +629,7 @@ func (d *dbTaskSearcher) Search(opts *taskSearchOptions) (tasks []*Task, totalCo
 	}
 
 	limit, start := getLimitFromPageIndex(opts.page, opts.perPage)
-	cond := builder.And(builder.Or(projectIDCond, favoritesCond), where, filterCond)
+	cond := builder.And(builder.Or(projectIDCond, favoritesCond), where, filterCond, taskVisibleCond("tasks"))
 
 	// When the favorites arm is still part of the query (Favorites view, or
 	// out-of-scope favorites exist), its shape is unsupported — stay unranked.

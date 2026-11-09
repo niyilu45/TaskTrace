@@ -155,7 +155,7 @@ func getTaskUsersForTasks(s *xorm.Session, taskIDs []int64, cond builder.Cond) (
 	conditions := []builder.Cond{
 		builder.In("tasks.id", taskIDs),
 		builder.Eq{"users.status": user.StatusActive},
-		taskNotDeletedCond("tasks"),
+		taskVisibleCond("tasks"),
 	}
 	if cond != nil {
 		conditions = append(conditions, cond)
@@ -261,7 +261,7 @@ func getTasksWithRemindersDueAndTheirUsers(s *xorm.Session, now time.Time, cond 
 		// All reminders from -12h to +14h to include all time zones
 		Where("(reminder >= ? and reminder < ?) OR (repeat_rule IS NOT NULL AND repeat_rule <> ?)", now.Add(time.Hour*-12).Format(dbTimeFormat), nextMinute.Add(time.Hour*14).Format(dbTimeFormat), "").
 		And("tasks.done = false").
-		And("tasks.deleted_at IS NULL").
+		And(taskVisibleCond("tasks")).
 		Find(&reminders)
 	if err != nil {
 		return

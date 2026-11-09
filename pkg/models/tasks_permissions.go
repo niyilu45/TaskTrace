@@ -23,15 +23,15 @@ import (
 
 // CanDelete checks if the user can delete an task
 func (t *Task) CanDelete(s *xorm.Session, a web.Auth) (bool, error) {
-	allowed, err := t.canDoTask(s, a)
-	if err != nil || !allowed || !taskTraceTeamEnabled() {
-		return allowed, err
+	if !taskTraceTeamEnabled() {
+		return t.canDoTask(s, a)
 	}
-	tasks, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
+	tasks, localOnly, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
 	if err != nil {
 		return false, err
 	}
 	t.deletionScopeIDs = make([]int64, 0, len(tasks))
+	t.localViewDeletion = localOnly
 	for _, task := range tasks {
 		t.deletionScopeIDs = append(t.deletionScopeIDs, task.ID)
 	}
@@ -90,6 +90,9 @@ func (t *Task) CanRead(s *xorm.Session, a web.Auth) (canRead bool, maxPermission
 		return
 	}
 
+	if t.TaskTraceHiddenBy != 0 {
+		return false, 0, ErrTaskDoesNotExist{ID: t.ID}
+	}
 	t.Expand = expand
 
 	// A user can read a task if it has access to the project
@@ -108,6 +111,10 @@ func (t *Task) canDoTask(s *xorm.Session, a web.Auth) (bool, error) {
 	ot, err := GetTaskByIDSimple(s, t.ID)
 	if err != nil {
 		return false, err
+	}
+
+	if ot.TaskTraceHiddenBy != 0 {
+		return false, ErrTaskDoesNotExist{ID: t.ID}
 	}
 
 	// Check if we're moving the task into a different project to check if the user has sufficient permissions for that on the new project

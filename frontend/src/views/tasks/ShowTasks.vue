@@ -76,7 +76,7 @@
 				{{ $t('task.show.overdue') }}
 			</FancyCheckbox>
 		</p>
-		<template v-if="!loading && (!tasks || tasks.length === 0) && showNothingToDo">
+		<template v-if="!loading && (!tasks || tasks.length === 0) && showNothingToDo && !hasEmptyProjectGroups">
 			<h3 class="has-text-centered mbs-6">
 				{{ $t('task.show.noTasks') }}
 			</h3>
@@ -84,7 +84,7 @@
 		</template>
 
 		<Card
-			v-if="hasTasks"
+			v-if="hasTasks || hasEmptyProjectGroups"
 			:padding="false"
 			class="has-overflow"
 			:has-content="false"
@@ -93,6 +93,7 @@
 			<OverviewTaskGroups
 				:tasks="tasks"
 				:ancestors="ancestors"
+				:show-empty-projects="showEmptyProjects"
 				:loading="loading"
 				@taskMoved="updateTasks"
 				@taskUpdated="updateTasks"
@@ -142,12 +143,14 @@ const props = withDefaults(defineProps<{
 	showNulls?: boolean,
 	showOverdue?: boolean,
 	labelIds?: string[],
+	showEmptyProjects?: boolean,
 }>(), {
 	showNulls: false,
 	showOverdue: false,
 	dateFrom: undefined,
 	dateTo: undefined,
 	labelIds: undefined,
+	showEmptyProjects: false,
 })
 const emit = defineEmits<{
 	'tasksLoaded': true,
@@ -207,6 +210,7 @@ const pageTitle = computed(() => {
 			until: formatDate(props.dateTo, 'LL'),
 		})
 })
+const hasEmptyProjectGroups = computed(() => props.showEmptyProjects && Object.values(projectStore.projects).some(project => project.id > 0 && !project.isArchived))
 const hasTasks = computed(() => tasks.value && tasks.value.length > 0)
 const userAuthenticated = computed(() => authStore.authenticated)
 const loading = computed(() => hierarchyLoading.value || taskStore.isLoading || taskCollectionService.value.loading)

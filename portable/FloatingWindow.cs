@@ -848,7 +848,7 @@ internal sealed partial class FloatingWindow : Form {
                     originalDescriptionVersion=descriptionEditor.ChangeVersion;
                 };
                 deleteTask.Click+=async delegate {
-                    if(submitting || taskName.Saving || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？删除后可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
+                    if(submitting || taskName.Saving || MessageBox.Show(dialog,"确定删除任务“"+TaskTitle(id)+"”？别人共享的任务仅从本机移除，已保存的修改会继续同步，成功后清理本机副本。可按 Ctrl+Z 撤销。","删除任务",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);feedback.Text="正在删除任务…";
                     try {await Api("DELETE","/tasks/"+id,null);await RefreshUndo();taskDeleted=true;submitting=false;dialog.Close();}
                     catch(Exception e){feedback.Text=e.Message;}

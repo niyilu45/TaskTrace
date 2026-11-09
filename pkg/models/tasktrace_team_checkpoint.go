@@ -47,7 +47,7 @@ type taskTraceTeamSyncJournal struct {
 	Previous   *TaskTraceTeamSnapshot `json:"previous,omitempty"`
 }
 
-func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, actor, device string, previousOverride ...*TaskTraceTeamSnapshot) (*TaskTraceTeamSyncCheckpoint, *TaskTraceTeamSnapshot, error) {
+func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, actor, device string, pruned map[string]bool, previousOverride ...*TaskTraceTeamSnapshot) (*TaskTraceTeamSyncCheckpoint, *TaskTraceTeamSnapshot, error) {
 	if !s.IsInTx() {
 		return nil, nil, errors.New("team synchronization requires a database transaction")
 	}
@@ -94,6 +94,7 @@ func taskTraceTeamBeginSync(s *xorm.Session, binding *TaskTraceTeamBinding, acto
 	}
 	checkpoint := &TaskTraceTeamSyncCheckpoint{ID: id, Generation: uuid.NewString()}
 	journal = taskTraceTeamSyncJournal{ID: id, Generation: checkpoint.Generation, Before: *binding, Previous: previous}
+	taskTraceDropPrunedCheckpointRows(pruned, &journal)
 	if err := taskTraceTeamWriteJSON(path, &journal); err != nil {
 		return nil, nil, err
 	}

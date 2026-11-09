@@ -69,6 +69,9 @@ func restoreTaskTraceUndo(s *xorm.Session, a web.Auth, payload string) ([]int64,
 		}
 		return []int64{snap.TaskID}, nil
 	}
+	if snap.Kind == "hide" {
+		return snap.restoreLocalView(s, a)
+	}
 	if err := snap.checkPermissions(s, a); err != nil {
 		return nil, err
 	}

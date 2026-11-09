@@ -17,13 +17,9 @@ import (
 // Reimporting the same authenticated share repairs its endpoint, rather than
 // making duplicate local tasks or discarding local edits and personal structure.
 func taskTraceTeamReconnectBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, repository string, link taskTraceTeamLink, manifest TaskTraceTeamManifest, actor string) (*TaskTraceTeamStatus, error) {
-	root := &Task{ID: binding.RootTaskID}
-	canRead, _, err := root.CanRead(s, a)
+	root, err := GetTaskByIDSimple(s, binding.RootTaskID)
 	if err != nil {
 		return nil, err
-	}
-	if !canRead {
-		return nil, ErrGenericForbidden{}
 	}
 	canWriteProject, err := (&Project{ID: root.ProjectID}).CanWrite(s, a)
 	if err != nil {
@@ -61,6 +57,16 @@ func taskTraceTeamReconnectBinding(s *xorm.Session, a web.Auth, state *taskTrace
 		if err != nil {
 			return nil, err
 		}
+	}
+	ids := make([]int64, 0, len(binding.NodeTasks))
+	for _, id := range binding.NodeTasks {
+		ids = append(ids, id)
+	}
+	if err := taskTraceHydrateLocalViews(s, a, binding, actor, state.DeviceID, ids); err != nil {
+		return nil, err
+	}
+	if err := taskTraceShowLocalView(s, a, ids); err != nil {
+		return nil, err
 	}
 	if err := taskTraceTeamMergeBinding(s, a, state, binding, actor, previous); err != nil {
 		return nil, err

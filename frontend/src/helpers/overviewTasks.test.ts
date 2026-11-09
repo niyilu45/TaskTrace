@@ -8,6 +8,13 @@ describe('overview project hierarchy', () => {
 		expect(groups.map(group => [group.projectId, group.count])).toEqual([[1, 2], [2, 1]])
 		expect(groups[0].rows.map(row => [row.task.id, row.depth, row.context, row.hasChildren])).toEqual([[1, 0, true, true], [2, 1, false, true], [3, 2, false, false]])
 	})
+	it('keeps empty projects visible when no tasks match', () => {
+		expect(groupOverviewTasks([], [], [1, 2])).toEqual([
+			{projectId: 1, rows: [], count: 0},
+			{projectId: 2, rows: [], count: 0},
+		])
+		expect(groupOverviewTasks([task(1, 1)], [], [1, 2]).map(group => group.count)).toEqual([1, 0])
+	})
 	it('keeps cross-project relations in their own project and handles cycles without duplicates', () => {
 		const groups = groupOverviewTasks([task(1, 1, 2), task(2, 2, 1), task(3, 1, 4), task(4, 1, 3)], [])
 		expect(groups.flatMap(group => group.rows.map(row => row.task.id)).sort()).toEqual([1, 2, 3, 4])

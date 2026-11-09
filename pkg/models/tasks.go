@@ -186,8 +186,9 @@ type Task struct {
 
 	// ParentTaskID is a creation-only request: the child and both relation rows
 	// are created in the same transaction. Existing hierarchy edits use relations.
-	deletionScopeIDs []int64 `xorm:"-" json:"-"`
-	ParentTaskID     int64   `xorm:"-" json:"parent_task_id,omitempty" minimum:"0" doc:"When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates."`
+	localViewDeletion bool
+	deletionScopeIDs  []int64 `xorm:"-" json:"-"`
+	ParentTaskID      int64   `xorm:"-" json:"parent_task_id,omitempty" minimum:"0" doc:"When creating a task, atomically attach it beneath this parent in the same project. Requires live write permission on the parent and respects the five-level limit. Ignored on updates."`
 
 	// All related tasks, grouped by their relation kind
 	RelatedTasks RelatedTaskMap `xorm:"-" json:"related_tasks" readOnly:"true" doc:"Related tasks grouped by relation kind. Read-only here; use the task-relation endpoints to change relations."`
@@ -210,7 +211,12 @@ type Task struct {
 	// A timestamp when this task was created. You cannot change this value.
 	Created time.Time `xorm:"created not null" json:"created" readOnly:"true" doc:"When this task was created. Set by the server; ignored on write."`
 	// A timestamp when this task was last updated. You cannot change this value.
-	Updated time.Time `xorm:"updated not null" json:"updated" readOnly:"true" doc:"When this task was last updated. Set by the server; ignored on write."`
+	Updated             time.Time `xorm:"updated not null" json:"updated" readOnly:"true" doc:"When this task was last updated. Set by the server; ignored on write."`
+	TaskTraceViewPruned bool      `xorm:"not null default false" json:"-"`
+	// Local view preferences are never serialized into task or team API payloads.
+	TaskTraceHiddenBy       int64  `xorm:"bigint not null default 0 INDEX" json:"-"`
+	TaskTraceSharedParentID *int64 `xorm:"bigint null" json:"-"`
+
 	// A timestamp when this task was deleted. Soft-deleted tasks are kept for 30 days before they are removed permanently.
 	// omitzero keeps the field out of the JSON of regular tasks — it only ever appears on soft-deleted ones (the later trash listing).
 	DeletedAt time.Time `xorm:"deleted datetime null INDEX 'deleted_at'" json:"deleted_at,omitzero" readOnly:"true" doc:"When this task was soft-deleted. Soft-deleted tasks are kept for 30 days before they are removed permanently."`
@@ -267,6 +273,10 @@ func (*Task) TableName() string {
 // is only ever set on soft delete; restore must set it back to NULL.
 func taskNotDeletedCond(tableName string) builder.Cond {
 	return builder.IsNull{tableName + ".deleted_at"}
+}
+
+func taskVisibleCond(tableName string) builder.Cond {
+	return builder.And(taskNotDeletedCond(tableName), builder.Eq{tableName + ".task_trace_hidden_by": 0})
 }
 
 // GetFullIdentifier returns the task identifier if the task has one and the index prefixed with # otherwise.
@@ -692,6 +702,7 @@ func addRelatedTasksToTasks(s *xorm.Session, taskIDs []int64, taskMap map[int64]
 	}
 	fullRelatedTasks := make(map[int64]*Task)
 	err = s.In("id", relatedTaskIDs).
+		And(taskVisibleCond("tasks")).
 		And(accessible).
 		Find(&fullRelatedTasks)
 	if err != nil {
@@ -2290,12 +2301,19 @@ func (t *Task) Delete(s *xorm.Session, a web.Auth) (err error) {
 	if !taskTraceTeamEnabled() {
 		return t.deleteSingleTask(s, a)
 	}
-	tasks, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
+	tasks, localOnly, err := taskTraceTaskDeletionAllowed(s, a, t.ID)
 	if err != nil {
 		return err
 	}
-	if len(t.deletionScopeIDs) > 0 && !taskTraceSameDeletionScope(t.deletionScopeIDs, tasks) {
+	if len(t.deletionScopeIDs) > 0 && (t.localViewDeletion != localOnly || !taskTraceSameDeletionScope(t.deletionScopeIDs, tasks)) {
 		return taskTraceUndoConflict()
+	}
+	if localOnly {
+		ids := make([]int64, 0, len(tasks))
+		for _, task := range tasks {
+			ids = append(ids, task.ID)
+		}
+		return taskTraceSetLocalHidden(s, a, t.ID, ids)
 	}
 	// Validate the complete tree before deleting anything; then remove leaves
 	// first so each task is still readable when its deletion event is captured.
@@ -2499,6 +2517,9 @@ func (t *Task) ReadOne(s *xorm.Session, a web.Auth) (err error) {
 	*t, err = GetTaskByIDSimple(s, t.ID)
 	if err != nil {
 		return
+	}
+	if t.TaskTraceHiddenBy != 0 {
+		return ErrTaskDoesNotExist{ID: t.ID}
 	}
 	taskMap := make(map[int64]*Task, 1)
 	taskMap[t.ID] = t

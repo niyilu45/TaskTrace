@@ -623,6 +623,10 @@ func taskTraceTeamNodeForTask(binding *TaskTraceTeamBinding, taskID int64) strin
 }
 
 func taskTraceTeamSubtree(s *xorm.Session, root int64) ([]int64, map[int64]int64, error) {
+	return taskTraceTeamWalkSubtree(s, root, nil)
+}
+
+func taskTraceTeamWalkSubtree(s *xorm.Session, root int64, include func(Task) bool) ([]int64, map[int64]int64, error) {
 	ids := []int64{}
 	parents := map[int64]int64{}
 	seen := map[int64]bool{}
@@ -648,11 +652,15 @@ func taskTraceTeamSubtree(s *xorm.Session, root int64) ([]int64, map[int64]int64
 		}
 		sort.Slice(relations, func(i, j int) bool { return relations[i].OtherTaskID < relations[j].OtherTaskID })
 		for _, relation := range relations {
-			if _, err := GetTaskByIDSimple(s, relation.OtherTaskID); err != nil {
+			child, err := GetTaskByIDSimple(s, relation.OtherTaskID)
+			if err != nil {
 				if IsErrTaskDoesNotExist(err) {
 					continue
 				}
 				return err
+			}
+			if include != nil && !include(child) {
+				continue
 			}
 			if previous := parents[relation.OtherTaskID]; previous == 0 || id < previous {
 				parents[relation.OtherTaskID] = id
@@ -997,7 +1005,9 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		if taskTraceTeamTaskDeleted(binding, taskTraceTeamNodeForTask(binding, root)) {
 			continue
 		}
-		subtreeIDs, subtreeParents, err := taskTraceTeamSubtree(s, root)
+		subtreeIDs, subtreeParents, err := taskTraceTeamWalkSubtree(s, root, func(task Task) bool {
+			return task.TaskTraceSharedParentID == nil || taskTraceTeamNodeForTask(binding, task.ID) != ""
+		})
 		if err != nil {
 			return TaskTraceTeamSnapshot{}, err
 		}
@@ -1035,8 +1045,15 @@ func taskTraceTeamBuildSnapshot(s *xorm.Session, binding *TaskTraceTeamBinding, 
 		if err != nil {
 			return snapshot, err
 		}
+		if task.TaskTraceViewPruned {
+			continue
+		}
 		node := taskTraceTeamNodeForTask(binding, taskID)
-		parentNode := taskTraceTeamNodeForTask(binding, parents[taskID])
+		parentID := parents[taskID]
+		if task.TaskTraceSharedParentID != nil {
+			parentID = *task.TaskTraceSharedParentID
+		}
+		parentNode := taskTraceTeamNodeForTask(binding, parentID)
 		// Synchronization needs the complete state, not a UI page. A negative
 		// perPage still uses the default limit; page zero disables pagination.
 		// Omitting the canonical list here would publish a false deletion.
@@ -2221,7 +2238,7 @@ func taskTraceTeamValidateMissingTaskDepth(s *xorm.Session, binding *TaskTraceTe
 	return nil
 }
 
-func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot) error {
+func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot, excluded ...map[string]bool) error {
 	if len(snapshots) == 0 {
 		return nil
 	}
@@ -2232,11 +2249,30 @@ func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskT
 	if err != nil {
 		return err
 	}
+	if len(excluded) != 0 && len(excluded[0]) != 0 {
+		skip := excluded[0]
+		included := plan[:0]
+		for _, task := range plan {
+			if skip[task.ParentNode] {
+				skip[task.NodeID] = true
+				continue
+			}
+			included = append(included, task)
+		}
+		plan = included
+	}
 	if err := taskTraceTeamValidateMissingTaskDepth(s, binding, plan); err != nil {
 		return err
 	}
 	for _, shared := range plan {
 		task := &Task{Title: shared.Title, Description: shared.Description, ProjectID: binding.ProjectID, Done: shared.Done, Status: shared.Status, PercentDone: taskTraceCompletionValue(shared.PercentDone), Priority: 10 - taskTraceDefaultDisplayPriority()}
+		if shared.ParentNode != "" {
+			parent, err := GetTaskByIDSimple(s, binding.NodeTasks[shared.ParentNode])
+			if err != nil {
+				return err
+			}
+			task.ProjectID, task.TaskTraceHiddenBy = parent.ProjectID, parent.TaskTraceHiddenBy
+		}
 		if err := task.Create(s, a); err != nil {
 			return err
 		}
@@ -2251,14 +2287,14 @@ func taskTraceTeamCreateMissingTasks(s *xorm.Session, a web.Auth, binding *TaskT
 	return nil
 }
 
-func taskTraceTeamEnsureAttachments(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot) error {
+func taskTraceTeamEnsureAttachments(s *xorm.Session, a web.Auth, binding *TaskTraceTeamBinding, snapshots []TaskTraceTeamSnapshot, excluded ...map[string]bool) error {
 	if binding.LocalAttachments == nil {
 		binding.LocalAttachments = map[string]int64{}
 	}
 	for _, snapshot := range snapshots {
 		for _, task := range snapshot.Tasks {
 			taskID := binding.NodeTasks[task.NodeID]
-			if taskID == 0 {
+			if taskID == 0 || (len(excluded) != 0 && excluded[0][task.NodeID]) {
 				continue
 			}
 			for _, shared := range task.Attachments {
@@ -2375,7 +2411,12 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err := taskTraceTeamValidateBinding(binding, actor); err != nil {
 		return fmt.Errorf("validate team membership: %w", err)
 	}
-	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID, previousOverride...)
+	removed, err := taskTraceTeamRemovedLocalViews(s, binding)
+	if err != nil {
+		return err
+	}
+	pruned := removed.prunedNodes()
+	checkpoint, previousLocal, err := taskTraceTeamBeginSync(s, binding, actor, state.DeviceID, pruned, previousOverride...)
 	if err != nil {
 		return err
 	}
@@ -2398,6 +2439,14 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	local, err := taskTraceTeamBuildSnapshot(s, binding, actor, state.DeviceID)
 	if err != nil {
 		return fmt.Errorf("prepare local collaboration data: %w", err)
+	}
+	if len(pruned) != 0 {
+		published, err := taskTraceTeamReadPublishedView(binding, actor, state.DeviceID)
+		if err != nil {
+			return err
+		}
+		previousLocal = taskTraceKeepRemoteViewRows(pruned, previousLocal, published)
+		local = *taskTraceKeepRemoteViewRows(pruned, &local, published)
 	}
 	taskTraceTeamRememberOutstandingPriorities(binding, local)
 	var manifest TaskTraceTeamManifest
@@ -2427,7 +2476,15 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 			return err
 		}
 	}
+	beforeProtection := local
 	taskTraceTeamProtectSnapshotPermissions(&local, previousLocal, &manifest, actor)
+	retainPending := removed.unpublishedNodes(beforeProtection, local, &manifest, previousLocal)
+	if len(retainPending) != 0 {
+		local = *taskTraceKeepRemoteViewRows(retainPending, &local, previousLocal)
+	}
+	if len(pruned) != 0 {
+		local = *taskTraceKeepRemoteViewRows(pruned, &local, previousLocal)
+	}
 	taskTraceTeamReconcileLocalCommentEvents(&local, previousLocal, time.Now().UTC())
 	progressChange := taskTraceTeamLatestProgressChange(previousLocal, local, actor)
 	localHash := taskTraceTeamSnapshotHash(local)
@@ -2450,13 +2507,17 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
-	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots); err != nil {
+	excluded := removed.prunedNodes()
+	for node := range retainPending {
+		excluded[node] = true
+	}
+	if err := taskTraceTeamCreateMissingTasks(s, a, binding, snapshots, excluded); err != nil {
 		return fmt.Errorf("import shared tasks: %w", err)
 	}
 	if restoredRoot := binding.NodeTasks[manifest.RootNode]; restoredRoot != 0 {
 		binding.RootTaskID = restoredRoot
 	}
-	if err := taskTraceTeamEnsureAttachments(s, a, binding, snapshots); err != nil {
+	if err := taskTraceTeamEnsureAttachments(s, a, binding, snapshots, excluded); err != nil {
 		return fmt.Errorf("import shared attachments: %w", err)
 	}
 	allByNode := map[string][]struct {
@@ -2475,7 +2536,7 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	conflicts := []TaskTraceTeamConflict{}
 	unresolvedBases := map[string]map[string]string{}
 	for node, taskID := range binding.NodeTasks {
-		if taskTraceTeamTaskDeleted(binding, node) {
+		if taskTraceTeamTaskDeleted(binding, node) || excluded[node] {
 			continue
 		}
 		if !taskTraceTeamCan(&manifest, node, "", actor, false) {
@@ -2663,7 +2724,16 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 		}
 		mergedBase[node] = merged
 	}
+	previousBase := binding.Base
 	binding.Base = taskTraceTeamCopyBase(mergedBase)
+	for node := range retainPending {
+		// Do not rebase an unsent edit over changes this copy could not import.
+		if base, ok := previousBase[node]; ok {
+			binding.Base[node] = base
+		} else {
+			delete(binding.Base, node)
+		}
+	}
 	for node, fields := range unresolvedBases {
 		base := binding.Base[node]
 		for field, value := range fields {
@@ -2683,6 +2753,9 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	binding.Conflicts = conflicts
 	binding.LastSync = time.Now().UTC()
 	binding.LastError = ""
+	if len(retainPending) != 0 {
+		binding.LastError = "移除的任务还有未同步改动，请恢复共享任务的写入权限后重试。" //nolint:gosmopolitan // This status is shown directly in the TaskTrace UI.
+	}
 	if binding.Notify && localChanged && progressChange != nil {
 		created := progressChange.Comment.Updated
 		if created.IsZero() {
@@ -2715,12 +2788,21 @@ func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeam
 	if err != nil {
 		return err
 	}
+	for node := range retainPending {
+		pruned[node] = true
+	}
+	if len(pruned) != 0 {
+		final = *taskTraceKeepRemoteViewRows(pruned, &final, &local)
+	}
 	latestCommentEvents := taskTraceTeamLatestCommentEventSnapshot(snapshots)
 	taskTraceTeamReconcileLocalCommentEvents(&final, &latestCommentEvents, time.Now().UTC())
 	if err := taskTraceTeamWriteSnapshot(binding, final); err != nil {
 		return err
 	}
 	binding.LastSnapshotHash = taskTraceTeamSnapshotHash(final)
+	if err := removed.prunePublished(s, state, binding, final, retainPending); err != nil {
+		return err
+	}
 	return taskTraceTeamFinishSync(s, checkpoint, binding)
 }
 
@@ -2802,6 +2884,13 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 			return nil, ErrGenericForbidden{}
 		}
 		return taskTraceTeamUpdateMembersLocked(s, a, state, existing, request.Members, u.Username)
+	}
+	existing, err := taskTraceTeamLocalBinding(s, &state, request.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && !taskTraceTeamMembersEqual(existing.Owner, u.Username) {
+		return nil, ErrGenericForbidden{}
 	}
 	root := taskTraceTeamRoot()
 	grantedMembers := request.Members
@@ -3330,6 +3419,9 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 		}
 		rootTitle := ""
 		if task, taskErr := GetTaskByIDSimple(s, binding.RootTaskID); taskErr == nil {
+			if task.TaskTraceHiddenBy != 0 && len(binding.Conflicts) == 0 && binding.LastError == "" {
+				continue
+			}
 			rootTitle = task.Title
 		}
 		permissionTargets := taskTraceTeamPermissionTargets(s, &binding, &manifest, u.Username)

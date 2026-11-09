@@ -246,7 +246,10 @@ func captureTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any)
 				return nil, true, err
 			}
 			snap.ProjectID = taskTraceUndoInt(row, "ProjectID")
-			if method == "delete" && taskTraceTeamEnabled() {
+			if method == "delete" && object.localViewDeletion {
+				snap.Kind = "hide"
+				snap.SubtreeTaskIDs = object.deletionScopeIDs
+			} else if method == "delete" && taskTraceTeamEnabled() {
 				tasks, scopeErr := taskTraceTaskDeletionScope(s, object.ID)
 				if scopeErr != nil {
 					return nil, true, scopeErr
@@ -338,6 +341,10 @@ func (snap *taskTraceUndoCapture) readState(s *xorm.Session) (taskTraceUndoState
 		return taskTraceUndoPart(&state, name, rows, err)
 	}
 	switch snap.Kind {
+	case "hide":
+		row, err := taskTraceUndoReadTask(s, snap.TaskID)
+		state.Task = taskTraceUndoRow{"TaskTraceHiddenBy": row["TaskTraceHiddenBy"]}
+		return state, err
 	case "task":
 		var err error
 		state.Task, err = taskTraceUndoReadTask(s, snap.TaskID)
@@ -546,6 +553,9 @@ func finishTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any, 
 		snap.After.Parts["positions"] = taskTraceUndoFilterViews(snap.After.Parts["positions"], snap.ViewIDs)
 	}
 	changed := len(snap.Parts) > 0 || len(snap.Fields) > 0
+	if snap.Kind == "hide" {
+		changed = !bytes.Equal(snap.Before.Task["TaskTraceHiddenBy"], snap.After.Task["TaskTraceHiddenBy"])
+	}
 	if snap.Kind == "task" && snap.Method != "update" {
 		changed = !taskTraceUndoSame("task", []taskTraceUndoRow{snap.Before.Task}, []taskTraceUndoRow{snap.After.Task})
 	}
@@ -557,7 +567,7 @@ func finishTaskTraceUndo(s *xorm.Session, a web.Auth, method string, model any, 
 		ids = append(ids, snap.OtherTaskID)
 	}
 	//nolint:gosmopolitan // These action labels are displayed directly in the Chinese TaskTrace UI.
-	labels := map[string]string{"priority": "修改个人优先级", "task": "修改任务", "comment": "修改进展或遗留事项", "move": "移动任务", "position": "调整任务顺序", "relation": "调整任务层级", "outstanding": "移动遗留事项"}
+	labels := map[string]string{"hide": "移除本机共享任务视图", "priority": "修改个人优先级", "task": "修改任务", "comment": "修改进展或遗留事项", "move": "移动任务", "position": "调整任务顺序", "relation": "调整任务层级", "outstanding": "移动遗留事项"}
 	label := labels[snap.Kind]
 	if snap.Kind == "task" && method == "create" {
 		label = "新增任务"

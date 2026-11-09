@@ -21,6 +21,7 @@ import (
 	"sort"
 
 	"code.vikunja.io/api/pkg/events"
+	"code.vikunja.io/api/pkg/user"
 	"code.vikunja.io/api/pkg/web"
 
 	"xorm.io/builder"
@@ -38,6 +39,7 @@ type TaskTraceMove struct {
 	task            Task
 	parents         []*TaskRelation
 	subtree         []*Task
+	localPlacement  *TaskTraceTeamBinding
 	web.CRUDable    `json:"-" xorm:"-"`
 	web.Permissions `json:"-" xorm:"-"`
 }
@@ -58,11 +60,8 @@ func (e ErrTaskTraceMoveInvalid) HTTPError() web.HTTPError {
 func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	m.subtree = nil
 	m.parents = nil
-	source := &Task{ID: m.TaskID, ProjectID: m.ProjectID}
-	can, err := source.CanUpdate(s, a)
-	if err != nil || !can {
-		return can, err
-	}
+	m.localPlacement = nil
+	var err error
 	m.task, err = GetTaskByIDSimple(s, m.TaskID)
 	if err != nil {
 		return false, err
@@ -72,6 +71,19 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 	}
 	if m.ProjectID == 0 {
 		m.ProjectID = m.task.ProjectID
+	}
+	if m.task.TaskTraceHiddenBy != 0 {
+		return false, ErrTaskDoesNotExist{ID: m.TaskID}
+	}
+	can, err := m.canMoveSource(s, a)
+	if err != nil || !can {
+		return can, err
+	}
+	if m.localPlacement != nil {
+		can, err = (&Project{ID: m.ProjectID}).CanWrite(s, a)
+		if err != nil || !can {
+			return can, err
+		}
 	}
 	projects := []int64{m.task.ProjectID, m.ProjectID}
 	if m.ProjectID != m.task.ProjectID {
@@ -90,7 +102,7 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 			if id == m.TaskID && task.ProjectID != m.task.ProjectID {
 				return false, ErrTaskTraceMoveInvalid{"The task was moved elsewhere. Refresh and try again."}
 			}
-			can, err := (&Task{ID: id, ProjectID: m.ProjectID}).CanUpdate(s, a)
+			can, err := m.canMoveTask(s, a, task)
 			if err != nil || !can {
 				return can, err
 			}
@@ -111,14 +123,16 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 		return can, err
 	}
 	if m.ParentID != 0 {
-		parent := &Task{ID: m.ParentID}
-		can, err = parent.CanUpdate(s, a)
-		if err != nil || !can {
-			return can, err
-		}
 		parentTask, err := GetTaskByIDSimple(s, m.ParentID)
 		if err != nil {
 			return false, err
+		}
+		if parentTask.TaskTraceHiddenBy != 0 {
+			return false, ErrTaskDoesNotExist{ID: m.ParentID}
+		}
+		can, err = m.canMoveTask(s, a, parentTask)
+		if err != nil || !can {
+			return can, err
 		}
 		if parentTask.ProjectID != m.ProjectID {
 			return false, ErrTaskTraceMoveInvalid{"The new parent must belong to the destination project."}
@@ -129,13 +143,58 @@ func (m *TaskTraceMove) CanCreate(s *xorm.Session, a web.Auth) (bool, error) {
 		return false, err
 	}
 	for _, rel := range m.parents {
-		parent := &Task{ID: rel.OtherTaskID}
-		can, err = parent.CanUpdate(s, a)
+		parent, err := GetTaskByIDSimple(s, rel.OtherTaskID)
+		if err != nil {
+			return false, err
+		}
+		can, err = m.canMoveTask(s, a, parent)
 		if err != nil || !can {
 			return can, err
 		}
 	}
 	return true, nil
+}
+
+func (m *TaskTraceMove) canMoveSource(s *xorm.Session, a web.Auth) (bool, error) {
+	if !taskTraceTeamEnabled() {
+		return m.canMoveTask(s, a, m.task)
+	}
+	actor, err := user.GetFromAuth(a)
+	if err != nil {
+		return false, err
+	}
+	state, err := taskTraceTeamLoadState()
+	if err != nil {
+		return false, err
+	}
+	binding, err := taskTraceTeamLocalBinding(s, &state, m.TaskID)
+	if err != nil {
+		return false, err
+	}
+	if binding == nil || taskTraceTeamMembersEqual(binding.Owner, actor.Username) {
+		return m.canMoveTask(s, a, m.task)
+	}
+	if taskTraceTeamNodeForTask(binding, m.TaskID) == "" {
+		return false, ErrTaskTraceMoveInvalid{"Synchronize this new shared task before moving it."}
+	}
+	if m.ParentID != 0 {
+		target, err := taskTraceTeamLocalBinding(s, &state, m.ParentID)
+		if err != nil {
+			return false, err
+		}
+		if target != nil && target.ShareID != binding.ShareID {
+			return false, ErrTaskTraceMoveInvalid{"Move the shared task to a project or a personal parent task."}
+		}
+	}
+	m.localPlacement = binding
+	return m.canMoveTask(s, a, m.task)
+}
+
+func (m *TaskTraceMove) canMoveTask(s *xorm.Session, a web.Auth, task Task) (bool, error) {
+	if m.localPlacement != nil {
+		return (&Project{ID: task.ProjectID}).CanWrite(s, a)
+	}
+	return (&Task{ID: task.ID, ProjectID: m.ProjectID}).CanUpdate(s, a)
 }
 
 func (m *TaskTraceMove) sameParent() bool {
@@ -258,6 +317,9 @@ func (m *TaskTraceMove) Create(s *xorm.Session, a web.Auth) error {
 		}
 	}
 	if !m.sameParent() {
+		if err := m.rememberSharedParent(s); err != nil {
+			return err
+		}
 		for _, r := range m.parents {
 			if err := r.Delete(s, a); err != nil {
 				return err
@@ -286,6 +348,24 @@ func (m *TaskTraceMove) Create(s *xorm.Session, a web.Auth) error {
 	}
 	events.DispatchOnCommit(s, &TaskPositionsRecalculatedEvent{NewTaskPositions: positions})
 	return nil
+}
+
+// Keep the shared parent in snapshots even after this copy is detached or
+// moved under another local parent. Project IDs never travel in snapshots.
+func (m *TaskTraceMove) rememberSharedParent(s *xorm.Session) error {
+	if m.localPlacement == nil || m.task.TaskTraceSharedParentID != nil {
+		return nil
+	}
+	parent := int64(0)
+	for _, relation := range m.parents {
+		id := relation.OtherTaskID
+		if taskTraceTeamNodeForTask(m.localPlacement, id) != "" && (parent == 0 || id < parent) {
+			parent = id
+		}
+	}
+	_, err := s.ID(m.TaskID).NoAutoTime().Cols("task_trace_shared_parent_id").
+		Update(&Task{TaskTraceSharedParentID: &parent})
+	return err
 }
 
 // moveSubtreeToProject only updates placement columns. A normal Task.Update
@@ -325,7 +405,11 @@ func (m *TaskTraceMove) moveSubtreeToProject(s *xorm.Session, a web.Auth) error 
 		return err
 	}
 	for _, task := range moving {
-		if _, err := s.ID(task.ID).Cols("project_id", "index").Update(task); err != nil {
+		update := s.ID(task.ID).Cols("project_id", "index")
+		if m.localPlacement != nil {
+			update = update.NoAutoTime()
+		}
+		if _, err := update.Update(task); err != nil {
 			return err
 		}
 		if _, err := s.Where("task_id = ?", task.ID).Delete(&TaskBucket{}); err != nil {
@@ -389,6 +473,6 @@ func (p *TaskTracePositions) ReadAll(s *xorm.Session, a web.Auth, _ string, page
 	}
 	items := []*TaskPosition{}
 	limit, start := getLimitFromPageIndex(page, perPage)
-	total, err := s.Where("project_view_id = ?", p.ProjectViewID).In("task_id", builder.Select("id").From("tasks").Where(builder.And(builder.Eq{"project_id": p.ProjectID}, taskNotDeletedCond("tasks")))).OrderBy("position ASC, task_id ASC").Limit(limit, start).FindAndCount(&items)
+	total, err := s.Where("project_view_id = ?", p.ProjectViewID).In("task_id", builder.Select("id").From("tasks").Where(builder.And(builder.Eq{"project_id": p.ProjectID}, taskVisibleCond("tasks")))).OrderBy("position ASC, task_id ASC").Limit(limit, start).FindAndCount(&items)
 	return items, len(items), total, err
 }

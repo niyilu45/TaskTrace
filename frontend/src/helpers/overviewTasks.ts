@@ -1,7 +1,7 @@
 import type {ITask} from '@/modelTypes/ITask'
 import {groupProgressTasks} from './projectProgress'
 
-export function groupOverviewTasks(matches: ITask[], ancestors: ITask[]) {
+export function groupOverviewTasks(matches: ITask[], ancestors: ITask[], visibleProjectIds: number[] = []) {
 	const matching = new Set(matches.map(task => task.id))
 	const projects = new Map<number, Map<number, ITask>>()
 	for (const task of [...matches, ...ancestors]) {
@@ -17,5 +17,7 @@ export function groupOverviewTasks(matches: ITask[], ancestors: ITask[]) {
 			hasChildren: (rows[index + 1]?.depth ?? 0) > row.depth,
 		}))
 		return {projectId, rows, count: rows.filter(row => !row.context).length}
-	}).filter(project => project.count > 0)
+	}).filter(project => project.count > 0).concat(
+		visibleProjectIds.filter(id => !projects.has(id)).map(projectId => ({projectId, rows: [], count: 0})),
+	)
 }

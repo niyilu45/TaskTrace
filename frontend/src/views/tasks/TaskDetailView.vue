@@ -76,7 +76,7 @@
 			<div class="columns mbs-2">
 				<!-- Content -->
 				<div
-					:class="{'is-two-thirds': canWrite}"
+					:class="{'is-two-thirds': canWrite || canManageLocalPlacement}"
 					class="column detail-content"
 				>
 					<div class="details task-core-fields">
@@ -458,7 +458,7 @@
 							<div class="control is-expanded">
 								<ProjectSearch
 									:ref="e => setFieldRef('moveProject', e)"
-									:filter="project => project.id !== task.projectId"
+									:filter="candidate => candidate.id !== task.projectId && (!isImportedTask || (!candidate.isArchived && (candidate.maxPermission ?? 0) > PERMISSIONS.READ))"
 									@update:modelValue="changeProject"
 								/>
 							</div>
@@ -645,16 +645,26 @@
 						>
 							{{ $t('task.detail.actions.repeatAfter') }}
 						</XButton>
-						<XButton
-							v-shortcut="SHORTCUTS.taskDetail.delete"
-							icon="trash-alt"
-							:shadow="false"
-							class="is-danger is-outlined has-no-border"
-							@click="showDeleteModal = true"
-						>
-							{{ $t('task.detail.actions.delete') }}
-						</XButton>
 					</template>
+					<XButton
+						v-if="!canWrite && canManageLocalPlacement"
+						v-shortcut="SHORTCUTS.taskDetail.moveProject"
+						variant="secondary"
+						icon="list"
+						@click="setFieldActive('moveProject')"
+					>
+						{{ $t('task.detail.actions.moveProject') }}
+					</XButton>
+					<XButton
+						v-if="canWrite || canManageLocalPlacement"
+						v-shortcut="SHORTCUTS.taskDetail.delete"
+						icon="trash-alt"
+						:shadow="false"
+						class="is-danger is-outlined has-no-border"
+						@click="showDeleteModal = true"
+					>
+						{{ isImportedTask ? '从本机移除' : $t('task.detail.actions.delete') }}
+					</XButton>
 
 					<!-- Created / Updated [by] -->
 					<CreatedUpdated :task="task" />
@@ -679,19 +689,20 @@
 
 		<Modal
 			:enabled="showDeleteModal"
+			:submit-label="isImportedTask ? '从本机移除' : undefined"
 			@close="showDeleteModal = false"
 			@submit="deleteTask()"
 		>
 			<template #header>
-				<span>{{ $t('task.detail.delete.header') }}</span>
+				<span>{{ isImportedTask ? '从本机移除共享任务' : $t('task.detail.delete.header') }}</span>
 			</template>
 
 			<template #text>
 				<p class="tw:text-balance">
-					{{ $t('task.detail.delete.text1') }}
+					{{ isImportedTask ? '此任务和下级任务将从本机视图移除。已保存的修改和评论会继续同步，成功后清理本机的内容副本。' : $t('task.detail.delete.text1') }}
 				</p>
 				<p class="tw:text-balance">
-					{{ isLocalBuild ? '删除后可使用“撤销”恢复。' : $t('task.detail.delete.text2') }}
+					{{ isImportedTask ? '可以撤销移除。本机副本清理后，恢复时需要连接共享目录。' : isLocalBuild ? '删除后可使用“撤销”恢复。' : $t('task.detail.delete.text2') }}
 				</p>
 			</template>
 		</Modal>
@@ -769,7 +780,7 @@ import {useTitle} from '@/composables/useTitle'
 import {useTaskDetailShortcuts} from '@/composables/useTaskDetailShortcuts'
 
 import {success, error} from '@/message'
-import {patchTasksRead, tasksPersonalPriorityUpdate} from '@/client/generated'
+import {patchTasksRead, tasksPersonalPriorityUpdate, tasksTasktraceMove} from '@/client/generated'
 import {tasktracePriorityNumber} from '@/helpers/tasktracePriority'
 import type {Action as MessageAction} from '@/message'
 
@@ -882,6 +893,13 @@ const canEdit = computed(() => (
 ))
 const teamCanWrite = computed(() => teamStore.canWriteTask(task.value.id))
 const canWrite = computed(() => canEdit.value)
+const isImportedTask = computed(() => {
+	if (!isLocalBuild) return false
+	const binding = teamStore.bindingForTask(task.value.id)
+	return !!binding && teamStore.memberKey(binding.owner) !== teamStore.memberKey(teamStore.status.username)
+})
+const canManageLocalPlacement = computed(() => isImportedTask.value
+	&& !project.value?.isArchived && (project.value?.maxPermission ?? 0) > PERMISSIONS.READ)
 // Shared-task priorities are personal even when the shared content is read-only.
 const canSetPriority = computed(() => canWrite.value || (isLocalBuild && Boolean(teamStore.bindingForTask(task.value.id))))
 
@@ -1243,7 +1261,7 @@ const showDeleteModal = ref(false)
 async function deleteTask() {
 	try {
 		await taskStore.delete(task.value)
-		success({message: t('task.detail.deleteSuccess')})
+		success({message: isImportedTask.value ? '已从本机移除共享任务' : t('task.detail.deleteSuccess')})
 		if (isModal.value) emit('close')
 		else router.push({name: 'project.index', params: {projectId: task.value.projectId}})
 	} catch (cause) {
@@ -1271,6 +1289,34 @@ async function toggleTaskDone() {
 
 async function changeProject(project: IProject | null) {
 	if (project === null) {
+		return
+	}
+	if (isImportedTask.value) {
+		const view = project.views.find(view => view.viewKind === 'list') || project.views[0]
+		if (!view) {
+			error({message: '未找到项目视图，请刷新页面后重试。'})
+			return
+		}
+		const id = task.value.id
+		try {
+			await tasksTasktraceMove({
+				path: {task: id},
+				body: {project_id: project.id, parent_id: 0, before_task_id: 0, project_view_id: view.id},
+				headers: undoGroupHeaders(),
+				throwOnError: true,
+			})
+			if (id === task.value.id) {
+				const updated = await taskService.get({id})
+				if (id === task.value.id) {
+					kanbanStore.removeTaskInBucket(task.value)
+					Object.assign(task.value, updated, {comments: task.value.comments})
+					baseStore.setCurrentProject(project)
+				}
+			}
+			success({message: '共享任务已移动到本机的目标项目。'})
+		} catch (cause) {
+			error(cause)
+		}
 		return
 	}
 	kanbanStore.removeTaskInBucket(task.value)

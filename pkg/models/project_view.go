@@ -610,7 +610,7 @@ func findTaskIDs(query *xorm.Session, cond builder.Cond) (taskIDs []int64, err e
 	taskIDs = []int64{}
 	err = query.
 		Where(cond).
-		And(taskNotDeletedCond("tasks")).
+		And(taskVisibleCond("tasks")).
 		Cols("tasks.id").
 		Find(&taskIDs)
 	return

@@ -191,7 +191,7 @@ func (r *TaskTracePeriodReview) ReadOne(s *xorm.Session, a web.Auth) error {
 	// Read full histories so activity flags and unchanged items accompanying a
 	// changed task are resolved against the same canonical list.
 	withComments := builder.Select("task_id").From("task_comments")
-	if err := s.In("project_id", r.ProjectIDs).Where("deleted_at IS NULL").And(builder.In("id", withComments)).Asc("project_id", "id").Find(&candidates); err != nil {
+	if err := s.In("project_id", r.ProjectIDs).Where(taskVisibleCond("tasks")).And(builder.In("id", withComments)).Asc("project_id", "id").Find(&candidates); err != nil {
 		return err
 	}
 	readable := make([]*Task, 0, len(candidates))

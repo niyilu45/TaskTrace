@@ -43,7 +43,7 @@
 			拖到这里，放在“{{ projectTitle(project.projectId) }}”下作为顶层任务
 		</div>
 		<ul
-			v-if="!collapsedProjects.has(project.projectId)"
+			v-if="project.rows.length && !collapsedProjects.has(project.projectId)"
 			class="overview-task-list"
 		>
 			<li
@@ -87,6 +87,12 @@
 				</div>
 			</li>
 		</ul>
+		<p
+			v-if="!project.rows.length && !loading && !collapsedProjects.has(project.projectId)"
+			class="mbs-2"
+		>
+			暂无符合当前筛选条件的任务
+		</p>
 	</section>
 	<Teleport to="body">
 		<div
@@ -114,21 +120,16 @@ import {groupOverviewTasks} from '@/helpers/overviewTasks'
 import {taskSubtreeIds} from '@/helpers/taskTreeDrag'
 import {tasksTasktraceMove} from '@/client/generated'
 import {error, getErrorText, success} from '@/message'
-const props = defineProps<{tasks: ITask[], ancestors: ITask[], loading?: boolean}>()
+const props = defineProps<{tasks: ITask[], ancestors: ITask[], loading?: boolean, showEmptyProjects?: boolean}>()
 const emit = defineEmits<{taskUpdated: [task: ITask], taskMoved: []}>()
 const projectStore = useProjectStore()
 const groups = computed(() => {
-	const groups = groupOverviewTasks(props.tasks, props.ancestors)
-	// Append empty/filtered destination projects without shifting existing rows.
-	if (draggedTask.value) {
-		const shown = new Set(groups.map(group => group.projectId))
-		for (const project of Object.values(projectStore.projects)) {
-			if (project.id > 0 && !shown.has(project.id) && canWrite(project.id)) {
-				groups.push({projectId: project.id, rows: [], count: 0})
-			}
-		}
-	}
-	return groups
+	const extraProjects = props.showEmptyProjects || draggedTask.value
+		? Object.values(projectStore.projects)
+			.filter(project => project.id > 0 && !project.isArchived && (props.showEmptyProjects || canWrite(project.id)))
+			.map(project => project.id)
+		: []
+	return groupOverviewTasks(props.tasks, props.ancestors, extraProjects)
 })
 const collapsedProjects = ref(new Set<number>())
 const collapsedTasks = ref(new Set<number>())

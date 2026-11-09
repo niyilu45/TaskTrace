@@ -45,6 +45,7 @@
 			v-if="projectStore.hasProjects"
 			:key="showTasksKey"
 			:label-ids="labelIds"
+			:show-empty-projects="isLocalBuild"
 			class="show-tasks"
 			@tasksLoaded="tasksLoaded = true"
 			@clearLabelFilter="handleClearLabelFilter"

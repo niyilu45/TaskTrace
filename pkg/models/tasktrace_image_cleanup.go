@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,18 +63,21 @@ func taskTraceCleanupImages(now time.Time, removeBlob func(int64) error) error {
 		return nil
 	}
 	defer taskTraceImageCleanupRun.Unlock()
+	pendingIDs, err := taskTraceCleanupPendingIDs(taskTraceImageCleanupCursor)
+	if err != nil {
+		return err
+	}
 	s := db.NewReadSession()
 	candidates := []*files.File{}
-	err := s.Where(builder.Or(
-		builder.Like{
-			"name",
-			"tasktrace-progress-",
-		},
-		builder.Like{
-			"name",
-			"outstanding-",
-		},
-	)).And(builder.Lt{"created": now.Add(-taskTraceImageCleanupGrace)}).And(builder.Gt{"id": taskTraceImageCleanupCursor}).Asc("id").Limit(100).Find(&candidates)
+	generated := builder.And(
+		builder.Or(builder.Like{"name", "tasktrace-progress-"}, builder.Like{"name", "outstanding-"}),
+		builder.Lt{"created": now.Add(-taskTraceImageCleanupGrace)},
+	)
+	retired := builder.Select("task_attachments.file_id").From("task_attachments").
+		InnerJoin("tasks", "tasks.id = task_attachments.task_id").
+		Where(builder.Eq{"tasks.task_trace_view_pruned": true})
+	err = s.Where(builder.Or(generated, builder.In("id", retired), builder.In("id", pendingIDs))).
+		And(builder.Gt{"id": taskTraceImageCleanupCursor}).Asc("id").Limit(100).Find(&candidates)
 	_ = s.Close()
 	if err != nil {
 		return err
@@ -113,10 +117,6 @@ func taskTraceCleanupImages(now time.Time, removeBlob func(int64) error) error {
 			break
 		}
 		if referencedFiles[file.ID] {
-			taskTraceImageCleanupCursor = file.ID
-			continue
-		}
-		if !taskTraceGeneratedImage(file, now.Add(-taskTraceImageCleanupGrace)) {
 			taskTraceImageCleanupCursor = file.ID
 			continue
 		}
@@ -462,9 +462,10 @@ func taskTraceImageFileReferenced(s *xorm.Session, fileID int64) (bool, error) {
 }
 
 type taskTraceImageCleanupPending struct {
-	FileID        int64   `json:"file_id"`
-	AttachmentIDs []int64 `json:"attachment_ids"`
-	TaskIDs       []int64 `json:"task_ids"`
+	FileID         int64     `json:"file_id"`
+	AttachmentIDs  []int64   `json:"attachment_ids"`
+	RetiredCreated time.Time `json:"retired_created,omitzero"`
+	TaskIDs        []int64   `json:"task_ids"`
 }
 
 func taskTraceImageCleanupPendingPath(fileID int64) string {
@@ -476,6 +477,28 @@ func taskTraceImageCleanupPendingPath(fileID int64) string {
 		}
 	}
 	return filepath.Join(root, ".cache", "tasktrace-image-cleanup", strconv.FormatInt(fileID, 10)+".json")
+}
+
+func taskTraceCleanupPendingIDs(after int64) ([]int64, error) {
+	entries, err := os.ReadDir(filepath.Dir(taskTraceImageCleanupPendingPath(0)))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := []int64{}
+	for _, entry := range entries {
+		name, ok := strings.CutSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !ok {
+			continue
+		}
+		if id, err := strconv.ParseInt(name, 10, 64); err == nil && id > after {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids[:min(len(ids), 100)], nil
 }
 
 func taskTraceImageCleanupSession(ctx context.Context) (*xorm.Session, error) {
@@ -518,7 +541,7 @@ func taskTraceCleanupImage(fileID int64, now time.Time, drafts map[int64]bool, r
 	}
 	file := &files.File{ID: fileID}
 	exists, err := s.ID(fileID).Get(file)
-	if err != nil || !exists || !taskTraceGeneratedImage(file, now.Add(-taskTraceImageCleanupGrace)) {
+	if err != nil || !exists {
 		return err
 	}
 	used, err := taskTraceImageFileReferenced(s, fileID)
@@ -535,6 +558,15 @@ func taskTraceCleanupImage(fileID int64, now time.Time, drafts map[int64]bool, r
 	}
 	pending := taskTraceImageCleanupPending{FileID: fileID}
 	pendingPath := taskTraceImageCleanupPendingPath(fileID)
+	if len(attachments) == 1 {
+		pruned, err := s.ID(attachments[0].TaskID).Where("task_trace_view_pruned = ?", true).Exist(&Task{})
+		if err != nil {
+			return err
+		}
+		if pruned {
+			pending.RetiredCreated = file.Created
+		}
+	}
 	if len(attachments) == 0 {
 		if err := taskTraceTeamReadJSON(pendingPath, &pending); err != nil {
 			if os.IsNotExist(err) {
@@ -546,8 +578,12 @@ func taskTraceCleanupImage(fileID int64, now time.Time, drafts map[int64]bool, r
 			return errors.New("invalid image cleanup checkpoint")
 		}
 	}
+	retired := !pending.RetiredCreated.IsZero() && pending.RetiredCreated.Equal(file.Created)
+	if !retired && !taskTraceGeneratedImage(file, now.Add(-taskTraceImageCleanupGrace)) {
+		return nil
+	}
 	for _, attachment := range attachments {
-		if sharedTasks[attachment.TaskID] || sharedAttachments[attachment.ID] || drafts[attachment.ID] {
+		if (!retired && (sharedTasks[attachment.TaskID] || sharedAttachments[attachment.ID])) || drafts[attachment.ID] {
 			return nil
 		}
 		referenced, err := taskTraceImageReferenced(s, attachment.ID)
@@ -590,14 +626,22 @@ func taskTraceFinishImageCleanup(fileID int64, pending taskTraceImageCleanupPend
 	if err != nil {
 		return err
 	}
-	for _, id := range pending.TaskIDs {
-		if sharedTasks[id] {
-			return nil
+	if pending.RetiredCreated.IsZero() {
+		for _, id := range pending.TaskIDs {
+			if sharedTasks[id] {
+				return nil
+			}
 		}
-	}
-	for _, id := range pending.AttachmentIDs {
-		if sharedAttachments[id] {
-			return nil
+		for _, id := range pending.AttachmentIDs {
+			if sharedAttachments[id] {
+				return nil
+			}
+		}
+	} else {
+		var file files.File
+		found, err := finish.ID(fileID).Get(&file)
+		if err != nil || !found || !pending.RetiredCreated.Equal(file.Created) {
+			return err
 		}
 	}
 	// Recheck after detaching: a restore or a new background/avatar may have
