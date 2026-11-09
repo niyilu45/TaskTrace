@@ -1,4 +1,4 @@
-﻿param([switch]$NoBrowser, [int]$RunSeconds = 0, [switch]$Floating, [switch]$FloatingSelfTest, [switch]$OpenBrowser)
+﻿param([switch]$NoBrowser, [int]$RunSeconds = 0, [switch]$Floating, [switch]$FloatingSelfTest, [switch]$OpenBrowser, [int]$PrepareForLauncher = 0)
 $ErrorActionPreference = 'Stop'
 $packageRoot = $PSScriptRoot
 $dataRoot = $null
@@ -42,7 +42,7 @@ function Test-TaskTraceRunningProcess {
 $stage = 'Check for an existing TaskTrace instance'
 try {
     # Explicit self-tests run against disposable workspaces alongside the user's app.
-    if (!$FloatingSelfTest) {
+    if ($PrepareForLauncher -eq 0 -and !$FloatingSelfTest) {
         $instanceLock = Enter-TaskTraceInstanceLock
         if ($null -eq $instanceLock -or (Test-TaskTraceRunningProcess)) {
             $alreadyRunning = $true
@@ -203,6 +203,35 @@ log:
     } finally { $setupProcess.Dispose() }
     $localSession = [IO.File]::ReadAllText($sessionFile) | ConvertFrom-Json
     [IO.File]::WriteAllText($ownerFile, [string]$localSession.user_id)
+
+    if ($PrepareForLauncher -ne 0) {
+        # Keep the data-directory lock held continuously while the native
+        # launcher takes over. The duplicate handle lives in its process.
+        $stage = 'Hand off the workspace to TaskTrace.exe'
+        Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class TaskTraceWorkspaceHandoff {
+    [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError=true)]
+    static extern bool DuplicateHandle(IntPtr source, IntPtr handle, IntPtr destination, out IntPtr copy, uint access, bool inherit, uint options);
+    public static long DuplicateLock(IntPtr file, IntPtr launcher) {
+        IntPtr copy;
+        if(!DuplicateHandle(GetCurrentProcess(), file, launcher, out copy, 0, false, 2)) throw new Win32Exception();
+        return copy.ToInt64();
+    }
+}
+"@
+        $launcher = [Diagnostics.Process]::GetProcessById($PrepareForLauncher)
+        try {
+            $lockHandle = [TaskTraceWorkspaceHandoff]::DuplicateLock($sessionLock.SafeFileHandle.DangerousGetHandle(), $launcher.Handle)
+            $launchPlan = @{ DataRoot = $dataRoot; TeamRoot = $teamRoot; ConfigPath = $configFile; Url = $url; LockHandle = $lockHandle.ToString([Globalization.CultureInfo]::InvariantCulture) }
+            [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+            [Console]::WriteLine(($launchPlan | ConvertTo-Json -Compress))
+        } finally { $launcher.Dispose() }
+        exit 0
+    }
     $launchUrl = $url + '/#tasktrace-local=' + [Uri]::EscapeDataString(([IO.File]::ReadAllText($sessionFile)))
 
     # A Windows job stops our hidden server even if the launch window is closed.

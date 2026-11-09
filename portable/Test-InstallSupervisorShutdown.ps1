@@ -32,17 +32,19 @@ function Start-Hidden([string]$Exe, [string]$Arguments) {
 function New-Fixture([string]$Name) {
     $dir = Join-Path $testRoot $Name
     [void][IO.Directory]::CreateDirectory($dir)
-    foreach ($name in @('TaskTrace.exe', 'TaskTrace-floating.exe', 'TaskTrace-server.exe')) {
+    foreach ($name in @('TaskTrace-floating.exe', 'TaskTrace-server.exe')) {
         Copy-Item -LiteralPath (Join-Path $testRoot $name) -Destination $dir
     }
     [IO.File]::WriteAllText((Join-Path $dir 'Launch-TaskTrace.ps1'), $fixtureScript, [Text.UTF8Encoding]::new($true))
     return $dir
 }
 function Start-Fixture([string]$Dir) {
-    $launcher = Start-Hidden (Join-Path $Dir 'TaskTrace.exe') ''
+    # This fixture exercises installations that still run the legacy supervisor.
+    $script = Join-Path $Dir 'Launch-TaskTrace.ps1'
+    $launcher = Start-Hidden $powershell64 ('-NoProfile -ExecutionPolicy Bypass -File "' + $script + '" -Floating')
     Wait-File (Join-Path $Dir 'ready')
     $script:fixturePids = [IO.File]::ReadAllText((Join-Path $Dir 'ready')) | ConvertFrom-Json
-    foreach ($id in @($fixturePids.hostId, $fixturePids.floating, $fixturePids.server)) { $children.Add([Diagnostics.Process]::GetProcessById($id)) }
+    foreach ($id in @($fixturePids.floating, $fixturePids.server)) { $children.Add([Diagnostics.Process]::GetProcessById($id)) }
     return $launcher
 }
 try {
@@ -76,8 +78,6 @@ __WAIT__
     & $compiler /nologo /target:winexe ('/out:' + (Join-Path $testRoot 'TaskTrace-floating.exe')) $workerSource
     if ($LASTEXITCODE) { throw 'Worker compile failed.' }
     Copy-Item -LiteralPath (Join-Path $testRoot 'TaskTrace-floating.exe') -Destination (Join-Path $testRoot 'TaskTrace-server.exe')
-    & $compiler /nologo /target:winexe /reference:System.Windows.Forms.dll ('/out:' + (Join-Path $testRoot 'TaskTrace.exe')) (Join-Path $PSScriptRoot 'Launcher.cs')
-    if ($LASTEXITCODE) { throw 'Launcher compile failed.' }
     $control = New-Fixture 'control'
     $controlLauncher = Start-Fixture $control
     $controlHostId = $fixturePids.hostId
@@ -102,7 +102,7 @@ __WAIT__
         [IO.File]::WriteAllText($helper, ($helperText -join [Environment]::NewLine), [Text.UTF8Encoding]::new($true))
         $stopper = Start-Hidden $hostExe ('-NoProfile -ExecutionPolicy Bypass -File "' + $helper + '" -Directory "' + $dir + '"')
         if (!$stopper.WaitForExit(15000) -or $stopper.ExitCode -ne 0) { throw ('Stop helper failed: ' + $stopper.StandardOutput.ReadToEnd() + $stopper.StandardError.ReadToEnd()) }
-        if (!$launcher.WaitForExit(10000)) { throw 'Native launcher survived stop.' }
+        if (!$launcher.WaitForExit(10000)) { throw 'Legacy launch host survived stop.' }
         foreach ($id in @($ids.hostId, $ids.floating, $ids.server)) {
             if (Get-Process -Id $id -ErrorAction SilentlyContinue) { throw ('Target process survived: ' + $id) }
         }
@@ -114,7 +114,7 @@ __WAIT__
     [void][IO.Directory]::CreateDirectory($pending)
     $pendingScript = Join-Path $pending 'Launch-TaskTrace.ps1'
     [IO.File]::WriteAllText($pendingScript, '[IO.File]::WriteAllText((Join-Path $PSScriptRoot ''ready''), ''ready''); Start-Sleep -Seconds 120')
-    $pendingHost = Start-Hidden $powershell64 ('-NoProfile -File "' + $pendingScript + '"')
+    $pendingHost = Start-Hidden $powershell64 ('-NoProfile -ExecutionPolicy Bypass -File "' + $pendingScript + '"')
     Wait-File (Join-Path $pending 'ready')
     Stop-RunningInstallationProcesses $pending
     if (!$pendingHost.WaitForExit(5000)) { throw 'Pending launcher survived.' }
