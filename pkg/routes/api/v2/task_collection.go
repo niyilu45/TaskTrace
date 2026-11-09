@@ -69,7 +69,8 @@ type taskListAllInput struct {
 }
 
 type taskListProjectInput struct {
-	ProjectID int64 `path:"project" doc:"The numeric id of the project."`
+	ProjectID        int64 `path:"project" doc:"The numeric id of the project."`
+	TaskTraceSummary bool  `query:"tasktrace_summary" doc:"Return only the fields needed by the TaskTrace floating task list. Related tasks carry only parent IDs."`
 	TaskListQueryParams
 }
 
@@ -175,7 +176,33 @@ func tasksListAll(ctx context.Context, in *taskListAllInput) (*taskListBody, err
 }
 
 func projectTasksList(ctx context.Context, in *taskListProjectInput) (*taskListBody, error) {
-	return readFlatTasks(ctx, in.filters(), in.Page, in.PerPage, in.ProjectID, 0)
+	result, err := readFlatTasks(ctx, in.filters(), in.Page, in.PerPage, in.ProjectID, 0)
+	if err != nil || !in.TaskTraceSummary {
+		return result, err
+	}
+	for i, task := range result.Body.Items {
+		summary := &models.Task{
+			ID:           task.ID,
+			Title:        task.Title,
+			Done:         task.Done,
+			Status:       task.Status,
+			Priority:     task.Priority,
+			PercentDone:  task.PercentDone,
+			Index:        task.Index,
+			CommentCount: task.CommentCount,
+			Reminders:    task.Reminders,
+		}
+		if parents := task.RelatedTasks[models.RelationKindParenttask]; len(parents) > 0 {
+			summary.RelatedTasks = models.RelatedTaskMap{
+				models.RelationKindParenttask: make([]*models.Task, 0, len(parents)),
+			}
+			for _, parent := range parents {
+				summary.RelatedTasks[models.RelationKindParenttask] = append(summary.RelatedTasks[models.RelationKindParenttask], &models.Task{ID: parent.ID})
+			}
+		}
+		result.Body.Items[i] = summary
+	}
+	return result, nil
 }
 
 func projectViewTasksList(ctx context.Context, in *taskListViewInput) (*taskListBody, error) {

@@ -164,6 +164,29 @@ internal sealed partial class FloatingWindow {
             }));
         }
     }
+    // Editors fetch task details separately. Keep just what the list and its filters
+    // use, including parent IDs without the nested task descriptions and relations.
+    static readonly string[] TaskListFields = {
+        "id", "title", "done", "status", "priority", "percent_done", "index", "comment_count", "reminders",
+    };
+    static Dictionary<string,object> CacheTaskListItem(Dictionary<string,object> task) {
+        var result=new Dictionary<string,object>(TaskListFields.Length+1);
+        foreach(string field in TaskListFields) {
+            object value;
+            if(task.TryGetValue(field,out value))result.Add(field,value);
+        }
+        object rawRelations,rawParents;
+        if(task.TryGetValue("related_tasks",out rawRelations)) {
+            var relations=rawRelations as Dictionary<string,object>;
+            if(relations!=null && relations.TryGetValue("parenttask",out rawParents) && rawParents!=null) {
+                result["related_tasks"]=new Dictionary<string,object>{
+                    {"parenttask",((IEnumerable)rawParents).Cast<Dictionary<string,object>>()
+                        .Select(parent=>new Dictionary<string,object>{{"id",parent["id"]}}).ToArray()},
+                };
+            }
+        }
+        return result;
+    }
     async Task<bool> LoadTasks(bool background=false,bool filterOnly=false) {
         DateTime nextCompletionRefreshUtc=DateTime.MaxValue;
         int version=++taskLoadVersion;
@@ -178,12 +201,12 @@ internal sealed partial class FloatingWindow {
         var all=filterOnly?new Dictionary<long,Dictionary<string,object>>(taskCache):new Dictionary<long,Dictionary<string,object>>();
         var ordered=filterOnly?new List<long>(filterTaskIds):new List<long>();
         if(project!=null && !filterOnly)for(int fetchPage=1;;fetchPage++) {
-            var result=await Api("GET","/projects/"+project.Id+"/tasks?per_page=100&page="+fetchPage+"&sort_by=id&order_by=desc&expand=comment_count",null);
+            var result=await Api("GET","/projects/"+project.Id+"/tasks?per_page=100&page="+fetchPage+"&sort_by=id&order_by=desc&expand=comment_count&tasktrace_summary=true",null);
             if(!current())return false;
             int count=0;
             foreach(Dictionary<string,object> item in (IEnumerable)result["items"]) {
                 long id=Convert.ToInt64(item["id"]);count++;
-                if(!all.ContainsKey(id))ordered.Add(id);all[id]=item;
+                if(!all.ContainsKey(id))ordered.Add(id);all[id]=CacheTaskListItem(item);
             }
             if(count==0 || fetchPage>=Convert.ToInt32(result["total_pages"]))break;
         }

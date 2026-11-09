@@ -18,6 +18,7 @@ package webtests
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -197,6 +198,70 @@ func TestHumaTaskCollection_Expand(t *testing.T) {
 		// enum on the query param makes Huma reject before the handler.
 		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, "body: %s", rec.Body.String())
 	})
+}
+
+func TestHumaTaskCollection_TaskTraceSummary(t *testing.T) {
+	h := webHandlerTestV2{user: &testuser1, t: t}
+	require.NoError(t, h.ensureEnv())
+	token := humaTokenFor(t, &testuser1)
+	const path = "/api/v2/projects/1/tasks"
+
+	create := func(body string) int64 {
+		t.Helper()
+		rec := humaRequest(t, h.e, http.MethodPost, path, body, token, "")
+		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		var item struct {
+			ID int64 `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &item))
+		return item.ID
+	}
+	parent := create(`{"title":"Memory parent","description":"Parent editor content"}`)
+	child := create(fmt.Sprintf(`{"title":"Memory child","description":"Child editor content","status":"hold","priority":3,"percent_done":0.4,"parent_task_id":%d}`, parent))
+
+	type task struct {
+		ID           int64   `json:"id"`
+		Title        string  `json:"title"`
+		Status       string  `json:"status"`
+		Priority     int     `json:"priority"`
+		PercentDone  float64 `json:"percent_done"`
+		CommentCount *int    `json:"comment_count"`
+		Description  string  `json:"description"`
+		RelatedTasks map[string][]struct {
+			ID          int64
+			Description string
+		} `json:"related_tasks"`
+	}
+
+	getChild := func(suffix string) task {
+		t.Helper()
+		rec := humaRequest(t, h.e, http.MethodGet, path+"?q=Memory+child&expand=comment_count"+suffix, "", token, "")
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		items := decodePaginatedTaskItems(t, rec)
+		require.Len(t, items, 1)
+		var item task
+		require.NoError(t, json.Unmarshal(items[0], &item))
+		return item
+	}
+	full := getChild("")
+	require.Equal(t, "Child editor content", full.Description)
+	require.Len(t, full.RelatedTasks["parenttask"], 1)
+
+	summary := getChild("&tasktrace_summary=true")
+	assert.Equal(t, child, summary.ID)
+	assert.Equal(t, "Memory child", summary.Title)
+	assert.Equal(t, "hold", summary.Status)
+	assert.Equal(t, 3, summary.Priority)
+	assert.InDelta(t, 0.4, summary.PercentDone, 0.0001)
+	require.NotNil(t, summary.CommentCount)
+	assert.Zero(t, *summary.CommentCount)
+	assert.Empty(t, summary.Description)
+	require.Len(t, summary.RelatedTasks["parenttask"], 1)
+	assert.Equal(t, parent, summary.RelatedTasks["parenttask"][0].ID)
+	assert.Empty(t, summary.RelatedTasks["parenttask"][0].Description)
+
+	denied := humaRequest(t, h.e, http.MethodGet, "/api/v2/projects/2/tasks?tasktrace_summary=true", "", token, "")
+	assert.Equal(t, http.StatusForbidden, denied.Code)
 }
 
 // TestHumaTaskCollection_Buckets covers the dedicated buckets-with-tasks

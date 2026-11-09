@@ -20,6 +20,21 @@ internal sealed partial class FloatingWindow {
     internal FloatingWindow(string isolatedDirectory) {root=isolatedDirectory;data=isolatedDirectory;url="http://127.0.0.1:1";selfTest=true;}
     static Dictionary<string,object> PerfNote(long id,string html) {return new Dictionary<string,object>{{"id",id},{"comment",html}};}
     static Dictionary<string,object> PerfPage(IEnumerable<Dictionary<string,object>> notes,int totalPages) {return new Dictionary<string,object>{{"items",notes.ToArray()},{"total_pages",totalPages}};}
+    internal void TestTaskListCache() {
+        var reminder=new Dictionary<string,object>{{"reminder","2026-11-09T12:00:00Z"}};
+        var parent=new Dictionary<string,object>{{"id",1L},{"description","large parent description"}};
+        var child=new Dictionary<string,object>{{"id",2L},{"title","Child"},{"done",false},{"status","hold"},
+            {"priority",8L},{"percent_done",0.5},{"index",3L},{"comment_count",1L},{"reminders",new[]{reminder}},
+            {"description","large child description"},{"attachments",new object[1]},
+            {"related_tasks",new Dictionary<string,object>{{"parenttask",new[]{parent}},{"subtask",new[]{parent}}}}};
+        var cached=CacheTaskListItem(child);
+        var relations=(Dictionary<string,object>)cached["related_tasks"];
+        var cachedParent=((Dictionary<string,object>[])relations["parenttask"]).Single();
+        if(TaskListFields.Any(field=>!Object.Equals(cached[field],child[field])) ||
+            cached.Count!=TaskListFields.Length+1 || relations.Count!=1 || cachedParent.Count!=1 || !Object.Equals(cachedParent["id"],parent["id"]))
+            throw new Exception("Floating list cache lost display data or retained editor-only details.");
+        Console.WriteLine("PASS task list cache: status, priority, completion, reminders, counts and parent IDs are kept without editor content.");
+    }
     internal async Task TestOutstandingReadsForPerformance() {
         string shared="<h3>"+SharedHeading+"</h3><ul><li data-id=\"one\" data-priority=\"3\">Current <img src=\"/image/1\"><aside data-tasktrace-outstanding-note=\"true\" hidden>Memo</aside></li></ul>";
         var history=Enumerable.Range(1,1000).Select(id=>PerfNote(id,"<h3>\u6bcf\u65e5\u8fdb\u5c55: 2026-09-22</h3><p>Entry "+id+"</p>")).ToList();history.Add(PerfNote(1001,shared));
@@ -79,7 +94,7 @@ internal static class FloatingPerformanceTests {
     [STAThread] static int Main() {
         try {
             Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
-            using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory)){window.TestOutstandingReadsForPerformance().GetAwaiter().GetResult();window.TestLocalAppearanceAndPriorityOrdering();window.TestEditorDirtyEquivalence();}
+            using(var window=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory)){window.TestTaskListCache();window.TestOutstandingReadsForPerformance().GetAwaiter().GetResult();window.TestLocalAppearanceAndPriorityOrdering();window.TestEditorDirtyEquivalence();}
             using(var host=new Form{ShowInTaskbar=false,Opacity=0,ClientSize=new Size(400,300)})
             using(var model=new TaskTreeView())
             using(var surface=new TaskTreeSurface{Dock=DockStyle.Fill}) {
