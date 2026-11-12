@@ -125,39 +125,117 @@ internal sealed partial class FloatingWindow {
         } finally {dismissedReminderCleanupRunning=false;}
     }
     void CheckDueReminders() {
-        if(closing||IsDisposed||reminderPopup!=null||reminderState==null)return;
-        DateTimeOffset now=DateTimeOffset.Now;ExpandRepeatingReminderTargets(now);ReminderTarget dueTarget=null;
+        if(closing || IsDisposed || reminderPopup!=null || reminderState==null)return;
+        DateTimeOffset now=DateTimeOffset.Now;
+        ExpandRepeatingReminderTargets(now);
         foreach(var target in reminderTargets.Values.OrderBy(value=>value.Due)) {
             if(reminderState.Dismissed.ContainsKey(target.Key))continue;
-            string snooze;DateTimeOffset snoozed;
-            if(reminderState.SnoozedUntil.TryGetValue(target.Key,out snooze)&&TryReminderTime(snooze,out snoozed)) {
-                if(snoozed>now)continue;
-            } else if(target.Due>now || target.Due<now.AddDays(-30))continue;
-            dueTarget=target;break;
+            DateTimeOffset reminderTime=target.Due;
+            string snooze;
+            DateTimeOffset snoozed;
+            if(reminderState.SnoozedUntil.TryGetValue(target.Key,out snooze) && TryReminderTime(snooze,out snoozed)) {
+                reminderTime=snoozed;
+            } else if(reminderTime<now.AddDays(-30))continue;
+            if(reminderTime>now)continue;
+            ShowReminderPopup(target,reminderTime);
+            break;
         }
-        if(dueTarget!=null)ShowReminderPopup(dueTarget);
     }
-    void ShowReminderPopup(ReminderTarget target) {
-        var dialog=DpiDialog(new Form{Text="TaskTrace 提醒",Size=new Size(440,245),MinimumSize=new Size(390,225),Font=Font,TopMost=true,StartPosition=FormStartPosition.CenterScreen,ShowInTaskbar=false});reminderPopup=dialog;
-        var layout=new TableLayoutPanel{Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=4};
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,34));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,28));layout.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
-        var message=new Label{Text=target.Kind+"提醒\r\n"+target.Title+"\r\n提醒时间："+target.Due.LocalDateTime.ToString("yyyy-MM-dd HH:mm"),Dock=DockStyle.Fill,AutoEllipsis=true,TextAlign=ContentAlignment.MiddleLeft};
-        var minutes=new NumericUpDown{Minimum=1,Maximum=10080,Value=15,Dock=DockStyle.Left,Width=110};
-        var delayRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight};delayRow.Controls.Add(new Label{Text="延迟分钟数",AutoSize=true,Margin=new Padding(0,7,8,0)});delayRow.Controls.Add(minutes);
-        var hint=new Label{Text=target.RepeatRule==null?"关闭会删除本次提醒；延迟后会再次提醒。":"关闭仅结束本次提醒，后续日期继续；延迟仅影响本次。",Dock=DockStyle.Fill,ForeColor=Color.DimGray};
-        var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};var close=new Button{Text="关闭",Width=88,Height=30};var delay=new Button{Text="延迟",Width=88,Height=30};actions.Controls.Add(close);actions.Controls.Add(delay);
-        layout.Controls.Add(message);layout.Controls.Add(delayRow);layout.Controls.Add(hint);layout.Controls.Add(actions);dialog.Controls.Add(layout);
-        bool handled=false,removing=false;
-        close.Click+=delegate {
-            if(removing)return;
-            removing=true;close.Enabled=false;delay.Enabled=false;minutes.Enabled=false;hint.ForeColor=Color.DimGray;hint.Text="正在关闭本次提醒…";
-            handled=true;reminderState.Dismissed[target.Key]=ReminderStamp(target.Due);reminderState.SnoozedUntil.Remove(target.Key);SaveReminderState();
-            removing=false;dialog.Close();
-            if(!closing&&!IsDisposed)BeginInvoke(new Action(CleanupDismissedReminderTargets));
+
+    void ShowReminderPopup(ReminderTarget target,DateTimeOffset reminderTime) {
+        const int defaultMinutes=15;
+        const int maxHours=168;
+        const string dateFormat="yyyy-MM-dd HH:mm";
+        var dialog=DpiDialog(new Form {
+            Text="TaskTrace 提醒", ClientSize=new Size(440,248), MinimumSize=new Size(410,270), Font=Font,
+            TopMost=true, StartPosition=FormStartPosition.CenterScreen, ShowInTaskbar=false
+        });
+        reminderPopup=dialog;
+        var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=6};
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        foreach(int height in new[]{26,34,28,27,42})layout.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+
+        var message=new Label {
+            Text=target.Kind+"提醒\r\n"+target.Title, Dock=DockStyle.Fill,
+            AutoEllipsis=true, TextAlign=ContentAlignment.MiddleLeft
         };
-        delay.Click+=delegate {handled=true;reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes((double)minutes.Value).ToString("o");SaveReminderState();dialog.Close();};
-        dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e) {if(removing){e.Cancel=true;return;}if(!handled){reminderState.SnoozedUntil[target.Key]=DateTimeOffset.UtcNow.AddMinutes(15).ToString("o");SaveReminderState();}};
-        dialog.FormClosed+=delegate {reminderPopup=null;dialog.Dispose();BeginInvoke(new Action(CheckDueReminders));};dialog.Show();dialog.Activate();
+        var time=new Label {Text="本次提醒时间 "+reminderTime.LocalDateTime.ToString(dateFormat),Dock=DockStyle.Fill};
+        var hours=new NumericUpDown {Minimum=0,Maximum=maxHours,Value=0,Width=70,AccessibleName="延迟小时数"};
+        var minutes=new NumericUpDown {Minimum=0,Maximum=59,Value=defaultMinutes,Width=70,AccessibleName="延迟分钟数"};
+        var delayRow=new FlowLayoutPanel {Dock=DockStyle.Fill,WrapContents=false,FlowDirection=FlowDirection.LeftToRight};
+        delayRow.Controls.Add(new Label {Text="延迟时长",AutoSize=true,Margin=new Padding(0,7,8,0)});
+        delayRow.Controls.Add(hours);
+        delayRow.Controls.Add(new Label {Text="小时",AutoSize=true,Margin=new Padding(2,7,8,0)});
+        delayRow.Controls.Add(minutes);
+        delayRow.Controls.Add(new Label {Text="分钟",AutoSize=true,Margin=new Padding(2,7,0,0)});
+        var preview=new Label {Dock=DockStyle.Fill};
+        var hint=new Label {
+            Text=target.RepeatRule==null?"关闭会删除本次提醒。":"关闭仅结束本次提醒，后续日期继续。",
+            Dock=DockStyle.Fill, ForeColor=Color.DimGray
+        };
+        var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft,WrapContents=false};
+        var close=new Button {Text="关闭",Width=88,Height=30,CausesValidation=false};
+        var delay=new Button {Text="延迟",Width=88,Height=30};
+        actions.Controls.Add(close);
+        actions.Controls.Add(delay);
+        layout.Controls.Add(message);
+        layout.Controls.Add(time);
+        layout.Controls.Add(delayRow);
+        layout.Controls.Add(preview);
+        layout.Controls.Add(hint);
+        layout.Controls.Add(actions);
+        dialog.Controls.Add(layout);
+
+        Func<DateTimeOffset?> nextReminder=delegate {
+            int hourCount, minuteCount;
+            if(!Int32.TryParse(hours.Text,out hourCount) || hourCount<0 || hourCount>maxHours ||
+                !Int32.TryParse(minutes.Text,out minuteCount) || minuteCount<0 || minuteCount>59)return null;
+            int delayMinutes=hourCount*60+minuteCount;
+            if(delayMinutes==0 || delayMinutes>maxHours*60)return null;
+            return DateTimeOffset.UtcNow.AddMinutes(delayMinutes);
+        };
+        Action updatePreview=delegate {
+            var next=nextReminder();
+            delay.Enabled=next.HasValue;
+            preview.ForeColor=next.HasValue?ForeColor:Color.Firebrick;
+            preview.Text=next.HasValue?"预计再次提醒 "+next.Value.LocalDateTime.ToString(dateFormat):"请输入 1 分钟至 168 小时的延迟时长。";
+        };
+        var previewTimer=new Timer {Interval=1000};
+        hours.TextChanged+=delegate {updatePreview();};
+        minutes.TextChanged+=delegate {updatePreview();};
+        previewTimer.Tick+=delegate {updatePreview();};
+
+        bool handled=false;
+        Action<DateTimeOffset> snooze=delegate(DateTimeOffset next) {
+            reminderState.SnoozedUntil[target.Key]=ReminderStamp(next);
+            SaveReminderState();
+        };
+        close.Click+=delegate {
+            handled=true;
+            // Keep the original occurrence for dismissal and deletion after a delay.
+            reminderState.Dismissed[target.Key]=ReminderStamp(target.Due);
+            reminderState.SnoozedUntil.Remove(target.Key);
+            SaveReminderState();
+            dialog.Close();
+            if(!closing && !IsDisposed)BeginInvoke(new Action(CleanupDismissedReminderTargets));
+        };
+        delay.Click+=delegate {
+            var next=nextReminder();
+            if(!next.HasValue)return;
+            handled=true;
+            snooze(next.Value);
+            dialog.Close();
+        };
+        dialog.FormClosing+=delegate {if(!handled)snooze(DateTimeOffset.UtcNow.AddMinutes(defaultMinutes));};
+        dialog.FormClosed+=delegate {
+            previewTimer.Dispose();
+            reminderPopup=null;
+            if(!closing && !IsDisposed)BeginInvoke(new Action(CheckDueReminders));
+        };
+        updatePreview();
+        dialog.Show();
+        previewTimer.Start();
+        dialog.Activate();
     }
 
     async Task PatchTaskReminders(long taskId,List<Dictionary<string,object>> values) {

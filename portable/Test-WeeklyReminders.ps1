@@ -94,6 +94,64 @@ internal sealed partial class FloatingWindow {
  static DateTimePicker[] MainReminderPickers(Form form,FloatingReminderRepeatFields fields){
   return ControlsDeep(form).OfType<DateTimePicker>().Where(picker=>picker!=fields.End&&!fields.DayTimes.Contains(picker)).ToArray();
  }
+ void TestSnoozedPopup(string itemId){
+  reminderTargets.Clear();repeatingReminderTargets.Clear();reminderState=new ReminderState();
+  DateTimeOffset original=DateTimeOffset.UtcNow.AddHours(-2);
+  string kind=itemId==null?"\u4efb\u52a1":"\u9057\u7559\u4e8b\u9879";
+  string prefix=itemId==null?"task:1":"outstanding:1:"+itemId;
+  AddReminderDefinition(reminderTargets,prefix,1,itemId,"Snooze test",kind,original,null);
+  var target=reminderTargets.Values.Single();
+  const string format="yyyy-MM-dd HH:mm";
+  const string timePrefix="\u672c\u6b21\u63d0\u9192\u65f6\u95f4 ";
+  const string previewPrefix="\u9884\u8ba1\u518d\u6b21\u63d0\u9192 ";
+  CheckDueReminders();
+  var dialog=reminderPopup;
+  Check(dialog!=null,"original reminder did not open");
+  dialog.Opacity=0;
+  dialog.Size=dialog.MinimumSize;
+  dialog.PerformLayout();
+  var labels=ControlsDeep(dialog).OfType<Label>().ToArray();
+  var currentTime=labels.Single(label=>label.Text.StartsWith(timePrefix));
+  var preview=labels.Single(label=>label.Text.StartsWith(previewPrefix));
+  var inputs=ControlsDeep(dialog).OfType<NumericUpDown>().ToArray();
+  var hours=inputs[0];var minutes=inputs[1];
+  var delay=ReminderButton(dialog,"\u5ef6\u8fdf");
+  Check(currentTime.Text==timePrefix+original.LocalDateTime.ToString(format),"first reminder time is missing");
+  Check(hours.Value==0&&minutes.Value==15,"default snooze is not 15 minutes");
+  foreach(var control in new Control[]{currentTime,preview,hours,minutes,delay})CheckUnclipped(control);
+  minutes.Value=0;
+  Check(!delay.Enabled,"zero duration can be saved");
+  hours.Value=168;minutes.Value=1;
+  Check(!delay.Enabled,"duration beyond seven days can be saved");
+  minutes.Value=0;
+  Check(delay.Enabled,"exactly seven days is not allowed");
+  hours.Text="25";minutes.Text="7";
+  DateTimeOffset before=DateTimeOffset.UtcNow;
+  DateTimeOffset expected=before.AddHours(25).AddMinutes(7);
+  Check(delay.Enabled&&(preview.Text==previewPrefix+expected.LocalDateTime.ToString(format)||
+   preview.Text==previewPrefix+expected.AddMinutes(-1).LocalDateTime.ToString(format)),"typed hours and minutes did not update the next time");
+  delay.PerformClick();
+  Check(reminderPopup==null,"snoozing did not close the popup");
+  reminderState=json.Deserialize<ReminderState>(File.ReadAllText(ReminderStatePath));
+  DateTimeOffset saved;
+  Check(TryReminderTime(reminderState.SnoozedUntil[target.Key],out saved)&&
+   saved>=expected.AddSeconds(-1)&&saved<=DateTimeOffset.UtcNow.AddHours(25).AddMinutes(7),"saved snooze does not match the duration");
+  CheckDueReminders();
+  Check(reminderPopup==null,"snoozed reminder opened before its next time");
+
+  DateTimeOffset next=DateTimeOffset.UtcNow.AddMinutes(-3);
+  reminderState.SnoozedUntil[target.Key]=ReminderStamp(next);
+  SaveReminderState();
+  reminderState=json.Deserialize<ReminderState>(File.ReadAllText(ReminderStatePath));
+  CheckDueReminders();
+  dialog=reminderPopup;
+  Check(dialog!=null,"due snoozed reminder did not reopen");
+  dialog.Opacity=0;
+  currentTime=ControlsDeep(dialog).OfType<Label>().Single(label=>label.Text.StartsWith(timePrefix));
+  Check(currentTime.Text==timePrefix+next.LocalDateTime.ToString(format),"reopened reminder displayed the original time");
+  ClickReminderButton(dialog,"\u5ef6\u8fdf");
+  reminderTargets.Clear();reminderState=new ReminderState();
+ }
  static readonly DateTime RepeatStart=new DateTime(2026,10,12);
  static readonly DateTime RepeatEnd=new DateTime(2026,10,23);
  static void FillWeeklyReminder(Form form){
@@ -234,6 +292,10 @@ internal sealed partial class FloatingWindow {
   await DeleteReminderTarget(new ReminderTarget{TaskId=1,Due=new DateTimeOffset(future.FirstDate())});
   Check(TaskReminderValues(api.TaskData).Count==1&&!String.IsNullOrEmpty(RepeatValue(TaskReminderValues(api.TaskData)[0])),"closing single reminder deleted weekly rule at same time");
   Console.WriteLine("PASS reminders independent of current project and cached polling.");
+
+  TestSnoozedPopup(null);
+  TestSnoozedPopup("test-outstanding");
+  Console.WriteLine("PASS task and outstanding popup hours, minutes, live preview, saved delay, and the time shown when the reminder reopens.");
 
  }
 }
