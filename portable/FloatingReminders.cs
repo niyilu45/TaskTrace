@@ -13,7 +13,7 @@ internal sealed partial class FloatingWindow {
     sealed class ReminderTarget {
         public string Key,Title,Kind;
         public long TaskId;
-        public string ItemId;
+        public string ItemId,RawRepeatRule;
         public DateTimeOffset Due;
         public FloatingReminderRepeatRule RepeatRule;
     }
@@ -90,12 +90,13 @@ internal sealed partial class FloatingWindow {
     void DisposeReminders(){reminderTimer.Stop();reminderTimer.Dispose();if(reminderPopup!=null&&!reminderPopup.IsDisposed)reminderPopup.Close();}
     void SaveReminderState(){try{File.WriteAllText(ReminderStatePath,json.Serialize(reminderState));}catch { }}
 
-    void UpdateReminderTargets(Dictionary<long,Dictionary<string,object>> all,Dictionary<long,SharedList> sharedLists) {
+    void UpdateReminderTargets(Dictionary<long,Dictionary<string,object>> all,List<ReminderTarget> outstandingReminders) {
         var next=new Dictionary<string,ReminderTarget>();var owned=new Dictionary<long,HashSet<string>>();repeatingReminderTargets.Clear();
-        if(sharedLists!=null)foreach(var pair in sharedLists)foreach(var item in pair.Value.Items) {
-            DateTimeOffset due;if(!TryReminderTime(item.ReminderAt,out due))continue;
-            HashSet<string> values;if(!owned.TryGetValue(pair.Key,out values)){values=new HashSet<string>();owned[pair.Key]=values;}values.Add(ReminderIdentity(due,item.RepeatRule));
-            AddReminderDefinition(next,"outstanding:"+pair.Key+":"+item.Id,pair.Key,item.Id,OutstandingText(item.Html,item.NoteHtml,url),"遗留事项",due,item.RepeatRule);
+        foreach(var item in outstandingReminders) {
+            HashSet<string> values;
+            if(!owned.TryGetValue(item.TaskId,out values))owned[item.TaskId]=values=new HashSet<string>();
+            values.Add(ReminderIdentity(item.Due,item.RawRepeatRule));
+            AddReminderDefinition(next,"outstanding:"+item.TaskId+":"+item.ItemId,item.TaskId,item.ItemId,item.Title,"遗留事项",item.Due,item.RawRepeatRule);
         }
         if(all!=null)foreach(var pair in all)foreach(var value in TaskReminderValues(pair.Value)) {
             DateTimeOffset due;if(!TryReminderTime(value["reminder"],out due))continue;string rule=RepeatValue(value);
@@ -115,7 +116,7 @@ internal sealed partial class FloatingWindow {
             foreach(var target in pending) {
                 try {
                     await DeleteReminderTarget(target);
-                    reminderTargets.Remove(target.Key);InvalidateReminderSnapshot(target.TaskId);
+                    reminderTargets.Remove(target.Key);InvalidateReminderSnapshot();
                     reminderState.Dismissed.Remove(target.Key);reminderState.SnoozedUntil.Remove(target.Key);changed=true;
                 } catch(Exception error) {
                     if(!closing&&!IsDisposed){status.ForeColor=Color.Firebrick;status.Text="提醒已关闭，删除同步将在后台重试："+error.Message;}
@@ -241,7 +242,7 @@ internal sealed partial class FloatingWindow {
     async Task PatchTaskReminders(long taskId,List<Dictionary<string,object>> values) {
         Exception failure=null;
         for(int attempt=0;attempt<3;attempt++) {
-            try {await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",values}});InvalidateReminderSnapshot(taskId);return;}
+            try {await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",values}});InvalidateReminderSnapshot();return;}
             catch(Exception error) {failure=error;}
             if(attempt<2)await Task.Delay(150*(attempt+1));
         }
@@ -451,7 +452,7 @@ internal sealed partial class FloatingWindow {
                         string reminderAt=values.Count>0 && TryReminderTime(values[0]["reminder"],out newDue)?ReminderStamp(newDue):null;
                         await SaveOutstandingReminder(taskId,itemId,reminderAt,values.Count>0?RepeatValue(values[0]):null);
                     }
-                    InvalidateReminderSnapshot(taskId);saved=true;writing=false;dialog.Close();
+                    InvalidateReminderSnapshot();saved=true;writing=false;dialog.Close();
                 } catch(Exception error){feedback.Text="提醒未保存："+error.Message;}
                 finally {
                     writing=false;

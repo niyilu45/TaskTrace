@@ -89,13 +89,33 @@ internal sealed partial class FloatingWindow {
         }
         return null;
     }
-    object[] TaskTreeShape(IEnumerable<TreeNode> nodes) {
-        return nodes.Where(node=>node.Tag is long || (singleLine.Checked && node.Tag is OutstandingLeaf)).Select(node=>{
-            var leaf=node.Tag as OutstandingLeaf;
-            var task=node as TaskNode;
-            return leaf==null?(object)new object[]{"task",node.Tag,node.Text,node.Checked,node.ToolTipText,task==null?0:task.ReminderCount,TaskTreeShape(node.Nodes.Cast<TreeNode>())}:
-                (object)new object[]{"outstanding",leaf.TaskId,leaf.Id,node.Text,leaf.Done,leaf.Priority,leaf.Completion,leaf.Html,leaf.NoteHtml,leaf.CompletedAt,leaf.ReminderAt,leaf.RepeatRule};
-        }).ToArray();
+    bool SameTaskTree(IEnumerable<TreeNode> previous,IEnumerable<TreeNode> current) {
+        using(var left=previous.GetEnumerator())
+        using(var right=current.GetEnumerator()) {
+            while(left.MoveNext()) {
+                if(!singleLine.Checked && !(left.Current.Tag is long))continue;
+                if(!right.MoveNext() || !SameTaskTreeNode(left.Current,right.Current))return false;
+            }
+            return !right.MoveNext();
+        }
+    }
+
+    bool SameTaskTreeNode(TreeNode previous,TreeNode current) {
+        if(previous.Text!=current.Text || previous.Checked!=current.Checked)return false;
+        var left=previous.Tag as OutstandingLeaf;
+        var right=current.Tag as OutstandingLeaf;
+        if(left!=null && right!=null)
+            return left.TaskId==right.TaskId && left.Id==right.Id && left.Done==right.Done &&
+                left.Priority==right.Priority && left.Completion==right.Completion && left.Html==right.Html &&
+                left.NoteHtml==right.NoteHtml && left.CompletedAt==right.CompletedAt && left.ReminderAt==right.ReminderAt &&
+                left.RepeatRule==right.RepeatRule;
+
+        var leftTask=previous as TaskNode;
+        var rightTask=current as TaskNode;
+        return previous.Tag is long && Object.Equals(previous.Tag,current.Tag) &&
+            previous.ToolTipText==current.ToolTipText &&
+            (leftTask==null?0:leftTask.ReminderCount)==(rightTask==null?0:rightTask.ReminderCount) &&
+            SameTaskTree(previous.Nodes.Cast<TreeNode>(),current.Nodes.Cast<TreeNode>());
     }
     static void CollectFlatTaskNodes(TreeNode node,List<TreeNode> flat) {
         var children=node.Nodes.Cast<TreeNode>().Where(child=>child.Tag is long).ToList();
@@ -288,7 +308,7 @@ internal sealed partial class FloatingWindow {
         var visibleRoots=roots.ToArray();
         bool projectChanged=projects.Items.Count!=projectList.Count || !projects.Items.Cast<Project>().Zip(projectList,(a,b)=>a.Id==b.Id && a.Title==b.Title).All(equal=>equal) ||
             (oldProject==null?0:oldProject.Id)!=(project==null?0:project.Id);
-        bool treeChanged=!background || json.Serialize(TaskTreeShape(tasks.Nodes.Cast<TreeNode>()))!=json.Serialize(TaskTreeShape(visibleRoots));
+        bool treeChanged=!background || !SameTaskTree(tasks.Nodes.Cast<TreeNode>(),visibleRoots);
         // Childless nodes report IsExpanded=false even when the user never collapsed
         // them. Do not carry that state onto children arriving from the web/team sync.
         var expansion=SimpleTaskNodes(tasks.Nodes).Where(node=>node.Nodes.Count>0).ToDictionary(node=>(long)node.Tag,node=>node.IsExpanded);

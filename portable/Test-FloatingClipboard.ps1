@@ -189,7 +189,7 @@ static class FloatingClipboardTests {
             zoom.CopyFeedback=message=>feedback=message;zoom.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);zoom.CopyShortcutForTest();await zoom.ImageCopy.Pending;
             Require(writes==3 && copied.GetDataPresent("PNG",false),"Zoomed preview Ctrl+C failed");
             byte[] full=FloatingClipboard.ImageOnlyBytes(copied);using(var stream=new MemoryStream(full))using(var original=Image.FromStream(stream))Require(original.Width==640 && original.Height==480,"Zoomed preview copied its visible viewport instead of the complete original image");
-            host.Controls.Remove(zoom);zoom.ClearPreviewImage();
+            host.Controls.Remove(zoom);zoom.Dispose();
         }
         using(var target=new ClipboardPictureBox())using(var action=new FloatingImageCopy(target,delegate{return Task.FromResult(bytes);},message=>feedback=message,delegate{return false;})) {
             await action.Copy();Require(feedback.Contains("失败") && ((ToolStripMenuItem)target.ContextMenuStrip.Items[0]).Enabled,"Clipboard failure was not reported or left copy disabled");

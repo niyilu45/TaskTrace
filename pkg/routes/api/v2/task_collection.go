@@ -65,6 +65,7 @@ type TaskListQueryParams struct {
 }
 
 type taskListAllInput struct {
+	TaskTraceSummary bool `query:"tasktrace_summary" doc:"Return only the fields needed by the TaskTrace floating task list."`
 	TaskListQueryParams
 }
 
@@ -172,12 +173,16 @@ func RegisterTaskCollectionRoutes(api huma.API) {
 func init() { AddRouteRegistrar(RegisterTaskCollectionRoutes) }
 
 func tasksListAll(ctx context.Context, in *taskListAllInput) (*taskListBody, error) {
-	return readFlatTasks(ctx, in.filters(), in.Page, in.PerPage, 0, 0)
+	return readTaskTraceTaskList(ctx, in.filters(), in.Page, in.PerPage, 0, in.TaskTraceSummary)
 }
 
 func projectTasksList(ctx context.Context, in *taskListProjectInput) (*taskListBody, error) {
-	result, err := readFlatTasks(ctx, in.filters(), in.Page, in.PerPage, in.ProjectID, 0)
-	if err != nil || !in.TaskTraceSummary {
+	return readTaskTraceTaskList(ctx, in.filters(), in.Page, in.PerPage, in.ProjectID, in.TaskTraceSummary)
+}
+
+func readTaskTraceTaskList(ctx context.Context, filters taskListFilters, page, perPage int, projectID int64, compact bool) (*taskListBody, error) {
+	result, err := readFlatTasks(ctx, filters, page, perPage, projectID, 0)
+	if err != nil || !compact {
 		return result, err
 	}
 	for i, task := range result.Body.Items {
@@ -192,7 +197,7 @@ func projectTasksList(ctx context.Context, in *taskListProjectInput) (*taskListB
 			CommentCount: task.CommentCount,
 			Reminders:    task.Reminders,
 		}
-		if parents := task.RelatedTasks[models.RelationKindParenttask]; len(parents) > 0 {
+		if parents := task.RelatedTasks[models.RelationKindParenttask]; projectID != 0 && len(parents) > 0 {
 			summary.RelatedTasks = models.RelatedTaskMap{
 				models.RelationKindParenttask: make([]*models.Task, 0, len(parents)),
 			}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"code.vikunja.io/api/pkg/db"
+	"code.vikunja.io/api/pkg/events"
 	"code.vikunja.io/api/pkg/models"
 	"code.vikunja.io/api/pkg/web"
 
@@ -109,6 +110,8 @@ func taskTraceTeamReadSession(ctx context.Context) (*xorm.Session, web.Auth, err
 	return db.NewReadSession(), a, nil
 }
 
+// Collaboration manages its own notifications. Model calls can still queue
+// ordinary task events, so each write endpoint must discard that queue on exit.
 func taskTraceTeamWriteSession(ctx context.Context) (*xorm.Session, web.Auth, error) {
 	a, err := authFromCtx(ctx)
 	if err != nil {
@@ -146,6 +149,7 @@ func taskTraceTeamShare(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	// Windows ACL changes must finish their own bounded operation after consent; a disconnected browser must not interrupt rollback.
 	//nolint:contextcheck // The model serializes Windows access changes using an independent timeout.
 	status, err := models.TaskTraceTeamShare(s, a, models.TaskTraceTeamShareRequest{TaskID: in.TaskID, Members: in.Body.Members, Elevate: in.Elevate, CreateShare: in.CreateShare})
@@ -166,6 +170,7 @@ func taskTraceTeamImport(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamImport(s, a, in.Body)
 	if err != nil {
 		return nil, huma.Error422UnprocessableEntity("cannot import team task", err)
@@ -182,6 +187,7 @@ func taskTraceTeamSync(ctx context.Context, _ *struct{}) (*singleBody[models.Tas
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamSync(s, a)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("synchronize team tasks", err)
@@ -200,6 +206,7 @@ func taskTraceTeamConfigure(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamConfigure(s, a, in.Body)
 	if err != nil {
 		return nil, translateDomainError(err)
@@ -220,6 +227,7 @@ func taskTraceTeamPermissionsConfigure(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	in.Body.Elevate = in.Elevate
 	in.Body.CreateShare = in.CreateShare
 	status, err := models.TaskTraceTeamConfigurePermissions(s, a, in.Body)
@@ -239,6 +247,7 @@ func taskTraceTeamResolve(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamResolve(s, a, in.Body)
 	if err != nil {
 		return nil, huma.Error422UnprocessableEntity("cannot resolve team task conflicts", err)
@@ -257,6 +266,7 @@ func taskTraceTeamNotificationsRead(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamNotificationsRead(s, a, in.Body)
 	if err != nil {
 		return nil, taskTraceTeamMutationError("mark team notifications as read", err)
@@ -275,6 +285,7 @@ func taskTraceTeamNotificationsDelete(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	//nolint:contextcheck // The fast status path uses cached Windows access; it never launches PowerShell.
 	status, err := models.TaskTraceTeamNotificationsDelete(s, a, in.Body)
 	if err != nil {
@@ -312,6 +323,7 @@ func taskTraceTeamMembersAccessCreate(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	//nolint:contextcheck // Complete the bounded OS permission change even if the requesting browser disconnects.
 	status, err := models.TaskTraceTeamGrantMemberAccessWithOptions(s, a, in.Body, models.TaskTraceTeamAccessOptions{CreateShare: in.CreateShare, Elevate: in.Elevate})
 	if err != nil {
@@ -332,6 +344,7 @@ func taskTraceTeamMembersAccessDelete(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	status, err := models.TaskTraceTeamRemoveMemberAccess(s, a, in.Member, in.Elevate)
 	if err != nil {
 		if models.IsTaskTraceTeamAdminRequired(err) {
@@ -353,6 +366,7 @@ func taskTraceTeamMembersImport(ctx context.Context, in *struct {
 		return nil, err
 	}
 	defer s.Close()
+	defer events.CleanupPending(s)
 	result, err := models.TaskTraceTeamImportMembers(s, a, in.Body)
 	if err != nil {
 		return nil, huma.Error422UnprocessableEntity("import team members", err)

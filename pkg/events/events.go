@@ -304,6 +304,7 @@ func RollbackPendingTo(key any, checkpoint int) {
 		checkpoint = 0
 	}
 	if checkpoint < len(queue.events) {
+		clear(queue.events[checkpoint:])
 		queue.events = queue.events[:checkpoint]
 	}
 }

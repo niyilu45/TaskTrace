@@ -18,7 +18,7 @@ using System.Windows.Forms;
 internal sealed class RepeatReminderApi : HttpMessageHandler {
  internal Dictionary<string,object> TaskData=new Dictionary<string,object>{{"id",1},{"title","\u5468\u671f\u63d0\u9192\u6d4b\u8bd5\u4efb\u52a1"},{"comment_count",0},{"reminders",new object[0]}};
  readonly List<Dictionary<string,object>> comments=new List<Dictionary<string,object>>();
- internal int TaskWrites, OutstandingWrites;
+ internal int TaskWrites, OutstandingWrites, TaskListReads;
  static HttpResponseMessage Reply(object result){
   return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(new JavaScriptSerializer().Serialize(result))};
  }
@@ -41,7 +41,11 @@ internal sealed class RepeatReminderApi : HttpMessageHandler {
    OutstandingWrites++;
    return Reply(comment);
   }
-  if(path=="/api/v2/tasks"&&method=="GET")return Reply(new {items=new[]{TaskData,new Dictionary<string,object>{{"id",2},{"title","Other project"},{"project_id",2},{"comment_count",0},{"reminders",TaskData["reminders"]}}},total_pages=1});
+  if(path=="/api/v2/tasks"&&method=="GET"){
+   if(!request.RequestUri.Query.Contains("tasktrace_summary=true"))throw new Exception("Reminder scan requested full task descriptions");
+   TaskListReads++;
+   return Reply(new {items=new[]{TaskData,new Dictionary<string,object>{{"id",2},{"title","Other project"},{"project_id",2},{"comment_count",0},{"reminders",TaskData["reminders"]}}},total_pages=1});
+  }
   if(path=="/api/v2/tasks/1"&&method=="GET")return Reply(TaskData);
   throw new Exception("Unexpected API request "+method+" "+path);
  }
@@ -284,14 +288,23 @@ internal sealed partial class FloatingWindow {
   Check(TaskReminderValues(api.TaskData).Count==0,"outstanding reminder created a duplicate task reminder");
   var future=new FloatingReminderRepeatRule{weekdays=new[]{0,1,2,3,4,5,6},startDate=DateTime.Today.AddDays(7).ToString("yyyy-MM-dd"),endDate=DateTime.Today.AddDays(21).ToString("yyyy-MM-dd"),time="09:30"};
   var futureValue=AbsoluteReminder(future.FirstDate());futureValue["repeat_rule"]=future.Serialize();api.TaskData["reminders"]=new[]{futureValue};
+  autoRefreshDatabaseVersionKnown=true;autoRefreshDatabaseVersion=1;
   await RefreshReminderSnapshot();
   Check(repeatingReminderTargets.Count==2,"reminders from another project were omitted");
-  Check(reminderSharedCache.Count==2,"snapshot did not cache per-task outstanding lists");
+  int reads=api.TaskListReads;
+  for(int poll=0;poll<60;poll++){
+   nextReminderReadUtc=DateTime.MinValue;
+   await RefreshReminderSnapshot();
+  }
+  Check(api.TaskListReads==reads,"unchanged database triggered a task download");
+  autoRefreshDatabaseVersion=2;nextReminderReadUtc=DateTime.MinValue;
+  await RefreshReminderSnapshot();
+  Check(api.TaskListReads==reads+1,"changed database did not trigger a reminder scan");
   var deadline=nextReminderReadUtc;await RefreshReminderSnapshot();Check(nextReminderReadUtc==deadline,"unnecessary full refresh");
   var single=AbsoluteReminder(future.FirstDate());api.TaskData["reminders"]=new[]{futureValue,single};
   await DeleteReminderTarget(new ReminderTarget{TaskId=1,Due=new DateTimeOffset(future.FirstDate())});
   Check(TaskReminderValues(api.TaskData).Count==1&&!String.IsNullOrEmpty(RepeatValue(TaskReminderValues(api.TaskData)[0])),"closing single reminder deleted weekly rule at same time");
-  Console.WriteLine("PASS reminders independent of current project and cached polling.");
+  Console.WriteLine("PASS reminders independent of current project, 60 unchanged polls skip reads, and committed changes refresh.");
 
   TestSnoozedPopup(null);
   TestSnoozedPopup("test-outstanding");

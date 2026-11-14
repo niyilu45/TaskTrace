@@ -233,9 +233,9 @@ func TestHumaTaskCollection_TaskTraceSummary(t *testing.T) {
 		} `json:"related_tasks"`
 	}
 
-	getChild := func(suffix string) task {
+	getChild := func(listPath, suffix string) task {
 		t.Helper()
-		rec := humaRequest(t, h.e, http.MethodGet, path+"?q=Memory+child&expand=comment_count"+suffix, "", token, "")
+		rec := humaRequest(t, h.e, http.MethodGet, listPath+"?q=Memory+child&expand=comment_count"+suffix, "", token, "")
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		items := decodePaginatedTaskItems(t, rec)
 		require.Len(t, items, 1)
@@ -243,11 +243,11 @@ func TestHumaTaskCollection_TaskTraceSummary(t *testing.T) {
 		require.NoError(t, json.Unmarshal(items[0], &item))
 		return item
 	}
-	full := getChild("")
+	full := getChild(path, "")
 	require.Equal(t, "Child editor content", full.Description)
 	require.Len(t, full.RelatedTasks["parenttask"], 1)
 
-	summary := getChild("&tasktrace_summary=true")
+	summary := getChild(path, "&tasktrace_summary=true")
 	assert.Equal(t, child, summary.ID)
 	assert.Equal(t, "Memory child", summary.Title)
 	assert.Equal(t, "hold", summary.Status)
@@ -259,6 +259,12 @@ func TestHumaTaskCollection_TaskTraceSummary(t *testing.T) {
 	require.Len(t, summary.RelatedTasks["parenttask"], 1)
 	assert.Equal(t, parent, summary.RelatedTasks["parenttask"][0].ID)
 	assert.Empty(t, summary.RelatedTasks["parenttask"][0].Description)
+
+	allProjects := getChild("/api/v2/tasks", "&tasktrace_summary=true")
+	assert.Equal(t, child, allProjects.ID)
+	assert.Empty(t, allProjects.Description)
+	assert.Empty(t, allProjects.RelatedTasks)
+	require.NotNil(t, allProjects.CommentCount)
 
 	denied := humaRequest(t, h.e, http.MethodGet, "/api/v2/projects/2/tasks?tasktrace_summary=true", "", token, "")
 	assert.Equal(t, http.StatusForbidden, denied.Code)

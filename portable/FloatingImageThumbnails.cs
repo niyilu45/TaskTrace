@@ -26,7 +26,13 @@ internal sealed class ZoomableImagePreview : Control {
     protected override bool ProcessCmdKey(ref Message message,Keys keyData){if(keyData==(Keys.Control|Keys.C)){if(CopyRequested!=null)CopyRequested();return true;}return base.ProcessCmdKey(ref message,keyData);}
     internal void CopyShortcutForTest(){var message=new Message();ProcessCmdKey(ref message,Keys.Control|Keys.C);}
     internal void SetPreviewImage(Image value) {if(image!=null&&!Object.ReferenceEquals(image,value))image.Dispose();image=value;zoom=1f;panX=panY=0;Invalidate();}
-    internal void ClearPreviewImage() {if(image!=null)image.Dispose();image=null;Invalidate();}
+    protected override void Dispose(bool disposing) {
+        if(disposing && image!=null) {
+            image.Dispose();
+            image=null;
+        }
+        base.Dispose(disposing);
+    }
     SizeF FitSize() {
         if(image==null||ClientSize.Width<=0||ClientSize.Height<=0)return SizeF.Empty;
         float fit=Math.Min(1f,Math.Min((float)ClientSize.Width/image.Width,(float)ClientSize.Height/image.Height));
@@ -92,6 +98,7 @@ internal sealed partial class FloatingWindow {
             var close=new Button{Text="×",Width=24,Height=24,Location=new Point(card.Width-24,0),Anchor=AnchorStyles.Top|AnchorStyles.Right,FlatStyle=FlatStyle.Flat,BackColor=Color.White,ForeColor=Color.Firebrick,TabStop=true,AccessibleName="移除待保存图片"};
             close.FlatAppearance.BorderColor=Color.FromArgb(210,214,220);close.Click+=delegate{remove();};card.Controls.Add(close);close.BringToFront();
         }
+        box.Disposed+=delegate{if(box.Image!=null){box.Image.Dispose();box.Image=null;}};
         panel.Controls.Add(card);box.Tag=LoadImageThumbnail(box,item);
     }
     async Task ShowImagePreview(GalleryImage item,Form owner,bool verify=false) {
@@ -104,6 +111,7 @@ internal sealed partial class FloatingWindow {
             preview.Controls.Add(box);preview.Controls.Add(heading);preview.Shown+=async delegate {
                 try {
                     byte[] bytes=item.Bytes??await DownloadImage(item.Source);
+                    if(preview.IsDisposed)return;
                     using(var stream=new MemoryStream(bytes))using(var original=Image.FromStream(stream)) {
                         var screen=Screen.FromControl(owner).WorkingArea;
                         Size frame=preview.Size-preview.ClientSize;
@@ -118,7 +126,6 @@ internal sealed partial class FloatingWindow {
                     if(verify||selfTest){if(preview.Modal || preview.Owner!=null || (owner!=null && !owner.Enabled))throw new Exception("Image preview disabled another editor");box.SimulateWheelForTest(SystemInformation.MouseWheelScrollDelta);if(box.Zoom<=1f)throw new Exception("Image preview wheel zoom failed");using(var bitmap=new Bitmap(preview.Width,preview.Height)){preview.DrawToBitmap(bitmap,new Rectangle(Point.Empty,preview.Size));bitmap.Save(Path.Combine(data,"floating-image-preview-test.png"));}preview.Close();}
                 } catch(Exception error){failure=error;heading.Text="图片读取失败："+error.Message;if(verify||selfTest)preview.Close();}
             };
-            preview.FormClosed+=delegate{box.ClearPreviewImage();};
             await ShowEditorWindowAsync(preview,owner);
             if((verify||selfTest) && (!loaded||failure!=null))throw new Exception("Image preview did not load",failure);
         }

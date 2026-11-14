@@ -164,44 +164,61 @@ internal sealed class FloatingReminderRepeatFields : TableLayoutPanel {
     }
 }
 internal sealed partial class FloatingWindow {
-    readonly Dictionary<long,SharedList> reminderSharedCache=new Dictionary<long,SharedList>();
-    readonly Dictionary<long,string> reminderSharedVersions=new Dictionary<long,string>();
     DateTime nextReminderReadUtc=DateTime.MinValue;
+    long? reminderDatabaseVersion;
+    DateTime reminderFullReadAfterUtc;
     bool readingReminderSnapshot;
     int reminderSnapshotVersion;
-    void InvalidateReminderSnapshot(long taskId) {
-        reminderSharedCache.Remove(taskId);reminderSharedVersions.Remove(taskId);
+    void InvalidateReminderSnapshot() {
+        reminderDatabaseVersion=null;
         nextReminderReadUtc=DateTime.MinValue;reminderSnapshotVersion++;
     }
     async Task RefreshReminderSnapshot() {
         if(closing||IsDisposed||readingReminderSnapshot||DateTime.UtcNow<nextReminderReadUtc)return;
+        long? databaseVersion;
+        lock(autoRefreshGate)
+            databaseVersion=autoRefreshDatabaseVersionKnown && !autoRefreshDatabaseFailed ? (long?)autoRefreshDatabaseVersion : null;
+        // A periodic full read also covers watcher recovery and old data whose task
+        // timestamp did not advance when an outstanding comment was edited.
+        bool fullRead=DateTime.UtcNow>=reminderFullReadAfterUtc;
+        if(databaseVersion.HasValue && databaseVersion==reminderDatabaseVersion && !fullRead) {
+            nextReminderReadUtc=DateTime.UtcNow.AddMinutes(1);
+            return;
+        }
         readingReminderSnapshot=true;int version=reminderSnapshotVersion;
         try {
             var all=new Dictionary<long,Dictionary<string,object>>();
             for(int page=1;;page++) {
-                var result=await Api("GET","/tasks?per_page=100&page="+page+"&sort_by=id&order_by=asc&expand=comment_count",null);
+                var result=await Api("GET","/tasks?per_page=100&page="+page+"&sort_by=id&order_by=asc&expand=comment_count&tasktrace_summary=true",null);
                 if(closing||IsDisposed||version!=reminderSnapshotVersion)return;
-                int count=0;foreach(Dictionary<string,object> task in (IEnumerable)result["items"]){all[Convert.ToInt64(task["id"])]=task;count++;}
+                int count=0;
+                foreach(Dictionary<string,object> task in (IEnumerable)result["items"]) {
+                    all[Convert.ToInt64(task["id"])]=CacheTaskListItem(task);
+                    count++;
+                }
                 if(count==0||page>=Convert.ToInt32(result["total_pages"]))break;
             }
-            var shared=new Dictionary<long,SharedList>();var versions=new Dictionary<long,string>();
+            var outstandingReminders=new List<ReminderTarget>();
             foreach(var pair in all) {
                 if(closing||IsDisposed||version!=reminderSnapshotVersion)return;
-                object updated,count;pair.Value.TryGetValue("updated",out updated);pair.Value.TryGetValue("comment_count",out count);
-                string stamp=Convert.ToString(updated)+"|"+Convert.ToString(count),previous;SharedList cached;
-                if(reminderSharedVersions.TryGetValue(pair.Key,out previous)&&previous==stamp&&reminderSharedCache.TryGetValue(pair.Key,out cached))shared[pair.Key]=cached;
-                else {
-                    var list=await ReadOutstandingList(pair.Key,count==null?-1:Convert.ToInt64(count),path=>Api("GET",path,null),()=>!closing&&version==reminderSnapshotVersion);
-                    if(list==null)return;shared[pair.Key]=list;
+                object count;
+                pair.Value.TryGetValue("comment_count",out count);
+                var list=await ReadOutstandingList(pair.Key,count==null?-1:Convert.ToInt64(count),path=>Api("GET",path,null),()=>!closing&&version==reminderSnapshotVersion);
+                if(list==null)return;
+                foreach(var item in list.Items) {
+                    DateTimeOffset due;
+                    if(TryReminderTime(item.ReminderAt,out due))
+                        outstandingReminders.Add(new ReminderTarget {
+                            TaskId=pair.Key, ItemId=item.Id, Due=due, RawRepeatRule=item.RepeatRule,
+                            Title=OutstandingText(item.Html,item.NoteHtml,url),
+                        });
                 }
-                versions[pair.Key]=stamp;
             }
             if(closing||IsDisposed||version!=reminderSnapshotVersion)return;
-            reminderSharedCache.Clear();reminderSharedVersions.Clear();
-            foreach(var pair in shared)reminderSharedCache[pair.Key]=pair.Value;
-            foreach(var pair in versions)reminderSharedVersions[pair.Key]=pair.Value;
+            UpdateReminderTargets(all,outstandingReminders);
+            reminderDatabaseVersion=databaseVersion;
+            if(fullRead)reminderFullReadAfterUtc=DateTime.UtcNow.AddMinutes(10);
             nextReminderReadUtc=DateTime.UtcNow.AddMinutes(1);
-            UpdateReminderTargets(all,shared);
         } catch {nextReminderReadUtc=DateTime.UtcNow.AddSeconds(15);}
         finally {readingReminderSnapshot=false;}
     }

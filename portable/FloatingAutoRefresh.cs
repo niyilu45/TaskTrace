@@ -222,6 +222,7 @@ internal sealed partial class FloatingWindow {
 
     void CloseAutoRefreshDatabase() {
         var database=autoRefreshDatabase;autoRefreshDatabase=IntPtr.Zero;autoRefreshDatabaseVersionKnown=false;
+        reminderDatabaseVersion=null;
         if(database!=IntPtr.Zero)try {AutoRefreshSqliteClose(database);}catch { }
     }
 

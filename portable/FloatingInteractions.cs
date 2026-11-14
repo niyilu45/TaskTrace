@@ -743,7 +743,7 @@ internal sealed partial class FloatingWindow {
                 try{
                     byte[] bytes=item.Bytes??await DownloadImage(item.Source);if(gallery.IsDisposed)return;
                     using(var stream=new MemoryStream(bytes))using(var image=Image.FromStream(stream)){
-                        double scale=Math.Min(1.0,Math.Min(1400.0/image.Width,1000.0/image.Height));var preview=new Bitmap(image,new Size(Math.Max(1,(int)(image.Width*scale)),Math.Max(1,(int)(image.Height*scale))));bitmaps.Add(preview);box.Image=preview;
+                        double scale=Math.Min(1.0,Math.Min(800.0/image.Width,526.0/image.Height));var preview=new Bitmap(image,new Size(Math.Max(1,(int)(image.Width*scale)),Math.Max(1,(int)(image.Height*scale))));bitmaps.Add(preview);box.Image=preview;
                         card.Height=Math.Max(170,Math.Min(560,(int)((card.Width-10)*(double)image.Height/image.Width)+34));
                     }
                 }catch{if(!gallery.IsDisposed)label.Text=item.Caption+" · 图片加载失败，关闭后重试。";}
