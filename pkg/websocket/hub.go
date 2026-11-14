@@ -17,6 +17,7 @@
 package websocket
 
 import (
+	"slices"
 	"sync"
 
 	"code.vikunja.io/api/pkg/log"
@@ -50,7 +51,7 @@ func (h *Hub) Unregister(conn *Connection) {
 	conns := h.connections[conn.userID]
 	for i, c := range conns {
 		if c == conn {
-			h.connections[conn.userID] = append(conns[:i], conns[i+1:]...)
+			h.connections[conn.userID] = slices.Delete(conns, i, i+1)
 			break
 		}
 	}

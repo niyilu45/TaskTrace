@@ -180,6 +180,57 @@ internal sealed partial class FloatingWindow {
   var summary=list.Items[0].ToString();
   Check(summary.Contains("\u5468\u4e00")&&summary.Contains(monday)&&summary.Contains(friday),"reminder list summary missing weekday times");
  }
+ async Task TestLongRunningState(){
+  reminderTargets.Clear();repeatingReminderTargets.Clear();reminderState=new ReminderState();
+  var rule=new FloatingReminderRepeatRule {
+   weekdays=Enumerable.Range(0,7).ToArray(),startDate="2026-01-01",endDate="2026-12-31",time="08:00",
+  };
+  AddReminderDefinition(reminderTargets,"task:1",1,null,"daily","task",new DateTimeOffset(rule.FirstDate()),rule.Serialize());
+  DateTimeOffset start=new DateTimeOffset(new DateTime(2026,1,1,9,0,0));
+  for(int day=0;day<90;day++){
+   var date=start.AddDays(day);
+   PruneReminderState(date,true);
+   var target=reminderTargets.Values.Single();
+   Check(!reminderState.Dismissed.ContainsKey(target.Key),"future daily occurrence was dismissed");
+   reminderState.Dismissed[target.Key]=ReminderStamp(target.Due);
+   PruneReminderState(date,true);
+   Check(reminderState.Dismissed.ContainsKey(target.Key)&&reminderState.Dismissed.Count<=3,"dismissals exceeded rolling retention");
+  }
+  var snoozed=reminderTargets.Values.Single();
+  reminderState.SnoozedUntil[snoozed.Key]=ReminderStamp(start.AddDays(96));
+  reminderState.Dismissed.Remove(snoozed.Key);
+  reminderState.SnoozedUntil["task:77:deleted"]=ReminderStamp(start.AddDays(96));
+  reminderState.Dismissed["task:78:deleted"]=ReminderStamp(start);
+  PruneReminderState(start.AddDays(95),true);
+  Check(reminderState.SnoozedUntil.Count==1&&reminderTargets.ContainsKey(snoozed.Key),"pruning lost a real snooze or retained a deleted one");
+  Check(reminderState.Dismissed.Count==0,"obsolete dismissals were retained");
+  reminderTargets.Clear();repeatingReminderTargets.Clear();reminderState=new ReminderState();
+  SaveReminderState();
+
+  completedHideDelayMinutes=30;
+  for(int day=0;day<90;day++){
+   var now=start.UtcDateTime.AddDays(day);
+   recentlyCompletedTasks[day]=now;recentlyCompletedTaskStates[day]="to-do";
+   recentlyCompletedOutstanding[day+":item"]=now;
+   PruneRecentCompletions(now);
+   Check(recentlyCompletedTasks.Count==1&&recentlyCompletedTaskStates.Count==1&&recentlyCompletedOutstanding.Count==1,"expired completion entries were retained");
+  }
+  recentlyCompletedTasks.Clear();recentlyCompletedTaskStates.Clear();recentlyCompletedOutstanding.Clear();
+  completedHideDelayMinutes=0;
+  for(int i=0;i<10000;i++){
+   var first=RetainOutstandingWriteLock(i);
+   var second=RetainOutstandingWriteLock(i);
+   await first.Semaphore.WaitAsync();
+   var waiting=second.Semaphore.WaitAsync();
+   Check(Object.ReferenceEquals(first,second)&&!waiting.IsCompleted,"same-task write bypassed its lock");
+   ReleaseOutstandingWriteLock(i,first);
+   await waiting;
+   Check(outstandingWriteGates.Count==1,"lock removed while a write was still active");
+   ReleaseOutstandingWriteLock(i,second);
+   Check(outstandingWriteGates.Count==0,"idle write lock was retained");
+  }
+  Console.WriteLine("PASS 90 virtual days of reminders and completions, and 10,000 serialized task write cycles.");
+ }
  async Task<FloatingReminderRepeatRule> SavedWeeklyReminder(RepeatReminderApi api,string itemId){
   if(itemId==null)return FloatingReminderRepeatRule.Parse(RepeatValue(TaskReminderValues(api.TaskData).SingleOrDefault()));
   var item=ReadShared(await ReadHistory(1)).Items.Single(row=>row.Id==itemId);
@@ -308,6 +359,7 @@ internal sealed partial class FloatingWindow {
 
   TestSnoozedPopup(null);
   TestSnoozedPopup("test-outstanding");
+  await TestLongRunningState();
   Console.WriteLine("PASS task and outstanding popup hours, minutes, live preview, saved delay, and the time shown when the reminder reopens.");
 
  }

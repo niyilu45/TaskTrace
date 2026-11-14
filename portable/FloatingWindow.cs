@@ -396,14 +396,15 @@ internal sealed partial class FloatingWindow : Form {
         list.OriginalItems=list.Items.Select(item=>item.Copy()).ToList();return list;
     }
     async Task WriteShared(long id, SharedList list) {
-        var gate=OutstandingWriteGate(id);await gate.WaitAsync();
+        var gate=RetainOutstandingWriteLock(id);
+        await gate.Semaphore.WaitAsync();
         try {
         var latest=ReadShared(await ReadHistory(id));
         list.Items=MergeOutstandingEdits(list.OriginalItems??new List<PendingItem>(),list.Items,latest.Items);list.CommentId=latest.CommentId;
         string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+(String.IsNullOrWhiteSpace(item.RepeatRule)?"":" data-reminder-repeat=\""+WebUtility.HtmlEncode(item.RepeatRule)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);list.OriginalItems=list.Items.Select(item=>item.Copy()).ToList();
-        }finally{gate.Release();}
+        }finally{ReleaseOutstandingWriteLock(id,gate);}
     }
     TableLayoutPanel TextFieldRow(TextBox input, string description, Control action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -506,10 +507,11 @@ internal sealed partial class FloatingWindow : Form {
         using(var request = new HttpRequestMessage(new HttpMethod(method), url + "/api/v2" + path)) {
             string requestToken = token;
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", requestToken);
-            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && path != "/tasktrace/team/sync" && !path.StartsWith("/tasktrace/exports/", StringComparison.Ordinal);
+            bool teamSync=path=="/tasktrace/team/sync" || path.StartsWith("/tasktrace/team/sync?",StringComparison.Ordinal);
+            bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && !teamSync && !path.StartsWith("/tasktrace/exports/", StringComparison.Ordinal);
             if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
-            using(var response = await (path == "/tasktrace/exports/markdown" ? markdownExportHttp : path == "/tasktrace/team/sync" ? teamSyncHttp : http).SendAsync(request)) {
+            using(var response = await (path == "/tasktrace/exports/markdown" ? markdownExportHttp : teamSync ? teamSyncHttp : http).SendAsync(request)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
                     await refreshGate.WaitAsync();
                     try {

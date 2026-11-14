@@ -181,14 +181,16 @@ func taskTraceTeamImport(ctx context.Context, in *struct {
 	return &singleBody[models.TaskTraceTeamStatus]{Body: status}, nil
 }
 
-func taskTraceTeamSync(ctx context.Context, _ *struct{}) (*singleBody[models.TaskTraceTeamStatus], error) {
+func taskTraceTeamSync(ctx context.Context, in *struct {
+	Compact bool `query:"compact" doc:"Return only synchronization results for the desktop client, without reloading notifications or profiles."`
+}) (*singleBody[models.TaskTraceTeamStatus], error) {
 	s, a, err := taskTraceTeamWriteSession(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer s.Close()
 	defer events.CleanupPending(s)
-	status, err := models.TaskTraceTeamSync(s, a)
+	status, err := models.TaskTraceTeamSync(s, a, in.Compact)
 	if err != nil {
 		return nil, huma.Error500InternalServerError("synchronize team tasks", err)
 	}

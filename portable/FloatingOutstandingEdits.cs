@@ -5,8 +5,27 @@ using System.Linq;
 using System.Threading;
 
 internal sealed partial class FloatingWindow {
-    readonly Dictionary<long,SemaphoreSlim> outstandingWriteGates=new Dictionary<long,SemaphoreSlim>();
-    SemaphoreSlim OutstandingWriteGate(long taskId){SemaphoreSlim gate;if(!outstandingWriteGates.TryGetValue(taskId,out gate)){gate=new SemaphoreSlim(1,1);outstandingWriteGates.Add(taskId,gate);}return gate;}
+    sealed class OutstandingWriteLock {
+        internal readonly SemaphoreSlim Semaphore=new SemaphoreSlim(1,1);
+        internal int Users;
+    }
+
+    readonly Dictionary<long,OutstandingWriteLock> outstandingWriteGates=new Dictionary<long,OutstandingWriteLock>();
+
+    OutstandingWriteLock RetainOutstandingWriteLock(long taskId) {
+        OutstandingWriteLock gate;
+        if(!outstandingWriteGates.TryGetValue(taskId,out gate))
+            outstandingWriteGates.Add(taskId,gate=new OutstandingWriteLock());
+        gate.Users++;
+        return gate;
+    }
+
+    void ReleaseOutstandingWriteLock(long taskId,OutstandingWriteLock gate) {
+        gate.Semaphore.Release();
+        if(--gate.Users!=0)return;
+        outstandingWriteGates.Remove(taskId);
+        gate.Semaphore.Dispose();
+    }
     static bool SameOutstandingItem(PendingItem a,PendingItem b){return SameProgressEditorContent(a.Html,b.Html) && SameProgressEditorContent(a.NoteHtml,b.NoteHtml) && a.Priority==b.Priority && a.Completion==b.Completion && a.Done==b.Done && a.CompletedAt==b.CompletedAt && a.ReminderAt==b.ReminderAt && a.RepeatRule==b.RepeatRule;}
     static T MergeOutstandingField<T>(T original,T proposed,T latest){if(EqualityComparer<T>.Default.Equals(original,proposed))return latest;if(!EqualityComparer<T>.Default.Equals(original,latest) && !EqualityComparer<T>.Default.Equals(proposed,latest))throw new Exception("这条遗留事项的同一内容已在其他窗口修改，当前输入已保留，请重新读取后合并。");return proposed;}
     static string MergeOutstandingHtml(string original,string proposed,string latest){if(SameProgressEditorContent(original,proposed))return latest;if(!SameProgressEditorContent(original,latest) && !SameProgressEditorContent(proposed,latest))throw new Exception("这条遗留事项的正文或备注已在其他窗口修改，当前输入已保留，请重新读取后合并。");return proposed;}

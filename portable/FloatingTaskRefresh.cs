@@ -29,6 +29,15 @@ internal sealed partial class FloatingWindow {
         if(done && completedHideDelayMinutes>0)recentlyCompletedOutstanding[key]=DateTime.UtcNow;
         else recentlyCompletedOutstanding.Remove(key);
     }
+    void PruneRecentCompletions(DateTime now) {
+        var cutoff=now.AddMinutes(-completedHideDelayMinutes);
+        foreach(var pair in recentlyCompletedTasks.Where(pair=>pair.Value<=cutoff).ToArray()) {
+            recentlyCompletedTasks.Remove(pair.Key);
+            recentlyCompletedTaskStates.Remove(pair.Key);
+        }
+        foreach(var pair in recentlyCompletedOutstanding.Where(pair=>pair.Value<=cutoff).ToArray())
+            recentlyCompletedOutstanding.Remove(pair.Key);
+    }
     bool KeepRecentlyCompleted(DateTime completed,ref DateTime nextRefreshUtc) {
         if(completedHideDelayMinutes<=0)return false;
         DateTime deadline=completed.AddMinutes(completedHideDelayMinutes);
@@ -209,6 +218,7 @@ internal sealed partial class FloatingWindow {
     }
     async Task<bool> LoadTasks(bool background=false,bool filterOnly=false) {
         DateTime nextCompletionRefreshUtc=DateTime.MaxValue;
+        PruneRecentCompletions(DateTime.UtcNow);
         int version=++taskLoadVersion;
         string context=TaskViewContext();
         Func<bool> current=delegate{return TaskLoadCurrent(version,context,background);};

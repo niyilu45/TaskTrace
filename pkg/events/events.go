@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
+	"weak"
 
 	"github.com/getsentry/sentry-go"
 
@@ -34,6 +36,7 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/ThreeDotsLabs/watermill/message/router/middleware"
 	"github.com/ThreeDotsLabs/watermill/pubsub/gochannel"
+	"xorm.io/xorm"
 )
 
 var pubsub *gochannel.GoChannel
@@ -263,24 +266,38 @@ type pendingEventQueue struct {
 	events []Event
 }
 
-var pendingEvents sync.Map // map[any]*pendingEventQueue
+var pendingEvents sync.Map // eventQueueKey -> *pendingEventQueue
+
+// A forgotten transaction cleanup must not keep the session and its payloads alive.
+func eventQueueKey(key any) any {
+	if session, ok := key.(*xorm.Session); ok {
+		return weak.Make(session)
+	}
+	return key
+}
 
 // DispatchOnCommit stores an event to be dispatched later, after a transaction commits.
 // The key should be the *xorm.Session pointer associated with the transaction.
 // Call DispatchPending(key) after s.Commit() to actually dispatch the events.
 // Call CleanupPending(key) on rollback to discard them.
 func DispatchOnCommit(key any, event Event) {
-	val, _ := pendingEvents.LoadOrStore(key, &pendingEventQueue{})
+	queueKey := eventQueueKey(key)
+	val, loaded := pendingEvents.LoadOrStore(queueKey, &pendingEventQueue{})
+	if session, ok := key.(*xorm.Session); ok && session != nil && !loaded {
+		runtime.AddCleanup(session, func(dead weak.Pointer[xorm.Session]) { pendingEvents.Delete(dead) }, weak.Make(session))
+	}
 	queue := val.(*pendingEventQueue)
 	queue.mu.Lock()
 	queue.events = append(queue.events, event)
 	queue.mu.Unlock()
+	runtime.KeepAlive(key)
 }
 
 // PendingCheckpoint returns the current queue length so callers using database
 // savepoints can later discard only events created after that savepoint.
 func PendingCheckpoint(key any) int {
-	val, ok := pendingEvents.Load(key)
+	defer runtime.KeepAlive(key)
+	val, ok := pendingEvents.Load(eventQueueKey(key))
 	if !ok {
 		return 0
 	}
@@ -293,7 +310,8 @@ func PendingCheckpoint(key any) int {
 // RollbackPendingTo discards events queued after a savepoint while preserving
 // events from earlier successful work in the same outer transaction.
 func RollbackPendingTo(key any, checkpoint int) {
-	val, ok := pendingEvents.Load(key)
+	defer runtime.KeepAlive(key)
+	val, ok := pendingEvents.Load(eventQueueKey(key))
 	if !ok {
 		return
 	}
@@ -314,7 +332,8 @@ func RollbackPendingTo(key any, checkpoint int) {
 // Request metadata on the context (see WithRequestMeta) is copied onto each message.
 // If any event fails to dispatch, the error is logged but remaining events are still dispatched.
 func DispatchPending(ctx context.Context, key any) {
-	val, ok := pendingEvents.LoadAndDelete(key)
+	val, ok := pendingEvents.LoadAndDelete(eventQueueKey(key))
+	runtime.KeepAlive(key)
 	if !ok {
 		return
 	}
@@ -331,5 +350,6 @@ func DispatchPending(ctx context.Context, key any) {
 // CleanupPending discards all pending events for the given key without dispatching.
 // Call this when a transaction is rolled back.
 func CleanupPending(key any) {
-	pendingEvents.Delete(key)
+	pendingEvents.Delete(eventQueueKey(key))
+	runtime.KeepAlive(key)
 }

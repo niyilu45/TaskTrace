@@ -3006,7 +3006,7 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	return &status, err
 }
 
-func TaskTraceTeamSync(s *xorm.Session, a web.Auth) (*TaskTraceTeamStatus, error) {
+func TaskTraceTeamSync(s *xorm.Session, a web.Auth, compact ...bool) (*TaskTraceTeamStatus, error) {
 	taskTraceTeamMu.Lock()
 	defer taskTraceTeamMu.Unlock()
 	if !taskTraceTeamEnabled() {
@@ -3061,6 +3061,25 @@ func TaskTraceTeamSync(s *xorm.Session, a web.Auth) (*TaskTraceTeamStatus, error
 	}
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
+	}
+	if len(compact) > 0 && compact[0] {
+		status := &TaskTraceTeamStatus{Enabled: true, Bindings: make([]TaskTraceTeamBindingStatus, 0, len(state.Bindings))}
+		for _, binding := range state.Bindings {
+			conflicts := make([]TaskTraceTeamConflict, len(binding.Conflicts))
+			for i, conflict := range binding.Conflicts {
+				conflicts[i].ID = conflict.ID
+			}
+			title := ""
+			if binding.LastError != "" {
+				if task, err := GetTaskByIDSimple(s, binding.RootTaskID); err == nil {
+					title = task.Title
+				}
+			}
+			status.Bindings = append(status.Bindings, TaskTraceTeamBindingStatus{
+				RootTaskID: binding.RootTaskID, RootTaskTitle: title, LastError: binding.LastError, Conflicts: conflicts,
+			})
+		}
+		return status, nil
 	}
 	status, err := taskTraceTeamStatusLockedFast(s, a, state)
 	return &status, err

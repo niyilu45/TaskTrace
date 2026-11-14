@@ -84,7 +84,7 @@ internal sealed partial class FloatingWindow {
     }
 
     Task<Dictionary<string,object>> SynchronizeTeam() {
-        return teamSyncRequest.Run(delegate {return Api("POST","/tasktrace/team/sync",null);});
+        return teamSyncRequest.Run(delegate {return Api("POST","/tasktrace/team/sync?compact=true",null);});
     }
 
     void InitializeTeamSyncMenu(ContextMenuStrip menu) {

@@ -18,10 +18,13 @@ package events
 
 import (
 	"context"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/stretchr/testify/assert"
+	"xorm.io/xorm"
 )
 
 type testEvent struct{}
@@ -92,6 +95,25 @@ func TestTaskTraceTeamSavepointRollbackKeepsEarlierEvents(t *testing.T) {
 	DispatchPending(context.Background(), key)
 
 	assert.Equal(t, 1, CountDispatchedEvents("test.event"))
+}
+
+func TestAbandonedSessionEventQueueIsCollected(t *testing.T) {
+	keys := make([]any, 0, 512)
+	for range cap(keys) {
+		session := new(xorm.Session)
+		DispatchOnCommit(session, &testEvent{})
+		assert.Equal(t, 1, PendingCheckpoint(session))
+		keys = append(keys, eventQueueKey(session))
+	}
+	assert.Eventually(t, func() bool {
+		runtime.GC()
+		for _, key := range keys {
+			if _, retained := pendingEvents.Load(key); retained {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 25*time.Millisecond)
 }
 
 func TestDispatchPendingNoEvents(t *testing.T) {

@@ -41,6 +41,18 @@ func TestHumaTaskTraceTeamNotificationsReadAndDelete(t *testing.T) {
 		require.Equal(t, http.StatusUnauthorized, rec.Code, rec.Body.String())
 	}
 	token := humaTokenFor(t, &testuser1)
+	// The fixture repository has no manifest. Background sync must still
+	// report its per-binding error without loading any notification history.
+	compactResponse := humaRequest(t, e, http.MethodPost, "/api/v2/tasktrace/team/sync?compact=true", "", token, "")
+	require.Equal(t, http.StatusCreated, compactResponse.Code, compactResponse.Body.String())
+	var compact models.TaskTraceTeamStatus
+	require.NoError(t, json.Unmarshal(compactResponse.Body.Bytes(), &compact))
+	require.True(t, compact.Enabled)
+	require.Len(t, compact.Bindings, 1)
+	require.NotEmpty(t, compact.Bindings[0].LastError)
+	require.Empty(t, compact.Notifications)
+	require.Empty(t, compact.Profiles)
+
 	rec := humaRequest(t, e, http.MethodPost, base+"read", body, token, "")
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var status models.TaskTraceTeamStatus

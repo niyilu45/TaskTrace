@@ -33,6 +33,7 @@ internal sealed partial class FloatingWindow {
     readonly System.Threading.SemaphoreSlim reminderMutationGate=new System.Threading.SemaphoreSlim(1,1);
     ReminderState reminderState;
     Form reminderPopup;
+    string activeReminderKey;
     bool dismissedReminderCleanupRunning;
 
     string ReminderStatePath {get{return Path.Combine(data,"floating-reminder-state.json");}}
@@ -84,11 +85,43 @@ internal sealed partial class FloatingWindow {
         if(reminderState==null)reminderState=new ReminderState();
         if(reminderState.Dismissed==null)reminderState.Dismissed=new Dictionary<string,string>();
         if(reminderState.SnoozedUntil==null)reminderState.SnoozedUntil=new Dictionary<string,string>();
-        reminderTimer.Tick+=async delegate {CheckDueReminders();await RefreshReminderSnapshot();};
+        reminderTimer.Tick+=async delegate {
+            var now=DateTimeOffset.Now;
+            if(now.LocalDateTime.Date!=reminderStatePrunedOn)
+                PruneReminderState(now,false);
+            CheckDueReminders();
+            await RefreshReminderSnapshot();
+        };
         Shown+=async delegate {reminderTimer.Start();await RefreshReminderSnapshot();};
     }
     void DisposeReminders(){reminderTimer.Stop();reminderTimer.Dispose();if(reminderPopup!=null&&!reminderPopup.IsDisposed)reminderPopup.Close();}
     void SaveReminderState(){try{File.WriteAllText(ReminderStatePath,json.Serialize(reminderState));}catch { }}
+
+    DateTime reminderStatePrunedOn=DateTime.MinValue;
+
+    void PruneReminderState(DateTimeOffset now,bool completeSnapshot) {
+        reminderStatePrunedOn=now.LocalDateTime.Date;
+        // Daily occurrences are only recreated for the current day or an explicit snooze.
+        // Keep two days of dismissals across a local clock/time-zone change.
+        var cutoff=now.LocalDateTime.Date.AddDays(-2);
+        bool changed=false;
+        if(completeSnapshot) {
+            ExpandRepeatingReminderTargets(now);
+            foreach(string key in reminderState.SnoozedUntil.Keys.ToArray()) {
+                DateTimeOffset due;
+                if((!reminderTargets.ContainsKey(key) && key!=activeReminderKey) || !TryReminderTime(reminderState.SnoozedUntil[key],out due))
+                    changed|=reminderState.SnoozedUntil.Remove(key);
+            }
+        }
+        foreach(var pair in reminderState.Dismissed.ToArray()) {
+            DateTimeOffset due;
+            bool weekly=pair.Key.Contains(":weekly:");
+            if((weekly && TryReminderTime(pair.Value,out due) && due.LocalDateTime.Date<cutoff && !reminderState.SnoozedUntil.ContainsKey(pair.Key)) ||
+                (!weekly && completeSnapshot && !reminderTargets.ContainsKey(pair.Key)))
+                changed|=reminderState.Dismissed.Remove(pair.Key);
+        }
+        if(changed)SaveReminderState();
+    }
 
     void UpdateReminderTargets(Dictionary<long,Dictionary<string,object>> all,List<ReminderTarget> outstandingReminders) {
         var next=new Dictionary<string,ReminderTarget>();var owned=new Dictionary<long,HashSet<string>>();repeatingReminderTargets.Clear();
@@ -104,6 +137,7 @@ internal sealed partial class FloatingWindow {
             AddReminderDefinition(next,"task:"+pair.Key,pair.Key,null,Convert.ToString(pair.Value["title"]),"任务",due,rule);
         }
         reminderTargets.Clear();foreach(var pair in next)reminderTargets[pair.Key]=pair.Value;
+        PruneReminderState(DateTimeOffset.Now,true);
         CleanupDismissedReminderTargets();
         CheckDueReminders();
     }
@@ -152,6 +186,7 @@ internal sealed partial class FloatingWindow {
             TopMost=true, StartPosition=FormStartPosition.CenterScreen, ShowInTaskbar=false
         });
         reminderPopup=dialog;
+        activeReminderKey=target.Key;
         var layout=new TableLayoutPanel {Dock=DockStyle.Fill,Padding=new Padding(18),ColumnCount=1,RowCount=6};
         layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         foreach(int height in new[]{26,34,28,27,42})layout.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
@@ -231,6 +266,7 @@ internal sealed partial class FloatingWindow {
         dialog.FormClosed+=delegate {
             previewTimer.Dispose();
             reminderPopup=null;
+            activeReminderKey=null;
             if(!closing && !IsDisposed)BeginInvoke(new Action(CheckDueReminders));
         };
         updatePreview();

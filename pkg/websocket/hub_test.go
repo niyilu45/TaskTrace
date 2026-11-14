@@ -38,6 +38,21 @@ func TestHubRegisterUnregister(t *testing.T) {
 	assert.False(t, exists, "map entry should be deleted when last connection is removed")
 }
 
+func TestHubUnregisterClearsClosedConnections(t *testing.T) {
+	h := NewHub()
+	keep := &Connection{userID: 1}
+	h.Register(keep)
+	for range 1000 {
+		closed := &Connection{userID: 1}
+		h.Register(closed)
+		h.Unregister(closed)
+		remaining := h.connections[1]
+		if len(remaining) != 1 || remaining[0] != keep || remaining[:cap(remaining)][1] != nil {
+			t.Fatal("socket hub retained a disconnected tab")
+		}
+	}
+}
+
 func TestHubPublishToSubscribedConnection(t *testing.T) {
 	h := NewHub()
 	conn := &Connection{
