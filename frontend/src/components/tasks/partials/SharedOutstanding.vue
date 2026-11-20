@@ -55,7 +55,10 @@
 							<template v-else>P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</template>
 							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
 						</span>
-						<ReadonlyRichText :html="entry.item.html" />
+						<div class="outstanding-item-text">
+							<ReadonlyRichText :html="entry.item.html" />
+							<OutstandingNote :html="entry.item.note" />
+						</div>
 					</div>
 				</div>
 				<div class="outstanding-actions">
@@ -155,7 +158,10 @@
 							<template v-else>P{{ entry.item.priority ?? TASKTRACE_DEFAULT_PRIORITY }}</template>
 							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
 						</span>
-						<ReadonlyRichText :html="entry.item.html" />
+						<div class="outstanding-item-text">
+							<ReadonlyRichText :html="entry.item.html" />
+							<OutstandingNote :html="entry.item.note" />
+						</div>
 					</div>
 				</div>
 				<div class="outstanding-actions">
@@ -330,7 +336,7 @@
 				:id="`outstanding-note-panel-${taskId}`"
 				class="outstanding-note-editor"
 			>
-				<label :for="`outstanding-note-${taskId}`">备注（仅在编辑窗口显示）</label>
+				<label :for="`outstanding-note-${taskId}`">遗留事项备注</label>
 				<p>备注不会出现在悬浮窗事项列表中。可直接粘贴图片，图片会嵌入备注正文。</p>
 				<div :id="`outstanding-note-${taskId}`">
 					<Editor
@@ -391,6 +397,7 @@ import ReminderDetail from './ReminderDetail.vue'
 import TaskReminderModel from '@/models/taskReminder'
 import type {ITaskReminder} from '@/modelTypes/ITaskReminder'
 import ReadonlyRichText from './ReadonlyRichText.vue'
+import OutstandingNote from './OutstandingNote.vue'
 import {TASKTRACE_DEFAULT_PRIORITY} from '@/helpers/tasktracePriority'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {getErrorText} from '@/message'
@@ -1007,10 +1014,9 @@ onBeforeUnmount(() => {
 	gap: .45rem;
 	min-inline-size: 0;
 
-	.readonly-rich-text {
+	.outstanding-item-text {
 		flex: 1;
 		min-inline-size: 0;
-		inline-size: auto;
 	}
 }
 

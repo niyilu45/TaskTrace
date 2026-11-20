@@ -42,7 +42,16 @@
 			@keydown.space.prevent="$emit('edit', entry.task.id)"
 		>
 			<span>{{ entry.task.title }}{{ entry.task.done ? '（已完成）' : '' }}：</span>
-			<ReadonlyRichText :html="entry.html" />
+			<ol>
+				<li
+					v-for="item in entry.items"
+					:key="item.id"
+				>
+					<span>[P{{ item.priority ?? 7 }}] · {{ effectiveCompletion(item.completion, item.done) }}%</span>
+					<ReadonlyRichText :html="item.html" />
+					<OutstandingNote :html="item.note" />
+				</li>
+			</ol>
 		</div>
 	</section>
 </template>
@@ -54,22 +63,24 @@ import type {TaskComment} from '@/client/generated'
 import {useIntersectionObserver} from '@vueuse/core'
 import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
 import {type ProgressTask} from '@/helpers/projectProgress'
-import {outstandingHtml} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
+import {effectiveCompletion} from '@/helpers/tasktraceCompletion'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
+import OutstandingNote from '@/components/tasks/partials/OutstandingNote.vue'
 const props = defineProps<{tasks: ProgressTask[], refreshRevision?: number}>()
 defineEmits<{edit: [taskId: number]}>()
 const sharedProgressHistory = inject(projectProgressHistoryKey, null)
 const progressHistory = sharedProgressHistory || createProjectProgressHistory()
 const element = ref<HTMLElement>()
 const loading = ref(false)
-const entries = ref<{task: ProgressTask, html: string}[]>([])
+const entries = ref<{task: ProgressTask, items: OutstandingItem[]}[]>([])
 const failed = ref<number[]>([])
 let disposed = false
 let requested = false
 let visible = false
 let stale = true
 let loadVersion = 0
-const summaries = new WeakMap<TaskComment[], string>()
+const summaries = new WeakMap<TaskComment[], OutstandingItem[]>()
 let loaded = false
 async function load() {
 	if (disposed) return
@@ -79,25 +90,23 @@ async function load() {
 	const results = await Promise.all(props.tasks.map(async task => {
 		try {
 			const history = task.comment_count === 0 ? [] : await progressHistory.read(task.id)
-			if (disposed || version !== loadVersion) return {task, html: '', failed: false}
-			let html = summaries.get(history)
-			if (html === undefined) {
-				html = outstandingHtml(history)
-				const doc = new DOMParser().parseFromString(html, 'text/html')
-				if (!doc.body.textContent?.trim() && !doc.body.querySelector('img')) html = ''
-				summaries.set(history, html)
+			if (disposed || version !== loadVersion) return {task, items: [], failed: false}
+			let items = summaries.get(history)
+			if (items === undefined) {
+				items = sharedOutstanding(history).items.filter(item => !item.done)
+				summaries.set(history, items)
 			}
-			return {task, html, failed: false}
+			return {task, items, failed: false}
 		} catch (failure) {
 			if (isProgressReadCancelled(failure)) cancelled = true
-			return {task, html: '', failed: !isProgressReadCancelled(failure)}
+			return {task, items: [], failed: !isProgressReadCancelled(failure)}
 		}
 	}))
 	if (disposed || version !== loadVersion) return
 	loading.value = false
 	if (cancelled) return
 	loaded = true
-	const next = results.filter(result => !!result.html)
+	const next = results.filter(result => result.items.length > 0)
 	if (!equal(entries.value, next)) entries.value = next
 	failed.value = results.filter(result => result.failed).map(result => result.task.id)
 }
@@ -128,6 +137,13 @@ onBeforeUnmount(() => {
 	cursor: pointer;
 	border-radius: .2rem;
     > span { font-weight: 600; }
+	> ol {
+		margin: 0;
+		padding-inline-start: 1.5rem;
+
+		> li { padding-block-end: .35rem; }
+	}
+
 	&:hover { color: var(--primary); }
 	&:focus-visible {
 		outline: 2px solid var(--primary);

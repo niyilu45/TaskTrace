@@ -80,6 +80,7 @@
 					>
 						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
+						<OutstandingNote :html="entry.item.note" />
 					</li>
 				</ol>
 				<span
@@ -113,6 +114,7 @@
 					>
 						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
 						<ReadonlyRichText :html="entry.item.html" />
+						<OutstandingNote :html="entry.item.note" />
 					</li>
 				</ol>
 			</template>
@@ -183,6 +185,7 @@ import {sharedOutstanding, numberOutstandingItems} from '@/helpers/sharedOutstan
 import {finalProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
+import OutstandingNote from '@/components/tasks/partials/OutstandingNote.vue'
 import ProgressBacklinks from '@/components/tasks/partials/ProgressBacklinks.vue'
 import {taskStatusLabel} from '@/types/ITaskStatus'
 import {useAuthStore} from '@/stores/auth'
@@ -387,7 +390,11 @@ onBeforeUnmount(() => {
 .completed-outstanding {
 	margin-block-start: .4rem;
 	color: var(--grey-600);
-	text-decoration: line-through;
+
+	> li > span,
+	> li > :deep(.readonly-rich-text) {
+		text-decoration: line-through;
+	}
 }
 .history-entry {
  margin-block-end: .6rem;
