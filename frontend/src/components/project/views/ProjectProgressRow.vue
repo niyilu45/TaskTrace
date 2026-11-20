@@ -148,17 +148,24 @@
 				class="empty"
 			>暂无进展</span>
 			<div
-				v-for="note in notes"
-				:key="note.id"
+				v-for="day in notesByDate"
+				:key="day.date"
 				class="history-entry"
+				:data-progress-date="day.date"
 			>
-				<time :title="authorVerification(note.date)">{{ note.date }}<template v-if="showAuthors(note.date)"> · {{ authorNames(note.date) }}</template>：</time>
-				<strong
-					v-if="showAuthors(note.date)"
-					class="progress-author"
-					:title="teamStore.identityTitleFor(note.author || '')"
-				>{{ teamStore.displayNameFor(note.author || '') }}：</strong><ReadonlyRichText :html="note.progress" />
-				<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
+				<time>{{ day.date }}：</time>
+				<div
+					v-for="note in day.notes"
+					:key="note.id"
+					class="member-progress"
+				>
+					<strong
+						v-if="day.showAuthors"
+						class="progress-author"
+						:title="teamStore.identityTitleFor(note.author || '')"
+					>{{ teamStore.displayNameFor(note.author || '') }}：</strong><ReadonlyRichText :html="note.progress" />
+					<ProgressBacklinks :items="progressBacklinkMap[note.id || 0] || []" />
+				</div>
 			</div>
 			<button
 				v-if="hiddenNotesCount > 0"
@@ -213,21 +220,23 @@ const progressBacklinkMap = computed(() => progressBacklinks(history.value))
 const limitedNotes = computed(() => limitProgressNotes(allNotes.value, props.progressDays || 0))
 const showAllProgress = ref(false)
 const notes = computed(() => showAllProgress.value ? allNotes.value : limitedNotes.value)
-const authorsByDate = computed<Record<string, string[]>>(() => {
-	const result: Record<string, string[]> = {}
-	for (const note of allNotes.value) {
-		if (!note.author) continue
-		const authors = result[note.date] ||= []
-		if (!authors.some(author => teamMemberKey(author) === teamMemberKey(note.author))) authors.push(note.author)
+const notesByDate = computed(() => {
+	const dates = new Map<string, typeof notes.value>()
+	for (const note of notes.value) {
+		const entries = dates.get(note.date)
+		if (entries) entries.push(note)
+		else dates.set(note.date, [note])
 	}
-	return result
+	const currentUser = teamMemberKey(authStore.info?.username || '')
+	return [...dates].map(([date, entries]) => {
+		const authors = [...new Set(entries.map(note => teamMemberKey(note.author)).filter(Boolean))]
+		return {
+			date,
+			notes: entries,
+			showAuthors: authors.length > 1 || (authors.length === 1 && authors[0] !== currentUser),
+		}
+	})
 })
-const showAuthors = (date: string) => {
-	const authors = authorsByDate.value[date] ?? []
-	return authors.length > 1 || (authors.length === 1 && teamMemberKey(authors[0]) !== teamMemberKey(authStore.info?.username || ''))
-}
-const authorNames = (date: string) => (authorsByDate.value[date] ?? []).map(author => teamStore.displayNameFor(author)).join('、')
-const authorVerification = (date: string) => (authorsByDate.value[date] ?? []).map(author => teamStore.identityTitleFor(author)).join('\n')
 const hiddenNotesCount = computed(() => allNotes.value.length - limitedNotes.value.length)
 watch(() => props.progressDays, () => { showAllProgress.value = false })
 const numberedOutstanding = computed(() => numberOutstandingItems(sharedOutstanding(history.value).items))
@@ -403,5 +412,13 @@ onBeforeUnmount(() => {
  time { font-weight: 600;
  }
 .progress-author { margin-inline-end: .25rem; }
+.member-progress {
+	margin-block-start: .25rem;
+
+	&:first-of-type {
+		display: inline;
+		margin-block-start: 0;
+	}
+}
 }
 </style>

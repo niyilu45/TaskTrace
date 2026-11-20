@@ -186,3 +186,49 @@ test('outstanding operations appear once in comments and survive reload', async 
 	await expect(page.locator('.daily-progress__editor [contenteditable="true"]')).not.toContainText('审核待办')
 	await page.locator('.comments').screenshot({path: test.info().outputPath('outstanding-operation-comments.png')})
 })
+
+test('same-day collaboration progress shows one date and one label for each member', async ({authenticatedPage: page, currentUser}, testInfo) => {
+	const [project] = await ProjectFactory.create(1, {owner_id: currentUser.id, title: '协作进展日期展示'})
+	const [shared] = await TaskFactory.create(1, {project_id: project.id, created_by_id: currentUser.id, title: '共享任务'})
+	const [personal] = await TaskFactory.create(1, {id: 2, project_id: project.id, created_by_id: currentUser.id, title: '个人任务'}, false)
+	const records = [
+		{date: '2026-01-01', author: 'A', text: 'A 的旧版本', taskId: shared.id},
+		{date: '2026-01-01', author: 'A', text: 'A 的最终进展', taskId: shared.id},
+		{date: '2026-01-01', author: 'B', text: 'B 的每日进展', taskId: shared.id},
+		{date: '2025-12-25', author: 'A', text: '更早日期的进展', taskId: shared.id},
+		{date: '2026-01-01', author: currentUser.username, text: '自己的每日进展', taskId: personal.id},
+	]
+	await TaskCommentFactory.create(records.length, {
+		task_id: (index: number) => records[index - 1].taskId,
+		author_id: currentUser.id,
+		comment: (index: number) => {
+			const record = records[index - 1]
+			const marker = Buffer.from(JSON.stringify({id: 'grouped-progress-' + index, author: record.author})).toString('base64url')
+			return '<h3>每日进展 · ' + record.date + '</h3><p>' + record.text + '</p><!--tasktrace-team:' + marker + '-->'
+		},
+	})
+	await page.goto('/projects/' + project.id)
+	await expect(page.locator('.task-own-progress > summary')).toHaveCount(2)
+	for (const summary of await page.locator('.task-own-progress > summary').all()) await summary.click()
+	const sharedRow = page.locator('.progress-row[data-task-id="' + shared.id + '"]')
+	const sameDay = sharedRow.locator('.history-entry[data-progress-date="2026-01-01"]')
+	await expect(sameDay.locator('time')).toHaveCount(1)
+	await expect(sameDay.locator('time')).toHaveText('2026-01-01：')
+	await expect(sameDay.locator('.member-progress')).toHaveCount(2)
+	await expect(sameDay.locator('.progress-author')).toHaveText([/^B：$/i, /^A：$/i])
+	await expect(sameDay.locator('.member-progress').filter({hasText: 'B：'})).toContainText('B 的每日进展')
+	await expect(sameDay.locator('.member-progress').filter({hasText: 'A：'})).toContainText('A 的最终进展')
+	await expect(sharedRow.locator('.progress-cell')).not.toContainText('A 的旧版本')
+	await expect(sharedRow.locator('.history-entry time')).toHaveText(['2026-01-01：', '2025-12-25：'])
+	const personalRow = page.locator('.progress-row[data-task-id="' + personal.id + '"]')
+	await expect(personalRow.locator('.history-entry')).toContainText('自己的每日进展')
+	await expect(personalRow.locator('.progress-author')).toHaveCount(0)
+
+	await page.getByRole('combobox', {name: '进展显示范围', exact: true}).selectOption('1')
+	await expect(sharedRow.locator('.history-entry')).toHaveCount(1)
+	await expect(sameDay.locator('.member-progress')).toHaveCount(2)
+	await sharedRow.getByRole('button', {name: /已隐藏 1 条较早进展/}).click()
+	await expect(sharedRow.locator('.history-entry')).toHaveCount(2)
+	await expect(sameDay.locator('time')).toHaveCount(1)
+	await sameDay.screenshot({path: testInfo.outputPath('shared-progress-by-date.png')})
+})
