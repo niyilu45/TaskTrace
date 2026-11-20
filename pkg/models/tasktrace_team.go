@@ -153,6 +153,7 @@ type TaskTraceTeamBinding struct {
 	TaskStates            map[string]TaskTraceTeamTaskState `json:"task_states,omitempty"`
 	ShareID               string                            `json:"share_id"`
 	Repository            string                            `json:"repository"`
+	ShareLink             string                            `json:"share_link,omitempty"`
 	Secret                string                            `json:"secret"`
 	Owner                 string                            `json:"owner"`
 	Members               []string                          `json:"members"`
@@ -2352,6 +2353,7 @@ func taskTraceTeamValidateBinding(binding *TaskTraceTeamBinding, actor string) e
 	for _, member := range manifest.Members {
 		if taskTraceTeamMembersEqual(member, actor) {
 			binding.Members = manifest.Members
+			binding.ShareLink = taskTraceTeamBindingLink(binding)
 			return nil
 		}
 	}
@@ -2385,6 +2387,9 @@ func taskTraceTeamPruneMissingTaskMappings(s *xorm.Session, binding *TaskTraceTe
 func taskTraceTeamMergeBinding(s *xorm.Session, a web.Auth, state *taskTraceTeamState, binding *TaskTraceTeamBinding, actor string, previousOverride ...*TaskTraceTeamSnapshot) error {
 	if err := taskTraceTeamValidateBinding(binding, actor); err != nil {
 		return fmt.Errorf("validate team membership: %w", err)
+	}
+	if err := taskTraceTeamPublishLink(binding, actor); err != nil {
+		return err
 	}
 	removed, err := taskTraceTeamRemovedLocalViews(s, binding)
 	if err != nil {
@@ -2814,6 +2819,9 @@ func taskTraceTeamUpdateMembersLocked(s *xorm.Session, a web.Auth, state taskTra
 		return nil, err
 	}
 	binding.Members = members
+	if err := taskTraceTeamPublishLink(binding, actor); err != nil {
+		return nil, err
+	}
 	if err := taskTraceTeamSaveState(state); err != nil {
 		return nil, err
 	}
@@ -2893,6 +2901,9 @@ func TaskTraceTeamShare(s *xorm.Session, a web.Auth, request TaskTraceTeamShareR
 	if err := taskTraceTeamWriteManifest(filepath.Join(taskTraceTeamShareDir(root, shareID), "manifest.json"), &manifest); err != nil {
 		return nil, err
 	}
+	if err := taskTraceTeamPublishLink(&binding, u.Username); err != nil {
+		return nil, err
+	}
 	if err := taskTraceTeamWriteSnapshot(&binding, snapshot); err != nil {
 		return nil, err
 	}
@@ -2958,7 +2969,20 @@ func TaskTraceTeamImport(s *xorm.Session, a web.Auth, request TaskTraceTeamImpor
 	if existing := taskTraceTeamFindBinding(&state, link.ShareID); existing != nil {
 		return taskTraceTeamReconnectBinding(s, a, &state, existing, repository, link, manifest, u.Username)
 	}
-	binding := TaskTraceTeamBinding{ShareID: link.ShareID, Repository: repository, Secret: link.Secret, Owner: manifest.Owner, Members: manifest.Members, ProjectID: request.ProjectID, NodeTasks: map[string]int64{}, Base: map[string]TaskTraceTeamBase{}, ResolutionAcks: map[string]string{}, LocalAttachments: map[string]int64{}, Notify: true}
+	binding := TaskTraceTeamBinding{
+		ShareID:          link.ShareID,
+		Repository:       repository,
+		ShareLink:        taskTraceTeamEncodeLinkPaths(link.Repository, link.Repositories, link.ShareID, link.Secret),
+		Secret:           link.Secret,
+		Owner:            manifest.Owner,
+		Members:          manifest.Members,
+		ProjectID:        request.ProjectID,
+		NodeTasks:        map[string]int64{},
+		Base:             map[string]TaskTraceTeamBase{},
+		ResolutionAcks:   map[string]string{},
+		LocalAttachments: map[string]int64{},
+		Notify:           true,
+	}
 	snapshots, err := taskTraceTeamReadSnapshots(&binding)
 	if err != nil {
 		return nil, fmt.Errorf("read team task: %w", err)
@@ -3398,19 +3422,6 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 			ids = append(ids, id)
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		linkPath := binding.Repository
-		linkPaths := []string{}
-		if taskTraceTeamMembersEqual(binding.Owner, u.Username) {
-			// Only the main repository needs an ACL scan. Reading the same Windows
-			// share permissions once per collaboration made a page refresh slower
-			// as more shared tasks were added.
-			info := taskTraceTeamRepositoryInfoCached(binding.Repository)
-			if taskTraceTeamAccessCacheKey(binding.Repository) == taskTraceTeamAccessCacheKey(root) {
-				info = repository
-			}
-			linkPath = info.Path
-			linkPaths = info.Paths
-		}
 		rootTitle := ""
 		if task, taskErr := GetTaskByIDSimple(s, binding.RootTaskID); taskErr == nil {
 			if task.TaskTraceHiddenBy != 0 && len(binding.Conflicts) == 0 && binding.LastError == "" {
@@ -3432,7 +3443,7 @@ func taskTraceTeamStatusLockedWithAccessScan(s *xorm.Session, a web.Auth, state 
 		row := TaskTraceTeamBindingStatus{
 			Repository: binding.Repository,
 			ShareID:    binding.ShareID, Owner: binding.Owner, Members: manifest.Members, RootTaskID: binding.RootTaskID, RootTaskTitle: rootTitle,
-			TaskIDs: ids, Link: taskTraceTeamEncodeLinkPaths(linkPath, linkPaths, binding.ShareID, binding.Secret), MemberLink: taskTraceTeamEncodeMembersLink(manifest.Members),
+			TaskIDs: ids, Link: taskTraceTeamBindingLink(&binding), MemberLink: taskTraceTeamEncodeMembersLink(manifest.Members),
 			Notify: binding.Notify, CanManagePermissions: canManagePermissions,
 			PermissionTargets: permissionTargets,
 			LastSync:          binding.LastSync, LastError: binding.LastError, Conflicts: conflicts,
