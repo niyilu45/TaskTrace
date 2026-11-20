@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputDirectory = '.local-build/floating-progress-save-tests',
     [switch]$VerifyPreviousGetter
 )
@@ -31,6 +31,8 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength=8388608 };
     readonly Dictionary<long,List<Dictionary<string,object>>> comments = new Dictionary<long,List<Dictionary<string,object>>>();
     long sequence=100;
+    readonly Dictionary<long,byte[]> attachments=new Dictionary<long,byte[]>();
+    internal int AttachmentWrites;
     internal int DailyAttempts,DailyWrites,DailyPosts,DailyPuts,HistoryReads;
     internal bool FailNextProgress,FailNextOutstanding;
     internal int OutstandingWrites,PriorityAttempts;
@@ -64,6 +66,16 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
         long taskId;
         if(!Int64.TryParse(parts[4],out taskId))throw new InvalidOperationException("Unexpected task id");
         if(parts.Length==5 && method=="GET")return Reply(new {id=taskId,title="Progress save fixture "+taskId,description=""});
+        if(parts.Length==6 && parts[5]=="attachments" && method=="POST") {
+            var multipart=(MultipartFormDataContent)request.Content;
+            long attachmentId=++sequence;
+            attachments[attachmentId]=await multipart.First().ReadAsByteArrayAsync();
+            AttachmentWrites++;
+            return Reply(new {success=new[]{new {id=attachmentId}},errors=new object[0]});
+        }
+        if(parts.Length==7 && parts[5]=="attachments" && method=="GET") {
+            return new HttpResponseMessage(HttpStatusCode.OK) {Content=new ByteArrayContent(attachments[Int64.Parse(parts[6])])};
+        }
         if(parts.Length>=6 && parts[5]=="comments") {
             if(method=="GET") {
                 HistoryReads++;
@@ -143,6 +155,111 @@ internal sealed partial class FloatingWindow {
         SaveCheck(dialog.Opacity==0 && !dialog.ShowInTaskbar,"Test instrumentation did not keep child dialog hidden");
         return new SaveUi{Dialog=dialog,Editor=editor,Save=save,Day=day,Feedback=feedback,Lifetime=lifetime};
     }
+    static async Task<Form> OpenPopout(Form owner) {
+        SaveControls(owner).OfType<Button>().First(button=>button.Text=="窗口展示").PerformClick();
+        Form popup=null;
+        await SaveUntil(()=> {
+            popup=owner.OwnedForms.FirstOrDefault(form=>SaveControls(form).OfType<ProgressHtmlEditor>().Any());
+            return popup!=null;
+        },"Window-display button did not open an owned editor");
+        var mirror=SaveControls(popup).OfType<ProgressHtmlEditor>().Single();
+        var browser=(WebBrowser)mirror.Controls[0];
+        await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Detached editor was not ready");
+        SaveCheck(!popup.Modal && owner.Enabled,"Detached editor blocked the original window");
+        return popup;
+    }
+
+    async Task TestProgressPopout(ProgressSaveHttp fake) {
+        SaveUi ui=null,other=null;Exception failure=null;
+        try {
+            ui=await OpenSaveUi(45);
+            var clipboard=new TaskCompletionSource<string>();
+            ((ProgressHtmlEditorBridge)((WebBrowser)ui.Editor.Controls[0]).ObjectForScripting).ReadClipboardHtmlAsync=()=>clipboard.Task;
+            int baselineVersion=ui.Editor.ChangeVersion;
+            var popup=await OpenPopout(ui.Dialog);
+            var mirror=SaveControls(popup).OfType<ProgressHtmlEditor>().Single();
+            var browser=(ProgressEditorBrowser)mirror.Controls[0];
+            SaveControls(ui.Dialog).OfType<Button>().Single(button=>button.Text=="窗口展示").PerformClick();
+            SaveCheck(ui.Dialog.OwnedForms.Length==1 && ui.Save.Enabled && ui.Editor.ChangeVersion==baselineVersion,
+                "Opening or activating a popout disabled Save, duplicated the window or dirtied unchanged content");
+
+            browser.Document.GetElementById("progress-editor").InnerHtml="<p>小窗口立即输入</p>";
+            int writes=fake.DailyWrites+1;
+            await PressSave(ui,fake,writes,"Original Save missed detached input without an input event");
+            SaveCheck(SavedDay(fake,45,DateTime.Today)=="小窗口立即输入","Detached text was not formally saved");
+            ui.Editor.SimulateUserHtmlForTest("<p>原窗口修改</p>");
+            SaveCheck(Plain(mirror.Html)=="原窗口修改","Original edits did not reach the detached editor");
+            SaveControls(popup).OfType<Button>().Single(button=>button.Text=="保存").PerformClick();
+            writes++;await SaveUntil(()=>fake.DailyWrites==writes && ui.Save.Enabled,"Detached Save did not reuse original persistence");
+            SaveCheck(SavedDay(fake,45,DateTime.Today)=="原窗口修改","Detached Save used different content");
+
+            browser.Document.InvokeScript("eval",new object[]{"var e=document.getElementById('progress-editor'),r=document.createRange(),s=window.getSelection();r.selectNodeContents(e);r.collapse(false);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange()"});
+            browser.Document.InvokeScript("eval",new object[]{"pasteTaskTrace({preventDefault:function(){}})"});
+            await SaveUntil(()=>ui.Editor.IsPastePending,"Detached async paste was not visible to original Save");
+            int before=fake.DailyWrites;
+            ui.Save.PerformClick();
+            SaveCheck(fake.DailyWrites==before && ui.Feedback.Text.Contains("正在读取粘贴"),"Original Save ignored detached paste still in progress");
+            string picture;
+            using(var bitmap=new Bitmap(40,24))
+            using(var stream=new MemoryStream()) {
+                using(var drawing=Graphics.FromImage(bitmap))drawing.Clear(Color.SteelBlue);
+                bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);
+                picture="data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());
+            }
+            clipboard.SetResult("<p>图文前<img src='"+picture+"'>图文后</p>");
+            await SaveUntil(()=>!ui.Editor.IsPastePending && ui.Editor.Html.Contains("图文后") && ui.Editor.ImageCount==1,
+                "Pasted picture and surrounding text did not synchronize");
+            browser.ShortcutForTest(Keys.Control|Keys.Z);
+            await SaveUntil(()=>ui.Editor.Html.Contains("原窗口修改") && ui.Editor.ImageCount==0,"Detached paste undo did not synchronize");
+            browser.ShortcutForTest(Keys.Control|Keys.Y);
+            await SaveUntil(()=>ui.Editor.Html.Contains("图文后") && ui.Editor.ImageCount==1,"Detached paste redo did not synchronize");
+            writes=fake.DailyWrites+1;
+            await PressSave(ui,fake,writes,"Original Save did not persist a detached pasted image");
+            SaveCheck(fake.AttachmentWrites==1 && mirror.ImageCount==1 && mirror.Html.Contains("data-tasktrace-src"),
+                "Saving detached media lost its image or failed to reload the saved attachment");
+            Console.WriteLine("PASS actual modeless popout, duplicate activation, immediate bidirectional save and async image paste.");
+
+            mirror.SimulateUserHtmlForTest("<p>失败后保留的小窗口内容</p>");
+            fake.FailNextProgress=true;
+            ui.Save.PerformClick();
+            await SaveUntil(()=>!fake.FailNextProgress && ui.Save.Enabled,"Detached save failure did not finish");
+            SaveCheck(SaveControls(popup).OfType<Label>().Any(label=>label.Text.Contains(ProgressSaveHttp.Failure)),
+                "Detached window did not show the original save failure");
+            SaveCheck(Plain(mirror.Html)=="失败后保留的小窗口内容" && ui.Feedback.Text.Contains(ProgressSaveHttp.Failure),
+                "A failed original save lost detached changes");
+            writes=fake.DailyWrites+1;
+            await PressSave(ui,fake,writes,"Retry failed with the detached window open");
+            DateTime yesterday=DateTime.Today.AddDays(-1);
+            ui.Day.Value=yesterday;
+            await SaveUntil(()=>Plain(mirror.Html)=="" && popup.Text.Contains(yesterday.ToString("yyyy-MM-dd")),
+                "Detached editor retained the previous date after switching");
+            mirror.SimulateUserHtmlForTest("<p>小窗口的昨日记录</p>");
+            writes=fake.DailyWrites+1;
+            await PressSave(ui,fake,writes,"Detached historical date could not be saved");
+            SaveCheck(SavedDay(fake,45,yesterday)=="小窗口的昨日记录" && SavedDay(fake,45,DateTime.Today)=="失败后保留的小窗口内容",
+                "Detached editor mixed progress from different dates");
+
+            other=await OpenSaveUi(46);
+            var otherPopup=await OpenPopout(other.Dialog);
+            var otherEditor=SaveControls(otherPopup).OfType<ProgressHtmlEditor>().Single();
+            otherEditor.SimulateUserHtmlForTest("<p>独立任务内容</p>");
+            SaveCheck(Plain(ui.Editor.Html)=="小窗口的昨日记录","An unrelated task's popout overwrote the first task");
+            await CloseSaveUi(other);
+            other=null;
+            SaveCheck(otherPopup.IsDisposed && !popup.IsDisposed,"Closing one original affected the wrong popout");
+            popup.Close();
+            SaveCheck(popup.IsDisposed && !ui.Dialog.IsDisposed && ui.Save.Enabled,"Closing the popout closed or blocked its original");
+            popup=await OpenPopout(ui.Dialog);
+            await CloseSaveUi(ui);
+            ui=null;
+            SaveCheck(popup.IsDisposed,"Closing the original left its popout alive");
+            Console.WriteLine("PASS failed-save retention, date isolation, independent task windows and owner-close cleanup.");
+        } catch(Exception error){failure=error;}
+        if(other!=null)await CloseSaveUi(other);
+        if(ui!=null)await CloseSaveUi(ui);
+        if(failure!=null)throw failure;
+    }
+
     static void SilentProgressEdit(SaveUi ui,string text) {
         var browser=(WebBrowser)ui.Editor.Controls[0];
         // Deliberately do not call SimulateUserHtmlForTest, NotifyChanged or dispatch input.
@@ -251,7 +368,15 @@ internal sealed partial class FloatingWindow {
             await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Outstanding note editor not ready");
             input.Text="从任务窗口新增";
             priority.SelectedIndex=3;
-            SaveCheck(note.SimulateUserHtmlForTest("<p>已经保存的备注</p>"),"Could not enter outstanding note");
+            var notePopup=await OpenPopout(child);
+            var detachedNote=SaveControls(notePopup).OfType<ProgressHtmlEditor>().Single();
+            var detachedContent=SaveControls(notePopup).OfType<TextBox>().Single();
+            detachedContent.Text="从任务窗口新增并由小窗口修改";
+            SaveCheck(input.Text==detachedContent.Text,"Detached item content did not synchronize to the original");
+            input.Text="从任务窗口新增";
+            SaveCheck(detachedContent.Text==input.Text,"Original item content did not synchronize to the popout");
+            SaveCheck(detachedNote.SimulateUserHtmlForTest("<p>已经保存的备注</p>"),"Could not enter outstanding note in detached editor");
+            SaveCheck(note.Html.Contains("已经保存的备注") && save.Enabled,"Detached outstanding note blocked saving or failed to synchronize");
             await SaveUntil(()=>HasDraftCache("outstanding",id,"new"),"Outstanding draft was not cached before saving");
             save.PerformClick();
             await SaveUntil(()=>save.Enabled,"Outstanding save button stayed disabled");
@@ -291,6 +416,7 @@ internal sealed partial class FloatingWindow {
 
             child.Close();
             await SaveUntil(()=>child.IsDisposed,"Closing a saved outstanding window asked about a draft");
+            SaveCheck(notePopup.IsDisposed,"Closing the outstanding original left its detached note window alive");
             await SaveUntil(()=>unsavedUpdateEditors.Count==1,"Outstanding window did not release its editor registration");
             WriteDraftCache("outstanding",id,"new",new OutstandingDraftCache{
                 DraftId=stored.Id,Text=OutstandingEditorText(stored.Html),NoteHtml=stored.NoteHtml,Priority=stored.Priority
@@ -325,6 +451,7 @@ internal sealed partial class FloatingWindow {
                 try {
                     await host.TestProgressSaveButtons(fake,baseline);
                     if(!baseline)await host.TestOutstandingFromTaskWindow(fake);
+                    if(!baseline)await host.TestProgressPopout(fake);
                 }
                 catch(Exception error){code=1;Console.Error.WriteLine(error);}
                 finally{host.Close();}
@@ -354,6 +481,11 @@ $displayPattern='            dialog.Show();'+[char]10+'            dialog.Activa
 if(!$windowText.Contains($displayPattern)){throw 'Hidden test dialog instrumentation could not find ShowEditorWindowAsync.'}
 $windowText=$windowText.Replace($displayPattern,'            dialog.Opacity=0;dialog.ShowInTaskbar=false;dialog.Show();')
 [IO.File]::WriteAllText($windowSource,$windowText,[Text.UTF8Encoding]::new($true))
+$popoutSource=Join-Path $copiedSources 'FloatingEditorPopout.cs'
+$popoutText=[IO.File]::ReadAllText($popoutSource)
+if(!$popoutText.Contains('        window.Show(owner);')){throw 'Hidden popout instrumentation could not find modeless Show.'}
+$popoutText=$popoutText.Replace('        window.Show(owner);','        window.Opacity=0;window.ShowInTaskbar=false;window.Show(owner);')
+[IO.File]::WriteAllText($popoutSource,$popoutText,[Text.UTF8Encoding]::new($true))
 function Build-ProgressFixture([string]$Binary) {
     $sources=@(Get-ChildItem -LiteralPath $copiedSources -Filter 'Floating*.cs' | ForEach-Object FullName)
     & $compiler /nologo /target:exe /platform:x64 /optimize+ /main:FloatingProgressSaveTests /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Net.Http.dll /reference:System.Web.Extensions.dll /reference:System.Web.dll ('/out:'+$Binary) @sources $harness

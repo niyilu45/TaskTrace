@@ -423,7 +423,6 @@ internal sealed partial class FloatingWindow {
                 list.Format+=delegate(object sender,ListControlConvertEventArgs args){var item=args.ListItem as PendingItem;if(item!=null)args.Value=item.DisplayText(url);};
                 var mode=new Label{Text="遗留事项内容 · 新增（支持 Ctrl+V 粘贴图片）",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleLeft,AccessibleName="遗留事项内容说明"};
                 var input=new TextBox{Dock=DockStyle.Fill,Multiline=true,ScrollBars=ScrollBars.Vertical,AccessibleName="遗留事项内容",AccessibleDescription="遗留事项内容"};
-                var noteMode=new Label{Text="备注 · 仅在编辑窗口显示；双击图片查看大图，选中后可按退格或 Delete 删除。",Dock=DockStyle.Fill,TextAlign=ContentAlignment.BottomLeft,AccessibleName="遗留事项备注说明"};
                 var noteEditor=new ProgressHtmlEditor{Dock=DockStyle.Fill,AccessibleName="遗留事项备注，图片直接嵌入正文，双击查看大图"};
                 var priority=new ComboBox{Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="遗留事项优先级"};InitializePriorityChoice(priority,defaultPriority);
                 var appearance=AppearancePicker(true);
@@ -437,8 +436,9 @@ internal sealed partial class FloatingWindow {
                 noteEditor.ClipboardFailed+=delegate(object sender,ProgressClipboardErrorEventArgs error){feedback.Text="剪贴板操作失败："+error.Message;};
                 int noteImageDoubleClicks=0;
                 noteEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){noteImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"遗留事项备注图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
-                var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(mode,0,0);modeRow.Controls.Add(bulk,1,0);
-                layout.Controls.Add(list);layout.Controls.Add(modeRow);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(noteMode);layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
+                var notePopout=new FloatingEditorPopout(noteEditor,dialog,save,feedback,()=> "遗留事项 · "+TaskTitle(id)+" · "+input.Text,input);
+                var modeRow=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=2,RowCount=1,Margin=Padding.Empty};modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));modeRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,104));modeRow.Controls.Add(notePopout.CreateHeader(mode),0,0);modeRow.Controls.Add(bulk,1,0);
+                layout.Controls.Add(list);layout.Controls.Add(modeRow);layout.Controls.Add(input);layout.Controls.Add(priorityRow);layout.Controls.Add(notePopout.CreateHeader("遗留事项备注 · 支持粘贴图片、双击查看大图。"));layout.Controls.Add(noteEditor);layout.Controls.Add(previews);layout.Controls.Add(buttons);layout.Controls.Add(feedback);dialog.Controls.Add(layout);
                 var pictures=new List<PastedImage>();string editingId=null,originalText="",originalHtml="",originalNoteHtml="",originalNoteEditorHtml="",originalCompletedAt=null,originalReminderAt=null,originalAppearance="",draftId=Guid.NewGuid().ToString(),lastCached="";int originalPriority=defaultPriority,originalNoteVersion=0;bool originalDone=false,writing=false,loading=false,removeExistingImages=false,noteDraftRestored=false,updateDiscarded=false;
                 Action disposePreviews=delegate{ClearImageThumbnails(previews);};
                 Action renderPreviews=null;renderPreviews=delegate{

@@ -106,6 +106,11 @@ internal sealed class ProgressHtmlEditor : UserControl {
     bool ready, changing, readOnly, notifying;
     readonly Timer changeTimer=new Timer{Interval=35};
     public event EventHandler HtmlChanged;
+    internal event EventHandler ContentReplaced;
+    internal event EventHandler ReadOnlyChanged;
+    internal Action FlushLinkedChanges;
+    internal Func<bool> LinkedPastePending;
+    internal bool IsReadOnly { get { return readOnly; } }
     internal event EventHandler<ProgressClipboardErrorEventArgs> ClipboardFailed;
     public event EventHandler<ProgressEditorImageEventArgs> ImageDoubleClicked;
 
@@ -213,18 +218,23 @@ internal sealed class ProgressHtmlEditor : UserControl {
 
     public string Html {
         get {
+            if(!notifying && FlushLinkedChanges!=null)FlushLinkedChanges();
             if(notifying)return observedHtml;
             if(!ready || browser.Document == null) return pendingHtml ?? "";
             var editor = browser.Document.GetElementById("progress-editor");
             return editor == null ? CleanHtml(pendingHtml) : CleanHtml(editor.InnerHtml);
         }
-        set { pendingHtml = value ?? ""; ApplyHtml(); }
+        set {
+            pendingHtml = value ?? ""; ApplyHtml();
+            var handler=ContentReplaced;if(handler!=null)handler(this,EventArgs.Empty);
+        }
     }
 
-    internal bool IsPastePending {get{return ready && browser.Document!=null && Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"taskTracePasteOrder.length>0"}));}}
+    internal bool HasOwnPendingPaste {get{return ready && browser.Document!=null && Convert.ToBoolean(browser.Document.InvokeScript("eval",new object[]{"taskTracePasteOrder.length>0"}));}}
+    internal bool IsPastePending {get{return HasOwnPendingPaste || (LinkedPastePending!=null && LinkedPastePending());}}
     public int ImageCount { get { return !ready || browser.Document==null?Regex.Matches(pendingHtml??"",@"<img\b",RegexOptions.IgnoreCase).Count:browser.Document.Images.Count; } }
     // Some embedded-browser input paths omit oninput; saving must inspect the live document.
-    public int ChangeVersion { get { NotifyChanged();return changeVersion; } }
+    public int ChangeVersion { get { if(FlushLinkedChanges!=null)FlushLinkedChanges();NotifyChanged();return changeVersion; } }
     internal int ImageDoubleClickCountForTest { get { return imageDoubleClickCount; } }
 
     public void InsertImage(byte[] bytes) {
@@ -234,10 +244,38 @@ internal sealed class ProgressHtmlEditor : UserControl {
     }
 
     public void SetReadOnly(bool value) {
-        readOnly = value;
-        if(!ready || browser.Document == null) return;
-        var editor = browser.Document.GetElementById("progress-editor");
-        if(editor != null) editor.SetAttribute("contentEditable", value ? "false" : "true");
+        bool changed=readOnly!=value;
+        readOnly=value;
+        if(ready && browser.Document!=null) {
+            var editor=browser.Document.GetElementById("progress-editor");
+            if(editor!=null)editor.SetAttribute("contentEditable",value?"false":"true");
+        }
+        var handler=ReadOnlyChanged;if(changed && handler!=null)handler(this,EventArgs.Empty);
+    }
+
+    internal void FlushChangesForLink() { NotifyChanged(); }
+
+    internal void ApplyLinkedHtml(string html,bool userEdit) {
+        if(String.Equals(Html,html,StringComparison.Ordinal))return;
+        Html=html;
+        if(userEdit) {
+            changeVersion++;
+            var handler=HtmlChanged;if(handler!=null)handler(this,EventArgs.Empty);
+        }
+    }
+
+    internal ProgressHtmlEditor CreateLinkedEditor() {
+        var editor=new ProgressHtmlEditor(bridge.ReadClipboardHtml,bridge.WriteClipboardHtml);
+        editor.bridge.ReadClipboardHtmlAsync=bridge.ReadClipboardHtmlAsync;
+        return editor;
+    }
+
+    internal void ForwardLinkedImage(ProgressEditorImageEventArgs image) {
+        var handler=ImageDoubleClicked;if(handler!=null)handler(this,image);
+    }
+
+    internal void ForwardLinkedClipboardError(ProgressClipboardErrorEventArgs error) {
+        var handler=ClipboardFailed;if(handler!=null)handler(this,error);
     }
 
     public void FocusEditor() {
