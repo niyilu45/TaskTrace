@@ -56,7 +56,7 @@
 							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
 						</span>
 						<div class="outstanding-item-text">
-							<ReadonlyRichText :html="entry.item.html" />
+							<ReadonlyRichText :html="outstandingDisplayHtml(entry.item)" />
 							<OutstandingNote :html="entry.item.note" />
 						</div>
 					</div>
@@ -159,7 +159,7 @@
 							· {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%
 						</span>
 						<div class="outstanding-item-text">
-							<ReadonlyRichText :html="entry.item.html" />
+							<ReadonlyRichText :html="outstandingDisplayHtml(entry.item)" />
 							<OutstandingNote :html="entry.item.note" />
 						</div>
 					</div>
@@ -384,7 +384,7 @@ import {computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch} fr
 import {useTasktraceTaskChanges} from '@/composables/useTasktraceTaskChanges'
 import {useTasktraceUndoGuard, undoInProgress, undoGroupHeaders} from '@/helpers/tasktraceUndo'
 import {taskAttachmentsUpload, tasksRead, patchTasksRead, tasksPersonalPriorityUpdate} from '@/client/generated'
-import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, type OutstandingItem} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, readTaskHistory, changeOutstanding, numberOutstandingItems, outstandingDisplayHtml, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import {fetchAttachmentBlobUrl} from '@/helpers/attachments'
 import {autoSaveSettings, useAutoSave} from '@/helpers/autoSave'
 import {dataUrlAsFile, deleteTaskTraceDraft, fileAsDataUrl, readTaskTraceDraft, writeTaskTraceDraft} from '@/helpers/tasktraceDraftCache'

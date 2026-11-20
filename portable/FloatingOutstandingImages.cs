@@ -39,10 +39,17 @@ internal sealed partial class FloatingWindow {
             }
         }
     }
+    static bool HasOutstandingNote(string html) {
+        if(String.IsNullOrWhiteSpace(html))return false;
+        string content=Regex.Replace(html,@"<!--[\s\S]*?-->","");
+        content=Regex.Replace(content,@"<(script|style|template)\b[^>]*>[\s\S]*?</\1\s*>","",RegexOptions.IgnoreCase);
+        return !String.IsNullOrWhiteSpace(Plain(content).Replace("\u200b","").Replace("\ufeff","")) ||
+            Regex.IsMatch(content,@"<img\b|<a\b[^>]*\bhref\s*=",RegexOptions.IgnoreCase);
+    }
     static string OutstandingText(string html,string noteHtml=null,string origin=null) {
         string text=Plain(html).Replace("\r\n"," ");var images=new List<GalleryImage>();
         CollectImages(images,html,"",origin);CollectImages(images,noteHtml,"",origin);
-        return text+(images.Count>0?(text.Length==0?"":" · ")+images.Count+" 张图片":"");
+        return (HasOutstandingNote(noteHtml)?"(注) ":"")+text+(images.Count>0?(text.Length==0?"":" · ")+images.Count+" 张图片":"");
     }
     static string OutstandingImageHtml(OutstandingLeaf leaf){return (leaf.Html??"")+(leaf.NoteHtml??"");}
     int OutstandingImageCount(OutstandingLeaf leaf) {

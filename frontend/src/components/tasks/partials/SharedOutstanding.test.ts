@@ -329,7 +329,7 @@ describe('outstanding item images', () => {
 	it('edits a private rich note without showing it in the outstanding list', async () => {
 		history = [{id: 1, comment: shared('<li data-id="first"><p>Visible item</p><aside data-tasktrace-outstanding-note="true" hidden><p>Existing note</p></aside></li>')}]
 		await open()
-		expect(wrapper.get('.rendered-outstanding').text()).toBe('Visible item')
+		expect(wrapper.get('.rendered-outstanding').text()).toBe('(注) Visible item')
 		expect(wrapper.text()).not.toContain('Existing note')
 		await click('编辑')
 		await click('查看/编辑遗留事项备注')
@@ -339,8 +339,9 @@ describe('outstanding item images', () => {
 		await click('保存修改')
 		expect(history[0].comment).toContain('data-tasktrace-outstanding-note="true"')
 		expect(history[0].comment).toContain('Updated note')
+		expect(history[0].comment).not.toContain('outstanding-note-indicator')
 		expect(history[0].comment).toContain('attachments/9')
-		expect(wrapper.get('.rendered-outstanding').text()).toBe('Visible item')
+		expect(wrapper.get('.rendered-outstanding').text()).toBe('(注) Visible item')
 		expect(wrapper.text()).not.toContain('Updated note')
 	})
 

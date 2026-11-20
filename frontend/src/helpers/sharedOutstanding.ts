@@ -86,9 +86,29 @@ export function sharedOutstanding(history: TaskComment[]): {id: number | undefin
 	}
 }
 
+export function hasOutstandingNote(note?: string) {
+	if (!note?.trim()) return false
+	const doc = new DOMParser().parseFromString(note, 'text/html')
+	for (const element of doc.body.querySelectorAll('script, style, template')) element.remove()
+	return !!doc.body.textContent?.replace(/[\s\u200b\ufeff]/g, '') || !!doc.body.querySelector('img, a[href]')
+}
+
+export function outstandingDisplayHtml(item: OutstandingItem) {
+	if (!hasOutstandingNote(item.note)) return item.html
+	const doc = new DOMParser().parseFromString(item.html || '', 'text/html')
+	const indicator = doc.createElement('span')
+	indicator.className = 'outstanding-note-indicator'
+	indicator.title = '此遗留事项含有备注'
+	indicator.textContent = '(注) '
+	const first = doc.body.firstElementChild
+	if (first === doc.body.firstChild && first?.matches('p, div, h1, h2, h3, h4, h5, h6, blockquote')) first.prepend(indicator)
+	else doc.body.prepend(indicator)
+	return doc.body.innerHTML
+}
+
 export function outstandingHtml(history: TaskComment[]) {
 	const items = sharedOutstanding(history).items.filter(item => !item.done)
-	return items.length ? `<ol>${items.map(item => `<li><span>[P${item.priority ?? TASKTRACE_DEFAULT_PRIORITY}] · ${effectiveCompletion(item.completion, item.done)}%</span> ${item.html}</li>`).join('')}</ol>` : ''
+	return items.length ? `<ol>${items.map(item => `<li><span>[P${item.priority ?? TASKTRACE_DEFAULT_PRIORITY}] · ${effectiveCompletion(item.completion, item.done)}%</span> ${outstandingDisplayHtml(item)}</li>`).join('')}</ol>` : ''
 }
 
 export async function readTaskHistory(taskId: number) {

@@ -48,7 +48,7 @@
 					:key="item.id"
 				>
 					<span>[P{{ item.priority ?? 7 }}] · {{ effectiveCompletion(item.completion, item.done) }}%</span>
-					<ReadonlyRichText :html="item.html" />
+					<ReadonlyRichText :html="outstandingDisplayHtml(item)" />
 					<OutstandingNote :html="item.note" />
 				</li>
 			</ol>
@@ -63,7 +63,7 @@ import type {TaskComment} from '@/client/generated'
 import {useIntersectionObserver} from '@vueuse/core'
 import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
 import {type ProgressTask} from '@/helpers/projectProgress'
-import {sharedOutstanding, type OutstandingItem} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, outstandingDisplayHtml, type OutstandingItem} from '@/helpers/sharedOutstanding'
 import {effectiveCompletion} from '@/helpers/tasktraceCompletion'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'
 import OutstandingNote from '@/components/tasks/partials/OutstandingNote.vue'

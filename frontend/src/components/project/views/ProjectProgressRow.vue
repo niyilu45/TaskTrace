@@ -79,7 +79,7 @@
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
 						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
-						<ReadonlyRichText :html="entry.item.html" />
+						<ReadonlyRichText :html="outstandingDisplayHtml(entry.item)" />
 						<OutstandingNote :html="entry.item.note" />
 					</li>
 				</ol>
@@ -113,7 +113,7 @@
 						@keydown.space.prevent="$emit('edit', task.id)"
 					>
 						<span>[P{{ entry.item.priority ?? 7 }}] {{ effectiveCompletion(entry.item.completion, entry.item.done) }}%</span>
-						<ReadonlyRichText :html="entry.item.html" />
+						<ReadonlyRichText :html="outstandingDisplayHtml(entry.item)" />
 						<OutstandingNote :html="entry.item.note" />
 					</li>
 				</ol>
@@ -188,7 +188,7 @@ import {useIntersectionObserver} from '@vueuse/core'
 import type {TaskComment} from '@/client/generated'
 import {createProjectProgressHistory, projectProgressHistoryKey, isProgressReadCancelled} from '@/helpers/projectProgressHistory'
 import {type ProgressTask} from '@/helpers/projectProgress'
-import {sharedOutstanding, numberOutstandingItems} from '@/helpers/sharedOutstanding'
+import {sharedOutstanding, numberOutstandingItems, outstandingDisplayHtml} from '@/helpers/sharedOutstanding'
 import {finalProgressNotes, limitProgressNotes, progressBacklinks} from '@/helpers/progressNotes'
 import SubtaskOutstandingSummary from './SubtaskOutstandingSummary.vue'
 import ReadonlyRichText from '@/components/tasks/partials/ReadonlyRichText.vue'

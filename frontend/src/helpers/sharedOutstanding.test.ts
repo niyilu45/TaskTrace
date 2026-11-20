@@ -1,7 +1,23 @@
 import {describe, it, expect, vi} from 'vitest'
 vi.mock('@/client/generated', () => ({}))
-import {sharedOutstanding, outstandingHtml, numberOutstandingItems} from './sharedOutstanding'
+import {sharedOutstanding, outstandingHtml, numberOutstandingItems, hasOutstandingNote, outstandingDisplayHtml} from './sharedOutstanding'
 describe('shared outstanding', () => {
+	it('marks meaningful notes including images, but excludes empty editor placeholders', () => {
+		for (const note of [undefined, '', ' \n ', '<p><br></p>', '<p>&nbsp;\u200b</p>', '<!-- comment -->', '<style>p { color: red; }</style>']) {
+			expect(hasOutstandingNote(note)).toBe(false)
+			expect(outstandingDisplayHtml({id: 'item', html: '<p>正文</p>', note})).toBe('<p>正文</p>')
+		}
+		for (const note of ['<p>文字备注</p>', '<img src="/api/v1/tasks/1/attachments/2">', '<a href="/api/v1/tasks/1/attachments/3">附件</a>']) {
+			const item = {id: 'item', html: '<p>事项正文</p>', note}
+			const original = {...item}
+			const display = new DOMParser().parseFromString(outstandingDisplayHtml(item), 'text/html')
+			expect(display.body.textContent).toBe('(注) 事项正文')
+			expect(display.querySelectorAll('.outstanding-note-indicator')).toHaveLength(1)
+			expect(item).toEqual(original)
+		}
+		const textFirst = outstandingDisplayHtml({id: 'legacy', html: '旧正文<p>第二段</p>', note: '备注'})
+		expect(new DOMParser().parseFromString(textFirst, 'text/html').body.textContent).toBe('(注) 旧正文第二段')
+	})
 	it('numbers unfinished items before completed items without rewriting saved order', () => {
 		const items = [
 			{id: 'done-first', html: 'Done', done: true},
@@ -56,7 +72,10 @@ describe('shared outstanding', () => {
 		expect(item.html).toBe('<p>事项正文</p>')
 		expect(item.note).toContain('内部备注')
 		expect(item.note).toContain('attachments/8')
-		expect(outstandingHtml([shared])).toBe('<ol><li><span>[P7] · 0%</span> <p>事项正文</p></li></ol>')
+		const display = new DOMParser().parseFromString(outstandingHtml([shared]), 'text/html')
+		expect(display.querySelector('.outstanding-note-indicator')?.textContent).toBe('(注) ')
+		expect(display.body.textContent).not.toContain('内部备注')
+		expect(item.html).toBe('<p>事项正文</p>')
 	})
 
 	it('uses the configured product default when older collaborative markup has no priority', () => {

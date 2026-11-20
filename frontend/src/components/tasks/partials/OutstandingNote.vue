@@ -1,6 +1,6 @@
 <template>
 	<details
-		v-if="html.trim() && !isEditorContentEmpty(html)"
+		v-if="hasNote"
 		class="outstanding-note"
 		@click.stop
 		@dblclick.stop
@@ -18,11 +18,12 @@
 </template>
 
 <script setup lang="ts">
-import {ref} from 'vue'
-import {isEditorContentEmpty} from '@/helpers/editorContentEmpty'
+import {computed, ref} from 'vue'
+import {hasOutstandingNote} from '@/helpers/sharedOutstanding'
 import ReadonlyRichText from './ReadonlyRichText.vue'
 
-withDefaults(defineProps<{html?: string}>(), {html: ''})
+const props = withDefaults(defineProps<{html?: string}>(), {html: ''})
+const hasNote = computed(() => hasOutstandingNote(props.html))
 const expanded = ref(false)
 </script>
 
