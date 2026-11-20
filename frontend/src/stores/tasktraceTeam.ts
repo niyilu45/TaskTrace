@@ -258,7 +258,9 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 	}
 
 	async function hydrateMemberProfiles() {
+		// Leave browser connections available for project navigation and task saves.
 		for (const member of memberRoster.value) {
+			if (hydratingProfiles.size >= 2) break
 			const key = teamMemberKey(member)
 			const profile = directoryProfiles.value[key]
 			const hasDirectoryIdentity = Boolean(profile?.email || (profile?.display_name && teamMemberKey(profile.display_name) !== key))
@@ -268,9 +270,12 @@ export const useTasktraceTeamStore = defineStore('tasktraceTeam', () => {
 			profileRetryAfter.set(key, Date.now() + 300_000)
 			hydratingProfiles.add(key)
 			// Resolving a display name must never grant or rewrite Windows permissions.
-			void searchMembers(key)
+			void withRequestTimeout(signal => searchMembers(key, signal), TEAM_READ_TIMEOUT)
 				.catch(() => undefined)
-				.finally(() => hydratingProfiles.delete(key))
+				.finally(() => {
+					hydratingProfiles.delete(key)
+					void hydrateMemberProfiles()
+				})
 		}
 	}
 

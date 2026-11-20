@@ -233,3 +233,30 @@ describe('TaskTrace team bindings', () => {
 		expect(store.bindingForTask(42)?.members).toContain('new-member')
 	})
 })
+
+
+it('limits background identity lookups so task navigation keeps browser connections', async () => {
+	const state = {enabled: true, username: 'me', repository: {candidates: ['alice', 'bob', 'carol', 'dave', 'erin', 'frank']}, bindings: [], conflicts: [], notifications: []}
+	vi.mocked(tasktraceTeamStatus).mockResolvedValue({data: state} as unknown as Awaited<ReturnType<typeof tasktraceTeamStatus>>)
+	const pending: (() => void)[] = []
+	let active = 0
+	let maximum = 0
+	vi.mocked(tasktraceTeamMembersSearch).mockImplementation(({query}) => {
+		active++
+		maximum = Math.max(maximum, active)
+		return new Promise(resolve => pending.push(() => {
+			active--
+			resolve({data: {candidates: [{username: query!.q, display_name: 'Name ' + query!.q}]}} as unknown as Awaited<ReturnType<typeof tasktraceTeamMembersSearch>>)
+		}))
+	})
+	const store = useTasktraceTeamStore()
+	await store.refresh()
+	expect(active).toBe(2)
+	for (let count = 0; count < 10 && pending.length; count++) {
+		pending.shift()!()
+		await new Promise(resolve => setTimeout(resolve, 0))
+	}
+	expect(maximum).toBe(2)
+	expect(active).toBe(0)
+	expect(store.displayNameFor('frank')).toBe('Name frank')
+})

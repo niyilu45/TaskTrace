@@ -183,6 +183,26 @@ internal sealed partial class FloatingWindow {
             SaveCheck(ui.Dialog.OwnedForms.Length==1 && ui.Save.Enabled && ui.Editor.ChangeVersion==baselineVersion,
                 "Opening or activating a popout disabled Save, duplicated the window or dirtied unchanged content");
 
+            var originalBrowser=(WebBrowser)ui.Editor.Controls[0];
+            browser.Document.GetElementById("progress-editor").InnerHtml="<p>普通按键实时输入</p>";
+            browser.Document.InvokeScript("eval",new object[]{"document.getElementById('progress-editor').fireEvent('onkeyup')"});
+            await SaveUntil(()=>originalBrowser.Document.GetElementById("progress-editor").InnerText=="普通按键实时输入",
+                "Detached typing without MSHTML input did not update the original within 500 ms",500);
+            var typingClock=System.Diagnostics.Stopwatch.StartNew();
+            int typingUpdates=0;
+            while(typingClock.ElapsedMilliseconds<250) {
+                browser.Document.GetElementById("progress-editor").InnerHtml="<p>持续输入 "+(++typingUpdates)+"</p>";
+                browser.Document.InvokeScript("eval",new object[]{"document.getElementById('progress-editor').fireEvent('oninput')"});
+                await Task.Delay(10);
+            }
+            SaveCheck(originalBrowser.Document.GetElementById("progress-editor").InnerText.Contains("持续输入"),
+                "Continuous typing starved real-time synchronization until typing stopped");
+            originalBrowser.Document.GetElementById("progress-editor").InnerHtml="<p>原窗口实时输入</p>";
+            originalBrowser.Document.InvokeScript("eval",new object[]{"document.getElementById('progress-editor').fireEvent('onkeyup')"});
+            await SaveUntil(()=>browser.Document.GetElementById("progress-editor").InnerText=="原窗口实时输入",
+                "Original typing did not update the detached editor within 500 ms",500);
+            Console.WriteLine("PASS linked editor live DOM updates in both directions during native and continuous input.");
+
             browser.Document.GetElementById("progress-editor").InnerHtml="<p>小窗口立即输入</p>";
             int writes=fake.DailyWrites+1;
             await PressSave(ui,fake,writes,"Original Save missed detached input without an input event");
@@ -363,6 +383,12 @@ internal sealed partial class FloatingWindow {
             var save=controls.OfType<Button>().Single(button=>button.Text=="添加一条");
             var feedback=child.Controls[0].Controls.OfType<Label>().Last();
             var list=controls.OfType<ListBox>().Single();
+            SaveCheck(controls.OfType<Button>().Count(button=>button.Text=="窗口展示")==1,
+                "Outstanding editor has duplicate window-display actions");
+            var bulk=controls.OfType<Button>().Single(button=>button.AccessibleName=="批量导入遗留事项");
+            child.PerformLayout();bulk.Parent.PerformLayout();
+            SaveCheck(bulk.Text=="批量导入…" && bulk.Width>=80 && bulk.Height>=23 &&
+                bulk.Parent.ClientRectangle.Contains(bulk.Bounds),"Bulk-import label or button is clipped");
             var editor=unsavedUpdateEditors.Last();
             var browser=(WebBrowser)note.Controls[0];
             await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"Outstanding note editor not ready");

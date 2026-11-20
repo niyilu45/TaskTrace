@@ -447,6 +447,7 @@ const progressActivityReady = ref(false)
 const page = ref(1)
 const revision = ref(0)
 let requestId = 0
+let taskReadController: AbortController | undefined
 let progressActivityRequestId = 0
 const recentProgressDays = computed(() => activityRange.value === 'all' ? 0 : activityRange.value === 'custom' ? customActivityDays.value : Number(activityRange.value))
 const recentProgressMatches = computed(() => recentProgressDays.value === 0 ? null : progressActivityReady.value ? recentProgressTaskIds(latestProgressDates.value, recentProgressDays.value) : new Set<number>())
@@ -621,6 +622,9 @@ function applyTasks(collected: ProgressTask[]) {
 async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAnchor | null, changedTaskIds?: ReadonlySet<number>} = {}) {
 	const viewAnchor = options.preserveView ? options.anchor ?? captureViewAnchor() : null
 	const version = ++requestId
+	taskReadController?.abort()
+	const controller = new AbortController()
+	taskReadController = controller
 	const projectId = props.projectId
 	if (!options.changedTaskIds) progressHistory.clear()
 	progressActivityRequestId++
@@ -637,7 +641,7 @@ async function load(options: {preserveView?: boolean, anchor?: TasktraceScrollAn
 	try {
 		const collected: ProgressTask[] = []
 		for (let next = 1; ; next++) {
-			const result = await projectTasksList({path: {project: projectId}, query: {page: next, per_page: 100, sort_by: ['id'], order_by: ['asc'], expand: ['comment_count']}})
+			const result = await projectTasksList({signal: controller.signal, path: {project: projectId}, query: {page: next, per_page: 100, sort_by: ['id'], order_by: ['asc'], expand: ['comment_count']}})
 			if (version !== requestId) return
 			const items = (result.data.items || []).filter((task): task is ProgressTask => typeof task.id === 'number')
 			collected.push(...items)
@@ -693,7 +697,7 @@ watch(() => props.projectId, () => {
 watch(currentPersonKey, (value, previous) => {
 	if (!personSelectionDirty.value && value !== previous) selectedPersonKeys.value = value ? [value] : []
 })
-onBeforeUnmount(() => { requestId++; progressActivityRequestId++; progressHistory.clear() })
+onBeforeUnmount(() => { requestId++; taskReadController?.abort(); progressActivityRequestId++; progressHistory.clear() })
 </script>
 
 <style scoped lang="scss">

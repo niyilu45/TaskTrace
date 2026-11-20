@@ -84,3 +84,19 @@ it('invalidates a single task without cancelling unrelated in-flight reads', asy
 	await history.read(12)
 	expect(mocks.list).toHaveBeenCalledTimes(3)
 })
+
+it('aborts active history requests when leaving a project so they cannot block the next one', async () => {
+	const signals: AbortSignal[] = []
+	mocks.list.mockImplementation(({signal}: {signal: AbortSignal}) => new Promise((_resolve, reject) => {
+		signals.push(signal)
+		signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), {once: true})
+	}))
+	const previous = createProjectProgressHistory()
+	const settled = Promise.allSettled(Array.from({length: 8}, (_, index) => previous.read(index + 1)))
+	expect(signals).toHaveLength(6)
+	previous.clear()
+	expect(signals.every(signal => signal?.aborted)).toBe(true)
+	await settled
+	mocks.list.mockResolvedValue({data: {items: [{id: 99}], total_pages: 1}})
+	expect(await createProjectProgressHistory().read(99)).toEqual([{id: 99}])
+})

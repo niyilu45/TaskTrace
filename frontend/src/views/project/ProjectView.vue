@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, ref, shallowReactive, watch, watchEffect} from 'vue'
+import {computed, defineAsyncComponent, ref, shallowReactive, watch, watchEffect} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 
 import {useBaseStore} from '@/stores/base'
@@ -10,10 +10,6 @@ import {saveProjectView} from '@/helpers/projectView'
 import ProjectService from '@/services/project'
 
 import ProjectProgressOverview from '@/components/project/views/ProjectProgressOverview.vue'
-import ProjectList from '@/components/project/views/ProjectList.vue'
-import ProjectGantt from '@/components/project/views/ProjectGantt.vue'
-import ProjectTable from '@/components/project/views/ProjectTable.vue'
-import ProjectKanban from '@/components/project/views/ProjectKanban.vue'
 import TasktraceTeamImportButton from '@/components/project/TasktraceTeamImportButton.vue'
 import {isLocalBuild} from '@/helpers/tasktraceLocal'
 import {useTasktraceTeamSync} from '@/composables/useTasktraceTeamSync'
@@ -25,6 +21,11 @@ const props = defineProps<{
 	projectId: number,
 	viewId: number,
 }>()
+// Load editing tools only when they are requested; browsing a project needs none of them.
+const ProjectList = defineAsyncComponent(() => import('@/components/project/views/ProjectList.vue'))
+const ProjectGantt = defineAsyncComponent(() => import('@/components/project/views/ProjectGantt.vue'))
+const ProjectTable = defineAsyncComponent(() => import('@/components/project/views/ProjectTable.vue'))
+const ProjectKanban = defineAsyncComponent(() => import('@/components/project/views/ProjectKanban.vue'))
 
 const router = useRouter()
 const baseStore = useBaseStore()

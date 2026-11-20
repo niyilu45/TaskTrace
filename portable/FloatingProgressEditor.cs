@@ -188,7 +188,13 @@ internal sealed class ProgressHtmlEditor : UserControl {
         var editor = browser.Document.GetElementById("progress-editor");
         if(editor == null) return;
         EventHandler changed = delegate { QueueChanged(); };
-        editor.AttachEventHandler("oninput", changed);
+        // MSHTML omits input for some IME, delete and paste paths. Read once on
+        // the next short tick after any editing event; unchanged selection is a no-op.
+        foreach(string name in new[]{"oninput","onkeyup","oncut","onpaste","ondrop","oncompositionend"})
+            editor.AttachEventHandler(name, changed);
+        // DOM mutations also cover MSHTML editing paths that omit input/keyup
+        // (IME, drag/drop and changes inside embedded inline media).
+        browser.Document.InvokeScript("eval",new object[]{"if(window.taskTraceChangeObserver)taskTraceChangeObserver.disconnect();if(window.MutationObserver){window.taskTraceChangeObserver=new MutationObserver(function(){window.external.NotifyPaste();});taskTraceChangeObserver.observe(document.getElementById('progress-editor'),{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['src','href','data-tasktrace-src']});}"});
     }
 
     void ApplyHtml() {
@@ -204,7 +210,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         changing = false;
     }
 
-    void QueueChanged(){if(IsDisposed || changing || !ready)return;changeTimer.Stop();changeTimer.Start();}
+    void QueueChanged(){if(IsDisposed || changing || !ready || changeTimer.Enabled)return;changeTimer.Start();}
 
     void NotifyChanged() {
         changeTimer.Stop();

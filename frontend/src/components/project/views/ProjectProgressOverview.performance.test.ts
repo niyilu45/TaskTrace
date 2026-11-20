@@ -88,3 +88,21 @@ describe('project display refresh work', () => {
 		expect(details.open).toBe(true)
 	})
 })
+
+
+it('cancels project-list reads on switching projects and on closing the view', async () => {
+	const signals: AbortSignal[] = []
+	mocks.list.mockImplementation(({signal}: {signal: AbortSignal}) => new Promise((_resolve, reject) => {
+		signals.push(signal)
+		signal.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')), {once: true})
+	}))
+	wrapper = mount(ProjectProgressOverview, {props: {projectId: 1}, global: {stubs: {Icon: true, XButton: {template: '<button><slot /></button>'}}}})
+	await flushPromises()
+	await wrapper.setProps({projectId: 2})
+	expect(signals).toHaveLength(2)
+	expect(signals[0].aborted).toBe(true)
+	expect(signals[1].aborted).toBe(false)
+	wrapper.unmount()
+	expect(signals[1].aborted).toBe(true)
+	await flushPromises()
+})

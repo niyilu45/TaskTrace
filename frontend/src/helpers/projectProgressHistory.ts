@@ -17,28 +17,33 @@ export function isProgressReadCancelled(error: unknown) {
 // a manual refresh/reconnect clears all histories, including same-count edits.
 export function createProjectProgressHistory() {
 	const reads = new Map<number, Promise<TaskComment[]>>()
+	const controllers = new Map<number, AbortController>()
 	const generation = ref(0)
 	const revisions = reactive(new Map<number, number>())
 	const revisionFor = (taskId: number) => `${generation.value}:${revisions.get(taskId) || 0}`
 	function invalidate(taskIds: Iterable<number>) {
 		for (const id of new Set(taskIds)) {
 			reads.delete(id)
+			controllers.get(id)?.abort()
+			controllers.delete(id)
 			revisions.set(id, (revisions.get(id) || 0) + 1)
 		}
 	}
 	function read(taskId: number): Promise<TaskComment[]> {
 		const existing = reads.get(taskId)
 		if (existing) return existing
+		const controller = new AbortController()
+		controllers.set(taskId, controller)
 		const version = revisionFor(taskId)
 		const ensureCurrent = () => {
-			if (version !== revisionFor(taskId)) throw new ProgressReadCancelled()
+			if (controller.signal.aborted || version !== revisionFor(taskId)) throw new ProgressReadCancelled()
 		}
 		const request = (async () => {
 			const history: TaskComment[] = []
 			for (let page = 1; ; page++) {
 				const result = await queueProgressRead(() => {
 					ensureCurrent()
-					return taskCommentsList({path: {task: taskId}, query: {page, per_page: 100, order_by: 'desc'}})
+					return taskCommentsList({signal: controller.signal, path: {task: taskId}, query: {page, per_page: 100, order_by: 'desc'}})
 				})
 				ensureCurrent()
 				const items = result.data.items || []
@@ -49,10 +54,18 @@ export function createProjectProgressHistory() {
 		reads.set(taskId, request)
 		void request.catch(() => {
 			if (reads.get(taskId) === request) reads.delete(taskId)
+		}).finally(() => {
+			if (controllers.get(taskId) === controller) controllers.delete(taskId)
 		})
 		return request
 	}
-	return {read, revisionFor, invalidate, clear: () => { generation.value++; revisions.clear(); reads.clear() }}
+	return {read, revisionFor, invalidate, clear: () => {
+		generation.value++
+		for (const controller of controllers.values()) controller.abort()
+		controllers.clear()
+		revisions.clear()
+		reads.clear()
+	}}
 }
 
 export const projectProgressHistoryKey: InjectionKey<ReturnType<typeof createProjectProgressHistory>> = Symbol('project-progress-history')
