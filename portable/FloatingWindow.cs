@@ -617,23 +617,8 @@ internal sealed partial class FloatingWindow : Form {
         if(bodyOverride != null) note = "<h3 data-tasktrace-merged=\"" + String.Join(",", mergedIds ?? new List<long>()) + "\">每日进展 · " + day.ToString("yyyy-MM-dd") + "</h3>" + bodyOverride;
         if(!string.IsNullOrWhiteSpace(nextStep)) note += "<p><strong>遗留问题 / 下一步</strong></p><p>" + WebUtility.HtmlEncode(nextStep.Trim()).Replace("\r\n", "<br>").Replace("\n", "<br>") + "</p>";
         if(pictures != null) foreach(var picture in pictures) {
-            if(picture.Id == 0) {
-                // Refresh before streaming a file so the multipart body never needs replaying.
-                await Api("GET", "/tasks/" + id, null);
-                using(var body = new MultipartFormDataContent()) {
-                    var image = new ByteArrayContent(picture.Bytes); image.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
-                    body.Add(image, "files", "tasktrace-progress-" + Guid.NewGuid().ToString("N") + ".png");
-                    using(var request = new HttpRequestMessage(HttpMethod.Post, url + "/api/v2/tasks/" + id + "/attachments")) {
-                        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token); request.Content = body;
-                        using(var response = await http.SendAsync(request)) {
-                            if(!response.IsSuccessStatusCode) throw new Exception("图片上传失败，请重试。");
-                            var result = ReadObject(await response.Content.ReadAsStringAsync());
-                            foreach(Dictionary<string, object> attached in (IEnumerable)result["success"]) { picture.Id = Convert.ToInt64(attached["id"]); break; }
-                            if(picture.Id == 0) throw new Exception("图片上传失败，请重试。");
-                        }
-                    }
-                }
-            }
+            if(picture.Id == 0)
+                picture.Id=await UploadEditorFile(id,picture.Bytes,"tasktrace-progress-"+Guid.NewGuid().ToString("N")+".png","image/png");
             note += "<p><img src=\"/api/v1/tasks/" + id + "/attachments/" + picture.Id + "\" alt=\"进展图片\"></p>";
         }
         note += SerializeProgressReferences(references);

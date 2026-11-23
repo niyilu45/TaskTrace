@@ -34,9 +34,10 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
     readonly Dictionary<long,byte[]> attachments=new Dictionary<long,byte[]>();
     internal int AttachmentWrites;
     internal int DailyAttempts,DailyWrites,DailyPosts,DailyPuts,HistoryReads;
-    internal bool FailNextProgress,FailNextOutstanding;
+    internal bool FailNextProgress,FailNextOutstanding,FailNextAttachment;
     internal int OutstandingWrites,PriorityAttempts;
     internal TaskCompletionSource<bool> HeldHistory;
+    internal const string AttachmentFailure = "fixture: attachment could not be written";
     internal const string Failure = "fixture write denied: progress remains editable";
     internal List<Dictionary<string,object>> Notes(long id) {
         List<Dictionary<string,object>> values;
@@ -44,6 +45,7 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
         return values;
     }
     internal void Seed(long taskId,string html) {Notes(taskId).Add(Note(++sequence,html));}
+    internal void SeedAttachment(long id,byte[] bytes) {attachments[id]=bytes;}
     Dictionary<string,object> Note(long id,string html) {
         return new Dictionary<string,object>{{"id",id},{"comment",html},{"created",DateTime.UtcNow.AddSeconds(id).ToString("o")},
             {"author",new Dictionary<string,object>{{"username",Environment.UserName}}}};
@@ -67,6 +69,7 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
         if(!Int64.TryParse(parts[4],out taskId))throw new InvalidOperationException("Unexpected task id");
         if(parts.Length==5 && method=="GET")return Reply(new {id=taskId,title="Progress save fixture "+taskId,description=""});
         if(parts.Length==6 && parts[5]=="attachments" && method=="POST") {
+            if(FailNextAttachment){FailNextAttachment=false;return Reply(new {success=(object)null,errors=new[]{new {message=AttachmentFailure}}},HttpStatusCode.Created);}
             var multipart=(MultipartFormDataContent)request.Content;
             long attachmentId=++sequence;
             attachments[attachmentId]=await multipart.First().ReadAsByteArrayAsync();
@@ -197,6 +200,10 @@ internal sealed partial class FloatingWindow {
             }
             SaveCheck(originalBrowser.Document.GetElementById("progress-editor").InnerText.Contains("持续输入"),
                 "Continuous typing starved real-time synchronization until typing stopped");
+            // Let the last simulated keystroke arrive before independently editing the other
+            // hidden control; both directions still have their own 500 ms deadline.
+            await SaveUntil(()=>originalBrowser.Document.GetElementById("progress-editor").InnerText=="持续输入 "+typingUpdates,
+                "Final continuous input did not reach the original within 500 ms",500);
             originalBrowser.Document.GetElementById("progress-editor").InnerHtml="<p>原窗口实时输入</p>";
             originalBrowser.Document.InvokeScript("eval",new object[]{"document.getElementById('progress-editor').fireEvent('onkeyup')"});
             await SaveUntil(()=>browser.Document.GetElementById("progress-editor").InnerText=="原窗口实时输入",
@@ -469,6 +476,120 @@ internal sealed partial class FloatingWindow {
         await CloseSaveUi(parent);
         if(failure!=null)throw failure;
     }
+    async Task TestOutstandingUploadFailure(ProgressSaveHttp fake) {
+        const long id=49;
+        var lifetime=EditOutstanding(id,false,false);
+        Form dialog=null;Exception failure=null;
+        try {
+            await SaveUntil(()=> {dialog=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text=="遗留事项 · 所有日期共享");return dialog!=null;},
+                "New outstanding editor did not open");
+            var input=SaveControls(dialog).OfType<TextBox>().Single(box=>box.AccessibleName=="遗留事项内容");
+            var editor=SaveControls(dialog).OfType<ProgressHtmlEditor>().Single();
+            var save=SaveControls(dialog).OfType<Button>().Single(button=>button.Text=="添加一条");
+            var feedback=dialog.Controls[0].Controls.OfType<Label>().Last();
+            var browser=(WebBrowser)editor.Controls[0];
+            await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null,"New outstanding note editor not ready");
+            byte[] picture;
+            using(var bitmap=new Bitmap(8,8))using(var stream=new MemoryStream()){bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);picture=stream.ToArray();}
+            input.Text="上传失败也不能丢失的新遗留事项";
+            editor.SimulateUserHtmlForTest("<p>新备注</p><img src=\"data:image/png;base64,"+Convert.ToBase64String(picture)+"\">");
+            fake.FailNextAttachment=true;
+            save.PerformClick();
+            await SaveUntil(()=>!fake.FailNextAttachment && save.Enabled,"Failed upload did not finish");
+            SaveCheck(feedback.Text.Contains(ProgressSaveHttp.AttachmentFailure) && input.Text.Contains("不能丢失") &&
+                editor.ImageCount==1 && unsavedUpdateEditors.Last().IsDirty() && ReadShared(fake.Notes(id)).Items.Count==0,
+                "Failed upload hid its actual cause or lost the draft: "+feedback.Text);
+            save.PerformClick();
+            await SaveUntil(()=>save.Enabled && ReadShared(fake.Notes(id)).Items.Count==1,"Upload retry did not save the retained draft: "+feedback.Text);
+            SaveCheck(!unsavedUpdateEditors.Last().IsDirty() && ReadShared(fake.Notes(id)).Items.Single().NoteHtml.Contains("<img"),
+                "Upload retry left a dirty editor or lost the saved image");
+            var legacyPictures=new List<PastedImage>{new PastedImage{Bytes=picture}};
+            fake.FailNextAttachment=true;Exception uploadError=null;
+            try{await UploadOutstandingPictures(id,legacyPictures);}catch(Exception error){uploadError=error;}
+            SaveCheck(uploadError!=null && uploadError.Message.Contains(ProgressSaveHttp.AttachmentFailure) && legacyPictures[0].Id==0,
+                "Legacy outstanding picture upload threw a null reference or lost the retry state");
+            SaveCheck((await UploadOutstandingPictures(id,legacyPictures)).Contains("/attachments/") && legacyPictures[0].Id>0,
+                "Legacy outstanding picture upload did not retry");
+            var progressPictures=new List<PastedImage>{new PastedImage{Bytes=picture}};
+            fake.FailNextAttachment=true;uploadError=null;
+            try{await SaveProgress(50,DateTime.Today,"旧版进展图片入口","",progressPictures);}catch(Exception error){uploadError=error;}
+            SaveCheck(uploadError!=null && uploadError.Message.Contains(ProgressSaveHttp.AttachmentFailure) && fake.Notes(50).Count==0 &&
+                progressPictures[0].Id==0,"Legacy daily progress upload threw a null reference or saved an incomplete record");
+            await SaveProgress(50,DateTime.Today,"旧版进展图片入口","",progressPictures);
+            SaveCheck(fake.Notes(50).Count==1 && progressPictures[0].Id>0,"Legacy daily progress upload retry failed");
+            Console.WriteLine("PASS new outstanding image upload failure shows its cause, retains input/images and retries; legacy body images share the same behavior.");
+        } catch(Exception error){failure=error;}
+        if(dialog!=null && !dialog.IsDisposed){unsavedUpdateEditors.Last().Discard();dialog.Close();}
+        await SaveUntil(()=>lifetime.IsCompleted,"New outstanding note editor did not close");await lifetime;
+        if(failure!=null)throw failure;
+    }
+    async Task TestWebOutstandingNotes(ProgressSaveHttp fake) {
+        long taskId=48;
+        string prefix="<h3 data-tasktrace-comment-type=\"outstanding\">TaskTrace 遗留事项清单</h3><ul><li data-id=\"web-note\" data-priority=\"2\"><p>网页遗留事项</p><aside data-tasktrace-outstanding-note=\"true\" hidden>";
+        string suffix="</aside></li></ul>";
+        using(var bitmap=new Bitmap(8,8))
+        using(var stream=new MemoryStream()) {
+            bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);
+            fake.SeedAttachment(9901,stream.ToArray());
+        }
+        fake.Seed(taskId,prefix+"<p>网页添加的备注</p><ul><li><p>嵌套说明</p></li></ul><p><img src=\"/api/v1/tasks/48/attachments/9901\"></p>"+suffix);
+        var lifetime=EditOutstanding(taskId,false,false,"web-note");
+        Form dialog=null;Exception failure=null;
+        try {
+            await SaveUntil(()=> {dialog=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text=="遗留事项 · 所有日期共享");return dialog!=null;},
+                "Web-created outstanding note did not open its native editor");
+            var editor=SaveControls(dialog).OfType<ProgressHtmlEditor>().Single();
+            var browser=(WebBrowser)editor.Controls[0];
+            await SaveUntil(()=>browser.Document!=null && browser.Document.GetElementById("progress-editor")!=null &&
+                (browser.Document.GetElementById("progress-editor").InnerText??"").Contains("网页添加的备注"),
+                "Saved web note was not visible in the actual native editor");
+            SaveCheck((browser.Document.GetElementById("progress-editor").InnerText??"").Contains("嵌套说明") && editor.ImageCount==1,
+                "Web note lost list text or its embedded attachment image");
+            SaveCheck(SaveControls(dialog).OfType<ListBox>().Single().Items.Count==1,"Note bullets became extra outstanding items");
+            SaveCheck(!unsavedUpdateEditors.Last().IsDirty(),"Viewing a web-created note incorrectly marked the editor dirty");
+            var save=SaveControls(dialog).OfType<Button>().Single(button=>button.Text=="保存修改");
+            var feedback=dialog.Controls[0].Controls.OfType<Label>().Last();
+            editor.SimulateUserHtmlForTest(editor.Html.Replace("网页添加的备注","悬浮窗修改网页备注"));
+            save.PerformClick();
+            await SaveUntil(()=>save.Enabled && feedback.Text!="正在保存遗留事项…","Saving the web note did not finish");
+            var saved=ReadShared(fake.Notes(taskId)).Items.Single();
+            SaveCheck(Plain(saved.NoteHtml).Contains("悬浮窗修改网页备注") && editor.ImageCount==1 &&
+                !unsavedUpdateEditors.Last().IsDirty(),"Saving a web-created note failed: "+feedback.Text);
+            Console.WriteLine("PASS editing and saving a web-created outstanding note retains images and a clean saved baseline.");
+            fake.Seed(taskId,prefix+"<p>网页刚更新的备注</p><p><img src=\"/api/v1/tasks/48/attachments/9901\"></p>"+suffix);
+            ShowOutstandingItem(taskId,"web-note");
+            await SaveUntil(()=>(browser.Document.GetElementById("progress-editor").InnerText??"").Contains("网页刚更新的备注"),
+                "Reopening an existing outstanding window kept stale notes instead of reading the web update",1500);
+            SaveCheck(!unsavedUpdateEditors.Last().IsDirty(),"Refreshing web notes produced an unsaved-change prompt");
+            fake.Notes(taskId).Last()["comment"]=prefix+suffix;
+            ShowOutstandingItem(taskId,"web-note");
+            await SaveUntil(()=>Plain(editor.Html)=="","Web note deletion was not refreshed");
+            fake.Notes(taskId).Last()["comment"]=prefix+"<p>网页后来补充的备注</p>"+suffix;
+            ShowOutstandingItem(taskId,"web-note");
+            await SaveUntil(()=>Plain(editor.Html)=="网页后来补充的备注","A web note added after opening an empty native note stayed blank");
+            SaveCheck(!unsavedUpdateEditors.Last().IsDirty(),"Web empty-to-filled note refresh created a false unsaved prompt");
+            int beforeRefresh=fake.HistoryReads;
+            var held=new TaskCompletionSource<bool>();fake.HeldHistory=held;
+            ShowOutstandingItem(taskId,"web-note");
+            ShowOutstandingItem(taskId,"web-note");
+            SaveCheck(fake.HistoryReads==beforeRefresh+1,"Repeated reopening started duplicate in-flight refreshes");
+            editor.SimulateUserHtmlForTest("<p>读取网页期间输入的本地备注</p>");
+            held.SetResult(true);
+            await Task.Delay(150);
+            SaveCheck(Plain(editor.Html)=="读取网页期间输入的本地备注","An in-flight refresh overwrote newly typed notes");
+            editor.SimulateUserHtmlForTest("<p>悬浮窗尚未保存的备注</p>");
+            fake.Seed(taskId,prefix+"<p>网页的另一条修改</p>"+suffix);
+            ShowOutstandingItem(taskId,"web-note");
+            await Task.Delay(150);
+            SaveCheck((browser.Document.GetElementById("progress-editor").InnerText??"").Contains("悬浮窗尚未保存的备注"),
+                "External refresh overwrote an unsaved note");
+            Console.WriteLine("PASS web-created notes, nested lists and inline images load; reopening refreshes clean windows and protects local drafts.");
+        } catch(Exception error){failure=error;}
+        if(dialog!=null && !dialog.IsDisposed){unsavedUpdateEditors.Last().Discard();dialog.Close();}
+        await SaveUntil(()=>lifetime.IsCompleted,"Web note editor did not close");
+        await lifetime;
+        if(failure!=null)throw failure;
+    }
     internal static int RunProgressSaveFixture(string directory,bool baseline) {
         int code=0;Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
         using(var fake=new ProgressSaveHttp())
@@ -478,6 +599,8 @@ internal sealed partial class FloatingWindow {
                     await host.TestProgressSaveButtons(fake,baseline);
                     if(!baseline)await host.TestOutstandingFromTaskWindow(fake);
                     if(!baseline)await host.TestProgressPopout(fake);
+                    if(!baseline)await host.TestOutstandingUploadFailure(fake);
+                    if(!baseline)await host.TestWebOutstandingNotes(fake);
                 }
                 catch(Exception error){code=1;Console.Error.WriteLine(error);}
                 finally{host.Close();}

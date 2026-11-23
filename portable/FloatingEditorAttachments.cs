@@ -42,6 +42,7 @@ internal sealed partial class FloatingWindow {
         output.Append(html.Substring(cursor));return output.ToString();
     }
     async Task<long> UploadEditorFile(long taskId,byte[] bytes,string name,string contentType) {
+        if(bytes==null || bytes.Length==0)throw new Exception("附件内容为空，当前输入已保留，请重新选择图片或文件。");
         if(bytes.Length>64*1024*1024)throw new Exception("单个附件不能超过 64 MB，请选择较小的文件。");
         await Api("GET","/tasks/"+taskId,null);
         using(var body=new MultipartFormDataContent()) {
@@ -50,12 +51,29 @@ internal sealed partial class FloatingWindow {
             using(var request=new HttpRequestMessage(HttpMethod.Post,url+"/api/v2/tasks/"+taskId+"/attachments")) {
                 request.Headers.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",token);request.Content=body;
                 using(var response=await http.SendAsync(request)) {
-                    if(!response.IsSuccessStatusCode)throw new Exception("附件上传失败，请重试。");
-                    var result=ReadObject(await response.Content.ReadAsStringAsync());
-                    foreach(Dictionary<string,object> attached in (IEnumerable)result["success"])return Convert.ToInt64(attached["id"]);
+                    string responseBody=await response.Content.ReadAsStringAsync();
+                    if(!response.IsSuccessStatusCode)throw new Exception(ApiFailureMessage(response.StatusCode,"/tasks/"+taskId+"/attachments",responseBody,"附件上传失败，当前输入已保留，请重试。"));
+                    return UploadedEditorAttachmentId(responseBody);
                 }
             }
         }
-        throw new Exception("附件上传失败，请重试。");
+    }
+    long UploadedEditorAttachmentId(string responseBody) {
+        var result=ReadObject(responseBody);object values;
+        if(result!=null && result.TryGetValue("success",out values) && values is IEnumerable) {
+            foreach(object raw in (IEnumerable)values) {
+                var attached=raw as Dictionary<string,object>;object value;long id;
+                if(attached!=null && attached.TryGetValue("id",out value) && Int64.TryParse(Convert.ToString(value),out id) && id>0)return id;
+            }
+        }
+        var errors=new List<string>();
+        if(result!=null && result.TryGetValue("errors",out values) && values is IEnumerable) {
+            foreach(object raw in (IEnumerable)values) {
+                var error=raw as Dictionary<string,object>;object message;
+                if(error!=null && error.TryGetValue("message",out message) && !String.IsNullOrWhiteSpace(Convert.ToString(message)))
+                    errors.Add(Convert.ToString(message));
+            }
+        }
+        throw new Exception("附件未能保存，当前输入和图片已保留。"+(errors.Count==0?"请检查文件大小、写入权限后重试。":String.Join("；",errors)));
     }
 }

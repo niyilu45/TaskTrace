@@ -10,11 +10,12 @@ internal sealed class FloatingEditorWindows {
         readonly FloatingEditorWindows owner;
         internal string Key;
         internal Form Window;
+        internal Action Reopened;
         internal Entry(FloatingEditorWindows owner,string key){this.owner=owner;Key=key;}
         internal void Attach(Form window){Window=window;}
-        internal void Activate(){if(Window==null || Window.IsDisposed)return;if(Window.WindowState==FormWindowState.Minimized)Window.WindowState=FormWindowState.Normal;Window.Show();Window.BringToFront();Window.Activate();}
+        internal void Activate(){if(Window==null || Window.IsDisposed)return;if(Window.WindowState==FormWindowState.Minimized)Window.WindowState=FormWindowState.Normal;Window.Show();Window.BringToFront();Window.Activate();var reopened=Reopened;if(reopened!=null)reopened();}
         internal bool ChangeKey(string key){Entry other;if(owner.entries.TryGetValue(key,out other) && other!=this){other.Activate();return false;}owner.entries.Remove(Key);Key=key;owner.entries[key]=this;return true;}
-        public void Dispose(){Entry current;if(owner.entries.TryGetValue(Key,out current)&&current==this)owner.entries.Remove(Key);Window=null;}
+        public void Dispose(){Entry current;if(owner.entries.TryGetValue(Key,out current)&&current==this)owner.entries.Remove(Key);Reopened=null;Window=null;}
     }
     internal Entry Open(string key){Entry existing;if(entries.TryGetValue(key,out existing)){existing.Activate();return null;}var entry=new Entry(this,key);entries.Add(key,entry);return entry;}
     internal static string OutstandingKey(long taskId,string itemId){return "outstanding:"+taskId+":"+(itemId??"new");}
