@@ -517,3 +517,21 @@ describe('outstanding item images', () => {
 		expect(history[0].comment).not.toContain('data-completed-at')
 	})
 })
+
+
+it('persists a new shared item and its priority in one content write without a second failing preference request', async () => {
+	await open()
+	await startNew()
+	await wrapper.get('textarea').setValue('Member-created outstanding item')
+	await wrapper.get('.outstanding-priority-select').setValue('2')
+	priorityUpdate.mockRejectedValueOnce({status: 409, message: 'The outstanding list changed while saving priority'})
+	try {
+		await click('添加遗留事项')
+		expect(create).toHaveBeenCalledTimes(1)
+		expect(history[0].comment).toContain('Member-created outstanding item')
+		expect(history[0].comment).toContain('data-priority="2"')
+		expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+		expect(wrapper.text()).toContain('遗留事项已保存')
+		expect(priorityUpdate).not.toHaveBeenCalled()
+	} finally {priorityUpdate.mockReset()}
+})

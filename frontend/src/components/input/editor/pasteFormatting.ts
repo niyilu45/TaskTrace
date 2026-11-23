@@ -27,6 +27,23 @@ export function cleanPastedFormatting(html: string): string {
 			if (/^-?\d+(?:\.\d+)?(?:px|pt|em|rem)$/.test(first)) element.style.textIndent = first
 		}
 	}
+	// HTML source indentation is not an authored blank line. Keep explicit
+	// empty blocks/br pairs and preformatted text; discard only layout whitespace.
+	const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+	const textNodes: Text[] = []
+	while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+	const block = /^(P|DIV|UL|OL|LI|TABLE|TBODY|TR|TD|TH|H[1-6]|PRE|SECTION|ARTICLE|BLOCKQUOTE|HR)$/
+	for (const node of textNodes) {
+		if (node.parentElement?.closest('pre, code')) continue
+		let value = node.data
+		if (node.previousSibling?.nodeName === 'BR') value = value.replace(/^[\t \r\n]*[\r\n][\t \r\n]*/, '')
+		if (node.nextSibling?.nodeName === 'BR') value = value.replace(/[\t \r\n]*[\r\n][\t \r\n]*$/, '')
+		if (/^[\t \r\n]*$/.test(value) && /[\r\n]/.test(value)) {
+			value = node.parentNode === doc.body || block.test(node.previousSibling?.nodeName || '') || block.test(node.nextSibling?.nodeName || '') ? '' : ' '
+		}
+		if (value) node.data = value
+		else node.remove()
+	}
 	return doc.body.innerHTML
 }
 

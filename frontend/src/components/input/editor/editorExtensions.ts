@@ -4,7 +4,7 @@ import {nextTick, toValue, type MaybeRefOrGetter, type Ref} from 'vue'
 import StarterKit from '@tiptap/starter-kit'
 import {createNodeFromContent, Extension, mergeAttributes, type Editor, type Extensions} from '@tiptap/core'
 import {Plugin, PluginKey} from '@tiptap/pm/state'
-import {DOMSerializer, Fragment} from '@tiptap/pm/model'
+import {DOMSerializer, Fragment, Slice} from '@tiptap/pm/model'
 import {error as clipboardError} from '@/message'
 import {marked} from 'marked'
 
@@ -144,8 +144,9 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 				nextTick(async () => {
 
 					// no live view: fail closed, never fall back to document
-					const root = getEditor()?.view?.dom
-					if (!root) return
+					const instance = getEditor()
+					if (!instance || instance.isDestroyed) return
+					const root = instance.view.dom
 
 					const img = root.querySelector(`[id="${id}"]`)
 
@@ -194,6 +195,17 @@ export function createEditorExtensions(deps: EditorExtensionDeps): Extensions {
 								event.preventDefault()
 								return true
 							},
+						},
+						clipboardTextParser: text => {
+							// Plain-text newlines are line breaks, not paragraph margins.
+							const schema = this.editor.schema
+							const lines = text.replace(/\r\n?/g, '\n').split('\n')
+							const content = lines.flatMap((line, index) => {
+								const nodes = index ? [schema.nodes.hardBreak.create()] : []
+								if (line) nodes.push(schema.text(line))
+								return nodes
+							})
+							return new Slice(Fragment.from(schema.nodes.paragraph.create(null, content)), 1, 1)
 						},
 						clipboardParser: createClipboardParser(this.editor.schema),
 						transformPastedHTML: cleanPastedFormatting,

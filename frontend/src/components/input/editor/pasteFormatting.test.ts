@@ -17,3 +17,9 @@ describe('external paste formatting', () => {
   expect(result).not.toMatch(/bad|background|script/)
  })
 })
+
+
+it('removes HTML layout whitespace while keeping explicit empty lines and preformatted text', () => {
+ const html = '\n<p>甲\n<br>\n乙<br><br>丙</p>\n<p><br></p>\n<pre>  one\n\n  two</pre>\n'
+ expect(cleanPastedFormatting(html)).toBe('<p>甲<br>乙<br><br>丙</p><p><br></p><pre>  one\n\n  two</pre>')
+})

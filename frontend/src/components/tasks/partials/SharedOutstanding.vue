@@ -866,7 +866,7 @@ async function save() {
 			if (attachmentId) picture.attachmentId = attachmentId
 			if (!attachmentId || result.data.errors?.length) throw new Error('Image upload failed')
 		}
-		let result = await changeOutstanding(taskId, existing => {
+		const result = await changeOutstanding(taskId, existing => {
 			const current = targetId ? existing.find(item => item.id === targetId) : undefined
 			if (targetId && !current) throw new Error('Outstanding item no longer exists')
 			const images = savedDraft.images.map(picture => picture.attachmentId ? `/api/v1/tasks/${taskId}/attachments/${picture.attachmentId}` : picture.preview)
@@ -895,11 +895,8 @@ async function save() {
 			const added = {id: savedDraft.itemId, html, note, done: false, priority: savedDraft.priority}
 			return existing.some(item => item.id === added.id) ? existing.map(item => item.id === added.id ? added : item) : [...existing, added]
 		})
-		if (isLocalBuild && (!targetId || savedDraft.priority !== savedDraft.base.priority)) {
-			const id = targetId || savedDraft.itemId
-			const priority = await savePersonalPriority(taskId, id, savedDraft.priority)
-			result = result.map(item => item.id === id ? {...item, priority} : item)
-		}
+		// The content write already includes the local priority. A second
+		// preference request could race team sync and report a saved item as failed.
 		clearDraft(key)
 		void deleteTaskTraceDraft('outstanding', taskId, cacheKey(targetId)).catch(() => {})
 		if (taskId !== props.taskId || !mounted) return

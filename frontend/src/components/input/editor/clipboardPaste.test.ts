@@ -7,6 +7,7 @@ import {TextSelection} from '@tiptap/pm/state'
 import {insertClipboardHTMLImages} from './pasteFormatting'
 import {createEditorExtensions, type EditorExtensionDeps} from './editorExtensions'
 
+vi.mock('@/helpers/attachments', () => ({fetchAttachmentBlobUrl: vi.fn(async () => 'blob:fixture-image')}))
 window.API_URL = 'http://localhost:3456/api/v1'
 
 function createEditor(content: string) {
@@ -26,7 +27,7 @@ function createEditor(content: string) {
 		uploadAndInsertFiles: () => {},
 	}
 
-	editor = new Editor({element: holder, extensions: createEditorExtensions(deps), content})
+	editor = new Editor({element: holder, extensions: createEditorExtensions(deps), content, parseOptions: {preserveWhitespace: true}})
 
 	return editor
 }
@@ -105,6 +106,7 @@ describe('Word pictures with surrounding text', () => {
 		const pending = insertClipboardHTMLImages(editor, '<p style="color:red">before</p><img src="file:///word.png"><p>after</p>', [new File(['png'], 'word.png', {type: 'image/png'})], upload)
 		editor.commands.focus('end')
 		editor.commands.insertContent('typed later')
+		await vi.waitFor(() => expect(upload).toHaveBeenCalledTimes(1))
 		finish(['https://images.example/word.png'])
 		await pending
 		const html = editor.getHTML()
@@ -122,4 +124,48 @@ describe('Word pictures with surrounding text', () => {
 		expect(editor.getHTML()).not.toContain('blob:')
 		editor.destroy()
 	})
+})
+
+
+describe('clipboard layout whitespace', () => {
+	it('does not create blank paragraphs from source HTML indentation between blocks', () => {
+		const editor = createEditor('<p></p>')
+		try {
+			pasteHTML(editor, '\n<div>\n  <p>第一行</p>\n  <p>第二行</p>\n</div>\n')
+			expect(editor.getJSON().content?.map(node => node.content?.map(child => child.text || '').join('') || '')).toEqual(['第一行', '第二行'])
+		} finally {editor.destroy()}
+	})
+	it('does not duplicate a line break from HTML source newlines around br', () => {
+		const editor = createEditor('<p></p>')
+		try {
+			pasteHTML(editor, '<p>第一行\r\n<br>\r\n第二行</p>')
+			expect(editor.getHTML()).toBe('<p>第一行<br>第二行</p>')
+		} finally {editor.destroy()}
+	})
+	it('preserves intentional empty paragraphs, repeated breaks and plain-text line breaks', () => {
+		const editor = createEditor('<p></p>')
+		try {
+			pasteHTML(editor, '<p>甲<br><br>乙</p><p></p><p>丙</p>')
+			expect(editor.getHTML()).toBe('<p>甲<br><br>乙</p><p></p><p>丙</p>')
+		} finally {editor.destroy()}
+	})
+})
+
+it('pastes plain-text newlines as single visual lines rather than separated paragraphs', () => {
+	const editor = createEditor('<p></p>')
+	try {
+		editor.view.pasteText('甲\r\n乙\r\n\r\n丙')
+		expect(editor.getHTML()).toBe('<p>甲<br>乙<br><br>丙</p>')
+	} finally {editor.destroy()}
+})
+
+it('does not insert layout-only empty paragraphs when pasting indented HTML with an image', async () => {
+	const editor = createEditor('<p></p>')
+	try {
+		await insertClipboardHTMLImages(editor, '\n<p>前文</p>\n<img src="file:///word.png">\n<p>后文</p>\n', [new File(['png'], 'word.png', {type: 'image/png'})], async () => ['/api/v1/tasks/1/attachments/1'])
+		expect(editor.getHTML()).not.toContain('<p></p>')
+		expect(editor.getHTML()).toContain('前文')
+		expect(editor.getHTML()).toContain('后文')
+		expect(editor.getHTML().match(/<img /g)).toHaveLength(1)
+	} finally {editor.destroy()}
 })
