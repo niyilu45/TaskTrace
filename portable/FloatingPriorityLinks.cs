@@ -59,8 +59,25 @@ internal sealed partial class TaskTreeView {
     protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);RefreshWrappedLayout(true);QueueWrappedLayout();}
     protected override void OnSizeChanged(EventArgs e) {base.OnSizeChanged(e);RefreshWrappedLayout(true);Invalidate();Update();QueueWrappedLayout();}
     protected override void OnHandleCreated(EventArgs e) {base.OnHandleCreated(e);ApplyCompactScrollStyle();}
-    protected override void OnAfterExpand(TreeViewEventArgs e) {base.OnAfterExpand(e);QueueWrappedLayout();}
-    protected override void OnAfterCollapse(TreeViewEventArgs e) {base.OnAfterCollapse(e);QueueWrappedLayout();}
+    // Native expansion notifications can arrive after a refresh removed the item.
+    // WinForms then supplies a null Node; never dispatch it to app callbacks.
+    bool CurrentTreeEvent(TreeNode node) {return !IsDisposed && !Disposing && node!=null && node.TreeView==this;}
+    protected override void OnBeforeExpand(TreeViewCancelEventArgs e) {
+        if(!CurrentTreeEvent(e==null?null:e.Node)){if(e!=null)e.Cancel=true;return;}
+        base.OnBeforeExpand(e);
+    }
+    protected override void OnBeforeCollapse(TreeViewCancelEventArgs e) {
+        if(!CurrentTreeEvent(e==null?null:e.Node)){if(e!=null)e.Cancel=true;return;}
+        base.OnBeforeCollapse(e);
+    }
+    protected override void OnAfterExpand(TreeViewEventArgs e) {
+        if(!CurrentTreeEvent(e==null?null:e.Node))return;
+        base.OnAfterExpand(e);QueueWrappedLayout();
+    }
+    protected override void OnAfterCollapse(TreeViewEventArgs e) {
+        if(!CurrentTreeEvent(e==null?null:e.Node))return;
+        base.OnAfterCollapse(e);QueueWrappedLayout();
+    }
 
     int TextLineHeight(Font font) {
         return TextRenderer.MeasureText("Ag中",font,Size.Empty,TextFormatFlags.NoPadding|TextFormatFlags.NoPrefix).Height+1;
@@ -95,7 +112,7 @@ internal sealed partial class TaskTreeView {
         ApplyCompactScrollStyle();
     }
     void QueueWrappedLayout() {
-        if(!WrapNodeText || wrapLayoutQueued || !IsHandleCreated || IsDisposed)return;
+        if(!WrapNodeText || wrapLayoutQueued || !IsHandleCreated || IsDisposed || Disposing)return;
         wrapLayoutQueued=true;
         BeginInvoke(new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed){RefreshWrappedLayout(true);Update();}}));
     }
