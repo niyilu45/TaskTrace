@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+﻿// SPDX-License-Identifier: AGPL-3.0-or-later
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -30,7 +30,6 @@ internal sealed partial class FloatingWindow {
 
     readonly Timer reminderTimer=new Timer{Interval=15000};
     readonly Dictionary<string,ReminderTarget> reminderTargets=new Dictionary<string,ReminderTarget>();
-    readonly System.Threading.SemaphoreSlim reminderMutationGate=new System.Threading.SemaphoreSlim(1,1);
     ReminderState reminderState;
     Form reminderPopup;
     string activeReminderKey;
@@ -279,8 +278,9 @@ internal sealed partial class FloatingWindow {
         Exception failure=null;
         for(int attempt=0;attempt<3;attempt++) {
             try {await Api("PATCH","/tasks/"+taskId,new Dictionary<string,object>{{"reminders",values}});InvalidateReminderSnapshot();return;}
+            catch(OperationCanceledException){throw;}
             catch(Exception error) {failure=error;}
-            if(attempt<2)await Task.Delay(150*(attempt+1));
+            if(attempt<2)await Task.Delay(150*(attempt+1),SaveCancellation);
         }
         throw failure??new Exception("提醒保存失败，请重试。");
     }
@@ -300,6 +300,7 @@ internal sealed partial class FloatingWindow {
         for(int attempt=0;attempt<3;attempt++) {
             writeFailure=null;
             try {await WriteShared(taskId,shared);}
+            catch(OperationCanceledException){throw;}
             catch(Exception error) {writeFailure=error;}
             if(writeFailure==null)break;
             // A request can reach the server even when its response is interrupted. Re-read before
@@ -309,7 +310,7 @@ internal sealed partial class FloatingWindow {
             if(outstanding==null)throw new Exception("这条遗留事项已被移动或删除，请刷新后重试。");
             if(SameReminderValue(outstanding.ReminderAt,desiredValue)&&(outstanding.RepeatRule??"")==(repeatRule??"")){writeFailure=null;break;}
             outstanding.ReminderAt=desiredValue;outstanding.RepeatRule=repeatRule;
-            if(attempt<2)await Task.Delay(150*(attempt+1));
+            if(attempt<2)await Task.Delay(150*(attempt+1),SaveCancellation);
         }
         if(writeFailure!=null)throw writeFailure;
         Exception syncFailure=null;
@@ -340,15 +341,12 @@ internal sealed partial class FloatingWindow {
     }
 
     async Task SaveOutstandingReminder(long taskId,string itemId,string reminderAt,string repeatRule=null) {
-        await reminderMutationGate.WaitAsync();
-        try {await SaveOutstandingReminderCore(taskId,itemId,reminderAt,repeatRule);}
-        finally {reminderMutationGate.Release();}
+        using(await AcquireReminderMutation(taskId))await SaveOutstandingReminderCore(taskId,itemId,reminderAt,repeatRule);
     }
 
     async Task DeleteReminderTarget(ReminderTarget target) {
         if(target.RepeatRule!=null)return;
-        await reminderMutationGate.WaitAsync();
-        try {
+        using(await AcquireReminderMutation(target.TaskId)) {
             if(!String.IsNullOrWhiteSpace(target.ItemId)) {
                 var shared=ReadShared(await ReadHistory(target.TaskId));
                 var item=shared.Items.FirstOrDefault(value=>value.Id==target.ItemId);
@@ -363,7 +361,7 @@ internal sealed partial class FloatingWindow {
             if(index<0)return;
             values.RemoveAt(index);
             await PatchTaskReminders(target.TaskId,values);
-        } finally {reminderMutationGate.Release();}
+        }
     }
 
     async void ShowReminderForSelected() {
@@ -471,32 +469,34 @@ internal sealed partial class FloatingWindow {
                 if(choice==null || !values.Remove(choice.Value))return;
                 listChanged=true;refreshList(null);loadEditor(null);updateFeedback();
             };
-            cancel.Click+=delegate {dialog.Close();};
+            FloatingSaveOperation saveOperation=null;
+            cancel.Click+=delegate {if(writing){feedback.Text="正在取消等待，提醒设置仍保留在窗口中…";if(saveOperation!=null)saveOperation.Cancel();}else dialog.Close();};
             commit.Click+=async delegate {
                 if(writing)return;
                 // Save applies the current form too; staging is only needed when working on multiple entries.
                 if((editorChanged() || (!listChanged && values.Count==0)) && !stageEditor())return;
                 if(!listChanged){dialog.Close();return;}
-                writing=true;commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=cancel.Enabled=false;
+                writing=true;commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=false;cancel.Enabled=true;cancel.Text="取消等待";
                 feedback.Text="正在同步提醒…";
                 try {
+                    using(saveOperation=BeginFloatingSave()) {
                     if(itemId==null) {
-                        await reminderMutationGate.WaitAsync();
-                        try {await PatchTaskReminders(taskId,values);}finally{reminderMutationGate.Release();}
+                        using(await AcquireReminderMutation(taskId))await PatchTaskReminders(taskId,values);
                     } else {
                         DateTimeOffset newDue;
                         string reminderAt=values.Count>0 && TryReminderTime(values[0]["reminder"],out newDue)?ReminderStamp(newDue):null;
                         await SaveOutstandingReminder(taskId,itemId,reminderAt,values.Count>0?RepeatValue(values[0]):null);
                     }
                     InvalidateReminderSnapshot();saved=true;writing=false;dialog.Close();
-                } catch(Exception error){feedback.Text="提醒未保存："+error.Message;}
+                    }
+                } catch(Exception error){feedback.Text="提醒保存未完成："+FloatingSaveFailure(error);}
                 finally {
-                    writing=false;
-                    if(!dialog.IsDisposed){commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=cancel.Enabled=true;}
+                    writing=false;saveOperation=null;
+                    if(!dialog.IsDisposed){cancel.Text="取消";commit.Enabled=editActions.Enabled=fields.Enabled=repeatFields.Enabled=list.Enabled=cancel.Enabled=true;}
                 }
             };
             loadEditor(null);refreshList(values.FirstOrDefault());
-            dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing)e.Cancel=true;};
+            dialog.FormClosing+=delegate(object sender,FormClosingEventArgs e){if(writing){e.Cancel=true;if(saveOperation!=null)saveOperation.Cancel();}};
             dialog.ShowDialog(owner??this);
         }
         return saved;

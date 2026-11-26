@@ -50,7 +50,7 @@ internal sealed partial class FloatingWindow {
             body.Add(file,"files",Path.GetFileName(name));
             using(var request=new HttpRequestMessage(HttpMethod.Post,url+"/api/v2/tasks/"+taskId+"/attachments")) {
                 request.Headers.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",token);request.Content=body;
-                using(var response=await http.SendAsync(request)) {
+                using(var response=await SendLocalRequest(http,request)) {
                     string responseBody=await response.Content.ReadAsStringAsync();
                     if(!response.IsSuccessStatusCode)throw new Exception(ApiFailureMessage(response.StatusCode,"/tasks/"+taskId+"/attachments",responseBody,"附件上传失败，当前输入已保留，请重试。"));
                     return UploadedEditorAttachmentId(responseBody);

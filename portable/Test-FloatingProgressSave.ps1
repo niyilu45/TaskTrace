@@ -35,7 +35,8 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
     internal int AttachmentWrites;
     internal int DailyAttempts,DailyWrites,DailyPosts,DailyPuts,HistoryReads;
     internal bool FailNextProgress,FailNextOutstanding,FailNextAttachment;
-    internal int OutstandingWrites,PriorityAttempts;
+    internal int OutstandingWrites,PriorityAttempts,CancelledWrites;
+    internal bool HangNextWrite,FailNextHistory,FailHistoryAfterNextDailyWrite,LoseNextDailyReply,CancelHistoryAfterNextDailyWrite,HangNextHistory;
     internal TaskCompletionSource<bool> HeldHistory;
     internal const string AttachmentFailure = "fixture: attachment could not be written";
     internal const string Failure = "fixture write denied: progress remains editable";
@@ -82,11 +83,14 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
         if(parts.Length>=6 && parts[5]=="comments") {
             if(method=="GET") {
                 HistoryReads++;
+                if(HangNextHistory){HangNextHistory=false;await Task.Delay(Timeout.Infinite,cancellation);}
+                if(FailNextHistory){FailNextHistory=false;throw new HttpRequestException("fixture: history refresh failed");}
                 var gate=HeldHistory;
                 if(gate!=null){HeldHistory=null;await gate.Task;}
                 return Reply(new {items=Notes(taskId).OrderByDescending(note=>Convert.ToInt64(note["id"])).ToArray(),total_pages=1});
             }
             if(method=="POST" || method=="PUT") {
+                if(HangNextWrite){HangNextWrite=false;try{await Task.Delay(Timeout.Infinite,cancellation);}catch(OperationCanceledException){CancelledWrites++;throw;}}
                 var payload=json.Deserialize<Dictionary<string,object>>(await request.Content.ReadAsStringAsync());
                 string html=Convert.ToString(payload["comment"]);
                 bool daily=html.Contains("每日进展");
@@ -99,6 +103,11 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
                     FailNextOutstanding=false;
                     return Reply(new {message="fixture: outstanding content write failed"},HttpStatusCode.Forbidden);
                 }
+                if(daily && method=="POST") {
+                    string marker=System.Text.RegularExpressions.Regex.Match(html,"<!--tasktrace-team:[A-Za-z0-9_-]+-->").Value;
+                    var previous=marker==""?null:Notes(taskId).FirstOrDefault(note=>Convert.ToString(note["comment"]).Contains(marker));
+                    if(previous!=null)return Reply(previous);
+                }
                 Dictionary<string,object> saved;
                 if(method=="PUT") {
                     long id=Int64.Parse(parts[6]);
@@ -106,6 +115,9 @@ sealed class ProgressSaveHttp : HttpMessageHandler {
                 } else {saved=Note(++sequence,html);Notes(taskId).Add(saved);}
                 if(daily){DailyWrites++;if(method=="POST")DailyPosts++;else DailyPuts++;}
                 if(outstanding)OutstandingWrites++;
+                if(daily && CancelHistoryAfterNextDailyWrite){CancelHistoryAfterNextDailyWrite=false;HangNextHistory=true;}
+                if(daily && FailHistoryAfterNextDailyWrite){FailHistoryAfterNextDailyWrite=false;FailNextHistory=true;}
+                if(daily && LoseNextDailyReply){LoseNextDailyReply=false;throw new HttpRequestException("fixture: saved response was interrupted");}
                 return Reply(saved);
             }
         }
@@ -590,6 +602,66 @@ internal sealed partial class FloatingWindow {
         await lifetime;
         if(failure!=null)throw failure;
     }
+    async Task TestBoundedSaveRecovery(ProgressSaveHttp fake) {
+        SaveUi ui=null;Exception failure=null;var originalTimeout=floatingSaveTimeout;
+        try {
+            ui=await OpenSaveUi(52);floatingSaveTimeout=TimeSpan.FromMilliseconds(180);
+            SilentProgressEdit(ui,"服务无响应也保留这段输入");fake.HangNextWrite=true;
+            int cancelled=fake.CancelledWrites;
+            ui.Save.PerformClick();
+            await SaveUntil(()=>ui.Save.Enabled && fake.CancelledWrites==cancelled+1,"Unresponsive save did not stop at its deadline",2000);
+            SaveCheck(Plain(ui.Editor.Html)=="服务无响应也保留这段输入" && unsavedUpdateEditors.Last().IsDirty() &&
+                ui.Feedback.Text.Contains("超时"),"Save timeout lost input or left controls disabled: "+ui.Feedback.Text);
+            floatingSaveTimeout=originalTimeout;
+            await PressSave(ui,fake,fake.DailyWrites+1,"Retry after a cancelled save failed");
+            SaveCheck(SavedDay(fake,52,DateTime.Today)=="服务无响应也保留这段输入","Retry lost progress");
+            await CloseSaveUi(ui);ui=null;
+
+            ui=await OpenSaveUi(53);SilentProgressEdit(ui,"写入成功但刷新失败");fake.FailHistoryAfterNextDailyWrite=true;
+            int expectedWrites=fake.DailyWrites+1;ui.Save.PerformClick();
+            await SaveUntil(()=>ui.Save.Enabled && fake.DailyWrites==expectedWrites,"Post-save read failure left Save disabled");
+            SaveCheck(ui.Feedback.Text.Contains("已保存") && ui.Feedback.Text.Contains("刷新未完成") &&
+                !unsavedUpdateEditors.Last().IsDirty(),"A committed save was falsely reported as failed: "+ui.Feedback.Text);
+            int writes=fake.DailyWrites;ui.Save.PerformClick();await Task.Delay(80);
+            SaveCheck(fake.DailyWrites==writes,"A post-save refresh failure caused a duplicate save");
+            await CloseSaveUi(ui);ui=null;
+
+            ui=await OpenSaveUi(54);SilentProgressEdit(ui,"保存完成后读取超时也不能重复提交");
+            floatingSaveTimeout=TimeSpan.FromMilliseconds(180);fake.CancelHistoryAfterNextDailyWrite=true;
+            expectedWrites=fake.DailyWrites+1;ui.Save.PerformClick();
+            await SaveUntil(()=>ui.Save.Enabled && fake.DailyWrites==expectedWrites,"Post-commit timeout did not restore Save");
+            SaveCheck(ui.Feedback.Text.Contains("已保存") && ui.Feedback.Text.Contains("不需要再次保存") && !unsavedUpdateEditors.Last().IsDirty(),
+                "A post-commit timeout incorrectly encouraged resubmitting a saved record");
+            floatingSaveTimeout=originalTimeout;await CloseSaveUi(ui);ui=null;
+
+            foreach(bool collaborative in new[]{false,true}) {
+                long id=collaborative?56:55;
+                if(collaborative)fake.Seed(id,"<h3>每日进展 · "+DateTime.Today.ToString("yyyy-MM-dd")+"</h3><p>旧记录</p>"+FloatingTeamMarkerHtml("old-retry-record",Environment.UserName));
+                ui=await OpenSaveUi(id);SilentProgressEdit(ui,"响应丢失后的安全重试");
+                int posts=fake.DailyPosts;fake.LoseNextDailyReply=true;ui.Save.PerformClick();
+                await SaveUntil(()=>!fake.LoseNextDailyReply && ui.Save.Enabled,"Interrupted write response did not restore Save");
+                SaveCheck(unsavedUpdateEditors.Last().IsDirty(),"An unconfirmed write discarded the input");
+                int attempts=fake.DailyAttempts;ui.Save.PerformClick();
+                await SaveUntil(()=>fake.DailyAttempts>attempts && ui.Save.Enabled,"Retry after a lost reply did not finish");
+                SaveCheck(fake.DailyPosts==posts+1 && DailyHistory(fake.Notes(id)).Count(note=>DayOf(note)==DateTime.Today.ToString("yyyy-MM-dd"))==1 &&
+                    !unsavedUpdateEditors.Last().IsDirty(),"Lost-response retry duplicated a daily record or retained dirty state");
+                await CloseSaveUi(ui);ui=null;
+            }
+            var gate=RetainOutstandingWriteLock(57);await gate.Semaphore.WaitAsync();
+            floatingSaveTimeout=TimeSpan.FromMilliseconds(100);bool stopped=false;
+            try {using(BeginFloatingSave())await WriteShared(57,new SharedList());}catch(OperationCanceledException){stopped=true;}
+            SaveCheck(stopped && gate.Users==1 && gate.Semaphore.CurrentCount==0,"Cancelling a waiting list write released another editor's lock");
+            ReleaseOutstandingWriteLock(57,gate);
+            SaveCheck(!outstandingWriteGates.ContainsKey(57),"Timed-out list wait leaked its per-task gate");
+            floatingSaveTimeout=originalTimeout;
+            using(BeginFloatingSave())await WriteShared(57,new SharedList());
+            SaveCheck(!SaveCancellation.IsCancellationRequested,"A save deadline leaked into the next operation");
+            Console.WriteLine("PASS bounded no-response save, input/retry recovery, successful-save read failures, ordinary/shared lost-response deduplication and lock cleanup.");
+        } catch(Exception error){failure=error;}
+        floatingSaveTimeout=originalTimeout;
+        if(ui!=null)await CloseSaveUi(ui);
+        if(failure!=null)throw failure;
+    }
     internal static int RunProgressSaveFixture(string directory,bool baseline) {
         int code=0;Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);
         using(var fake=new ProgressSaveHttp())
@@ -601,6 +673,7 @@ internal sealed partial class FloatingWindow {
                     if(!baseline)await host.TestProgressPopout(fake);
                     if(!baseline)await host.TestOutstandingUploadFailure(fake);
                     if(!baseline)await host.TestWebOutstandingNotes(fake);
+                    if(!baseline)await host.TestBoundedSaveRecovery(fake);
                 }
                 catch(Exception error){code=1;Console.Error.WriteLine(error);}
                 finally{host.Close();}

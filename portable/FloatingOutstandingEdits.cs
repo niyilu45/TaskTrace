@@ -20,8 +20,8 @@ internal sealed partial class FloatingWindow {
         return gate;
     }
 
-    void ReleaseOutstandingWriteLock(long taskId,OutstandingWriteLock gate) {
-        gate.Semaphore.Release();
+    void ReleaseOutstandingWriteLock(long taskId,OutstandingWriteLock gate,bool acquired=true) {
+        if(acquired)gate.Semaphore.Release();
         if(--gate.Users!=0)return;
         outstandingWriteGates.Remove(taskId);
         gate.Semaphore.Dispose();

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $testRoot = Join-Path $repoRoot ('.local-build/weekly-reminder-tests/' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
@@ -18,7 +18,8 @@ using System.Windows.Forms;
 internal sealed class RepeatReminderApi : HttpMessageHandler {
  internal Dictionary<string,object> TaskData=new Dictionary<string,object>{{"id",1},{"title","\u5468\u671f\u63d0\u9192\u6d4b\u8bd5\u4efb\u52a1"},{"comment_count",0},{"reminders",new object[0]}};
  readonly List<Dictionary<string,object>> comments=new List<Dictionary<string,object>>();
- internal int TaskWrites, OutstandingWrites, TaskListReads;
+ internal int TaskWrites, OutstandingWrites, TaskListReads,PatchStarts,CancelledPatches;
+ internal bool HangNextPatch;
  static HttpResponseMessage Reply(object result){
   return new HttpResponseMessage(HttpStatusCode.OK){Content=new StringContent(new JavaScriptSerializer().Serialize(result))};
  }
@@ -26,6 +27,8 @@ internal sealed class RepeatReminderApi : HttpMessageHandler {
   string path=request.RequestUri.AbsolutePath;
   string method=request.Method.Method;
   if(path=="/api/v2/tasks/1"&&method=="PATCH"){
+   PatchStarts++;
+   if(HangNextPatch){HangNextPatch=false;try{await Task.Delay(Timeout.Infinite,cancel);}catch(OperationCanceledException){CancelledPatches++;throw;}}
    var patch=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(await request.Content.ReadAsStringAsync());
    TaskData["reminders"]=patch["reminders"];
    TaskWrites++;
@@ -68,6 +71,67 @@ internal sealed partial class FloatingWindow {
   Check(control.Visible&&bounds.Width>0&&bounds.Height>0,"reminder control is hidden: "+control.AccessibleName);
   for(var parent=control.Parent;parent!=null;parent=parent.Parent)
    Check(parent.RectangleToScreen(parent.ClientRectangle).Contains(bounds),"reminder control is clipped: "+(control.AccessibleName??control.Text));
+ }
+ async Task WaitReminder(Func<bool> ready,string message,int milliseconds=2500){
+  int waited=0;while(!ready()&&waited<milliseconds){await Task.Delay(20);waited+=20;}Check(ready(),message);
+ }
+ internal async Task TestReminderSaveRecovery(RepeatReminderApi api){
+  var timeout=floatingSaveTimeout;
+  for(int kind=0;kind<3;kind++){
+   api.TaskData["reminders"]=new object[0];
+   floatingSaveTimeout=TimeSpan.FromMilliseconds(180);
+   bool held=kind==0,driving=false;Exception failure=null;Form active=null;
+   IDisposable heldLease=null;
+   if(held){
+    heldLease=await AcquireReminderMutation(1);
+    using(BeginFloatingSave())using(await AcquireReminderMutation(2)){}
+    Check(reminderMutationGates.Count==1,"An unrelated task reminder waited for or leaked another task lock");
+   }else api.HangNextPatch=true;
+   int writes=api.TaskWrites,starts=api.PatchStarts;
+   using(var driver=new System.Windows.Forms.Timer{Interval=25}){
+    driver.Tick+=async delegate {
+     if(driving)return;
+     active=Application.OpenForms.Cast<Form>().FirstOrDefault(form=>form.Text.StartsWith("\u8bbe\u7f6e\u63d0\u9192"));
+     if(active==null)return;
+     driving=true;driver.Stop();active.Opacity=0;
+     try{
+      var commit=ReminderButton(active,"\u4fdd\u5b58");
+      var feedback=active.Controls[0].Controls.OfType<Label>().Last();
+      if(kind==2)floatingSaveTimeout=timeout;
+      commit.PerformClick();
+      await WaitReminder(()=>ControlsDeep(active).OfType<Button>().Any(button=>button.Text=="取消等待"&&button.Enabled),"Saving reminder did not offer cancellation");
+      if(kind==2){
+       await WaitReminder(()=>api.PatchStarts>starts,"Reminder save request did not start");
+       ReminderButton(active,"取消等待").PerformClick();
+      }
+      await WaitReminder(()=>commit.Enabled,"Reminder save remained stuck instead of timing out/cancelling");
+      Check(feedback.Text.Contains("输入已保留") && api.TaskWrites==writes,"Reminder timeout lost settings or wrote after cancellation: "+feedback.Text);
+      Check(ReminderButton(active,"取消").Enabled,"Cancel did not recover");
+      if(held){
+       Check(reminderMutationGates[1].Semaphore.CurrentCount==0,"An unacquired reminder lock was released");
+       heldLease.Dispose();held=false;
+      }
+      floatingSaveTimeout=timeout;api.HangNextPatch=false;commit.PerformClick();
+      await WaitReminder(()=>active.IsDisposed,"Retry did not save and close the reminder window");
+      Check(api.TaskWrites==writes+1 && TaskReminderValues(api.TaskData).Count==1,"Reminder retry duplicated or lost settings");
+     }catch(Exception error){failure=error;}
+     if(held){heldLease.Dispose();held=false;}
+     if(active!=null&&!active.IsDisposed){
+      var cancelWaiting=ControlsDeep(active).OfType<Button>().FirstOrDefault(button=>button.Text=="取消等待");
+      if(cancelWaiting!=null)cancelWaiting.PerformClick();
+      await Task.Delay(100);active.Close();
+     }
+    };
+    driver.Start();
+    bool saved=await ShowReminderEditor(1,null,this);
+    driver.Stop();
+    if(held){heldLease.Dispose();held=false;}
+    if(failure!=null)throw failure;
+    Check(saved && reminderMutationGates.Count==0,"Reminder save failed or leaked its lock");
+   }
+  }
+  floatingSaveTimeout=timeout;
+  Console.WriteLine("PASS reminder busy-lock timeout, unresponsive request timeout, user cancellation, retained settings, successful retry and lock release.");
  }
  async Task<bool> DriveReminderDialog(string itemId,Action<Form> operate){
   Exception error=null;bool operated=false;Form active=null;
@@ -368,7 +432,7 @@ internal static class RepeatReminderTests {
  [STAThread] static int Main(){
   Application.EnableVisualStyles();Application.SetCompatibleTextRenderingDefault(false);int result=0;var api=new RepeatReminderApi();
   using(var app=new FloatingWindow(AppDomain.CurrentDomain.BaseDirectory,api)){
-   app.Shown+=async delegate{try{await app.TestRepeating(api);}catch(Exception e){Console.Error.WriteLine(e);result=1;}finally{app.Close();}};
+   app.Shown+=async delegate{try{await app.TestRepeating(api);await app.TestReminderSaveRecovery(api);}catch(Exception e){Console.Error.WriteLine(e);result=1;}finally{app.Close();}};
    Application.Run(app);
   }
   return result;

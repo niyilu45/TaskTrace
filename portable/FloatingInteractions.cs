@@ -581,7 +581,8 @@ internal sealed partial class FloatingWindow {
                     editorRevision++;
                     writing=true;buttons.Enabled=false;list.Enabled=false;input.ReadOnly=true;noteEditor.SetReadOnly(true);priority.Enabled=false;appearance.Enabled=false;
                     feedback.Text=deleting?"正在删除遗留事项…":"正在保存遗留事项…";
-                    string savedDraftKey=draftKey(),continueEditingId=!deleting?editingId:null;try{
+                    string savedDraftKey=draftKey(),continueEditingId=!deleting?editingId:null;bool persisted=false;try{
+                        using(BeginFloatingSave()){
                         bool textChanged=OutstandingEditorText(OutstandingTextHtml(input.Text))!=originalText;
                         bool noteChanged=noteDirty();
                         bool priorityChanged=priority.SelectedIndex!=originalPriority;
@@ -613,9 +614,13 @@ internal sealed partial class FloatingWindow {
                         }
                         // The saved list already contains the priority. The separate priority API
                         // is only needed for priority-only changes without a content write.
-                        await WriteShared(id,current);
+                        await WriteShared(id,current);persisted=true;
+                        // Commit editor baselines before optional image/view reads.
+                        originalText=input.Text;originalNoteEditorHtml=noteEditor.Html;originalNoteVersion=noteEditor.ChangeVersion;noteDraftRestored=false;
+                        originalPriority=priority.SelectedIndex;pictures.Clear();removeExistingImages=false;
                         if(deleting)RemoveLocalOutstandingAppearance(id,editingId);
                         else if(appearanceChanged)SetLocalOutstandingAppearance(id,editingId??draftId,SelectedAppearance(appearance));
+                        originalAppearance=SelectedAppearance(appearance);
                         DeleteDraftCache("outstanding",id,savedDraftKey);
                         shared=current;
                         render();
@@ -627,7 +632,8 @@ internal sealed partial class FloatingWindow {
                         }
                         await loadEditor(continueEditing,false,null);
                         feedback.Text=deleting?"遗留事项已删除，可按 Ctrl+Z 撤销。":"已正式保存。备注和图片随遗留事项保存，所有日期共享。";if(deleting)await RefreshUndo();return true;
-                    }catch(Exception e){Error(e);feedback.Text=e.Message;recover.Visible=editingId!=null;return false;}
+                        }
+                    }catch(Exception e){Error(e);feedback.Text=persisted?"遗留事项已保存，显示刷新未完成；可稍后重新打开查看。"+FloatingRefreshFailure(e):FloatingSaveFailure(e);recover.Visible=!persisted && editingId!=null;return persisted;}
                     finally{writing=false;buttons.Enabled=true;list.Enabled=true;input.ReadOnly=false;noteEditor.SetReadOnly(false);priority.Enabled=true;appearance.Enabled=true;}
                 };
                 save.Click+=async delegate{await write(false);};remove.Click+=async delegate{if(editingId==null || MessageBox.Show(dialog,"确定删除当前遗留事项？删除后可按 Ctrl+Z 撤销。","删除遗留事项",MessageBoxButtons.YesNo,MessageBoxIcon.Warning)!=DialogResult.Yes)return;await write(true);};
@@ -728,7 +734,7 @@ internal sealed partial class FloatingWindow {
         var parts=safe.Split('/');await Api("GET","/tasks/"+parts[4],null);
         using(var request=new HttpRequestMessage(HttpMethod.Get,url+safe)){
             request.Headers.Authorization=new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer",token);
-            using(var response=await http.SendAsync(request)){
+            using(var response=await SendLocalRequest(http,request)){
                 if(!response.IsSuccessStatusCode)throw new Exception("图片无法读取，请关闭窗口后重试。");
                 return await response.Content.ReadAsByteArrayAsync();
             }

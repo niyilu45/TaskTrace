@@ -355,7 +355,7 @@ internal sealed partial class FloatingWindow {
             try {
                 byte[] bytes=await DownloadImage(retained);
                 output.Append("<img src=\"data:image/png;base64,").Append(Convert.ToBase64String(bytes)).Append("\" data-tasktrace-src=\"").Append(WebUtility.HtmlEncode(retained.Replace("/api/v2/","/api/v1/"))).Append("\" alt=\"").Append(description?"任务描述图片":"进展图片").Append("\">");
-            } catch { output.Append("<p>图片加载失败，请保存其他内容后重试。</p>"); }
+            } catch(OperationCanceledException){throw;} catch { output.Append("<p>图片加载失败，请保存其他内容后重试。</p>"); }
         }
         output.Append(safe.Substring(cursor));return await PrepareInlineEditorFiles(output.ToString());
     }

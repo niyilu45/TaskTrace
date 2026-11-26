@@ -132,7 +132,7 @@ internal sealed partial class FloatingWindow : Form {
         AutoScaleDimensions = new SizeF(96F, 96F); AutoScaleMode = AutoScaleMode.Dpi;
         var session = ReadObject(File.ReadAllText(Path.Combine(data, "local-session.json")));
         token = (string)session["token"]; refresh = (string)session["refresh_token"];
-        http.Timeout = TimeSpan.FromSeconds(10);
+        http.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
         Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         tray.Icon = Icon; tray.Visible = true;
         ShowInTaskbar = false; Text = "TaskTrace"; Font = AdaptiveUiFont();
@@ -397,14 +397,16 @@ internal sealed partial class FloatingWindow : Form {
     }
     async Task WriteShared(long id, SharedList list) {
         var gate=RetainOutstandingWriteLock(id);
-        await gate.Semaphore.WaitAsync();
+        bool acquired=false;
         try {
+        acquired=await gate.Semaphore.WaitAsync(TimeSpan.FromSeconds(15),SaveCancellation);
+        if(!acquired)throw new TimeoutException("这项任务的遗留事项正在其他窗口保存，请稍后重试。");
         var latest=ReadShared(await ReadHistory(id));
         list.Items=MergeOutstandingEdits(list.OriginalItems??new List<PendingItem>(),list.Items,latest.Items);list.CommentId=latest.CommentId;
         string html = "<h3 "+SharedTypeMarker+">"+SharedHeading+"</h3><ul>"+String.Join("",list.Items.Select(item => "<li data-id=\""+WebUtility.HtmlEncode(item.Id)+"\" data-done=\""+(item.Done?"true":"false")+"\" data-priority=\""+Math.Max(0,Math.Min(9,item.Priority))+"\" data-progress=\""+ManualCompletion(item.Completion)+"\""+(String.IsNullOrWhiteSpace(item.CompletedAt)?"":" data-completed-at=\""+WebUtility.HtmlEncode(item.CompletedAt)+"\"")+(String.IsNullOrWhiteSpace(item.ReminderAt)?"":" data-reminder=\""+WebUtility.HtmlEncode(item.ReminderAt)+"\"")+(String.IsNullOrWhiteSpace(item.RepeatRule)?"":" data-reminder-repeat=\""+WebUtility.HtmlEncode(item.RepeatRule)+"\"")+">"+item.Html+(String.IsNullOrWhiteSpace(item.NoteHtml)?"":"<aside data-tasktrace-outstanding-note=\"true\" hidden>"+item.NoteHtml+"</aside>")+"</li>"))+"</ul>";
         var saved = await Api(list.CommentId==0 ? "POST" : "PUT", "/tasks/"+id+"/comments"+(list.CommentId==0 ? "" : "/"+list.CommentId), new {comment=html});
         list.CommentId = Convert.ToInt64(saved["id"]);list.OriginalItems=list.Items.Select(item=>item.Copy()).ToList();
-        }finally{ReleaseOutstandingWriteLock(id,gate);}
+        }finally{ReleaseOutstandingWriteLock(id,gate,acquired);}
     }
     TableLayoutPanel TextFieldRow(TextBox input, string description, Control action) {
         var row = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -511,13 +513,16 @@ internal sealed partial class FloatingWindow : Form {
             bool recordUndo = undoRecording && method != "GET" && path != "/tasktrace/undo" && !teamSync && !path.StartsWith("/tasktrace/exports/", StringComparison.Ordinal);
             if(recordUndo) { request.Headers.Add("X-TaskTrace-Undo", "1"); if(undoGroup != null) request.Headers.Add("X-TaskTrace-Undo-Group", undoGroup); }
             if(body != null) request.Content = new StringContent(json.Serialize(body), Encoding.UTF8, method == "PATCH" ? "application/merge-patch+json" : "application/json");
-            using(var response = await (path == "/tasktrace/exports/markdown" ? markdownExportHttp : teamSync ? teamSyncHttp : http).SendAsync(request)) {
+            using(var response = await SendLocalRequest(path == "/tasktrace/exports/markdown" ? markdownExportHttp : teamSync ? teamSyncHttp : http,request,path == "/tasktrace/exports/markdown" ? (TimeSpan?)TimeSpan.FromMinutes(10) : teamSync ? TimeSpan.FromSeconds(90) : (TimeSpan?)null)) {
                 if(response.StatusCode == HttpStatusCode.Unauthorized && retry) {
-                    await refreshGate.WaitAsync();
+                    await refreshGate.WaitAsync(SaveCancellation);
                     try {
-                        if(token == requestToken) using(var renewed = await http.PostAsync(url + "/api/v2/oauth/token", new StringContent(json.Serialize(new { grant_type = "refresh_token", refresh_token = refresh }), Encoding.UTF8, "application/json"))) {
+                        if(token == requestToken) using(var renewRequest=new HttpRequestMessage(HttpMethod.Post,url+"/api/v2/oauth/token")) {
+                            renewRequest.Content=new StringContent(json.Serialize(new { grant_type = "refresh_token", refresh_token = refresh }), Encoding.UTF8, "application/json");
+                            using(var renewed=await SendLocalRequest(http,renewRequest)) {
                             if(!renewed.IsSuccessStatusCode) throw new Exception("会话已失效，请退出并重新启动悬浮窗。");
                             var pair = ReadObject(await renewed.Content.ReadAsStringAsync()); token = (string)pair["access_token"]; refresh = (string)pair["refresh_token"];
+                            }
                         }
                     } finally { refreshGate.Release(); }
                     return await Api(method, path, body, false);
@@ -625,6 +630,7 @@ internal sealed partial class FloatingWindow : Form {
         var resultNote = await Api(commentId == 0 ? "POST" : "PUT", "/tasks/" + id + "/comments" + (commentId == 0 ? "" : "/" + commentId), new { comment = note });
         return Convert.ToInt64(resultNote["id"]);
     }
+    sealed class PendingProgressWrite {public string Signature,Body,References,TeamId;}
     sealed class ProgressDraft { public string Text, Html; public List<PastedImage> Pictures; public List<ProgressReference> References; }
     async void ShowProgress() {
         if(busy || closing) return;
@@ -689,7 +695,7 @@ internal sealed partial class FloatingWindow : Form {
                 progress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){inlineImageDoubleClicks++;try{await ShowProgressEditorImage(image,dialog,"每日进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 collaboratorProgress.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"协作成员进展图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
                 descriptionEditor.ImageDoubleClicked+=async delegate(object sender,ProgressEditorImageEventArgs image){try{await ShowProgressEditorImage(image,dialog,"任务描述图片");}catch(Exception error){feedback.Text="图片预览失败："+error.Message;}};
-                var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
+                var pendingWrites=new Dictionary<string,PendingProgressWrite>();var drafts=new Dictionary<string,ProgressDraft>();var pictures=new List<PastedImage>();var references=new List<ProgressReference>();
                 string selectedDay="",originalBody="",originalText="",lastSaved="",lastCached="",originalDescription=task.ContainsKey("description")?Convert.ToString(task["description"]):"",originalDescriptionEditorHtml="",originalProgressEditorHtml="",originalReferenceSnapshot="";long commentId=0;string currentTeamId="";var mergedIds=new List<long>();var mergedTeamIds=new List<string>();int originalDescriptionVersion=0,originalProgressVersion=0;bool collaborativeProgress=false,needsProgressMerge=false,submitting=false,referenceExpanded=false,taskDeleted=false,loadingDay=false,switchingDay=false,descriptionExpanded=false,descriptionSaving=false,progressDraftRestored=false,updateDiscarded=false;
                 taskName.CanSave=delegate{return !submitting && !descriptionSaving;};
                 descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;originalDescriptionVersion=descriptionEditor.ChangeVersion;
@@ -704,11 +710,15 @@ internal sealed partial class FloatingWindow : Form {
                     if(descriptionSaving || taskName.Saving)return false;if(descriptionEditor.IsPastePending){feedback.Text="正在读取粘贴的图文，请完成后再保存。";return false;}if(!descriptionDirty()){feedback.Text="任务描述没有需要保存的修改。";return true;}
 
                     descriptionSaving=true;saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=false;descriptionEditor.SetReadOnly(true);
+                    bool descriptionPersisted=false;
                     try {
+                        using(BeginFloatingSave()) {
                         var latest=await Api("GET","/tasks/"+id,null);string latestDescription=latest.ContainsKey("description")?Convert.ToString(latest["description"]):"";if(latestDescription!=originalDescription)throw new Exception("任务描述已在其他窗口修改，请重新打开后合并。");
                         string savedHtml=await PersistTaskDescriptionEditorImages(id,descriptionEditor.Html);var saved=await Api("PATCH","/tasks/"+id,new{description=savedHtml});originalDescription=saved.ContainsKey("description")?Convert.ToString(saved["description"]):savedHtml;
+                        descriptionPersisted=true;originalDescriptionEditorHtml=descriptionEditor.Html;originalDescriptionVersion=descriptionEditor.ChangeVersion;
                         descriptionEditor.Html=await PrepareTaskDescriptionEditorHtml(id,originalDescription);originalDescriptionEditorHtml=descriptionEditor.Html;originalDescriptionVersion=descriptionEditor.ChangeVersion;feedback.Text="任务描述已保存。";return true;
-                    } catch(Exception error){feedback.Text="任务描述未保存："+error.Message;return false;}
+                        }
+                    } catch(Exception error){feedback.Text=descriptionPersisted?"任务描述已保存，显示刷新未完成。"+FloatingRefreshFailure(error):"任务描述未保存："+FloatingSaveFailure(error);return descriptionPersisted;}
                     finally{descriptionSaving=false;if(!dialog.IsDisposed){saveDescription.Enabled=cancelDescription.Enabled=descriptionToggle.Enabled=true;descriptionEditor.SetReadOnly(false);}}
                 };
                 descriptionToggle.Click+=delegate{if(!descriptionSaving)setDescriptionExpanded(!descriptionExpanded);};
@@ -796,25 +806,43 @@ internal sealed partial class FloatingWindow : Form {
                     if(!progressDirty() && !needsProgressMerge){if(finish)feedback.Text="没有需要保存的修改。";return true;}
 
                     submitting=true;day.Enabled=false;save.Enabled=false;deleteTask.Enabled=false;sharedButton.Enabled=false;historyButton.Enabled=false;referenceGroup.Enabled=false;progress.SetReadOnly(true);feedback.Text="正在保存当天进展…";
+                    bool persisted=false;
                     try {
+                        using(BeginFloatingSave())
                         using(BeginUndoGroup()) {
                         var sharedBeforeSave=ReadShared(await ReadHistory(id));if(sharedBeforeSave.CommentId==0)await WriteShared(id,sharedBeforeSave);
-                        string body=await PersistProgressEditorImages(id,progress.Html);
+                        PendingProgressWrite pending;pendingWrites.TryGetValue(selectedDay,out pending);
+                        string signature=snapshot();
+                        if(pending!=null && !collaborativeProgress && commentId==0) {
+                            var candidates=await ReadHistory(id);
+                            foreach(var candidate in candidates.Where(note=>DayOf(note)==selectedDay).OrderByDescending(note=>Convert.ToInt64(note["id"]))) {
+                                object authorValue,username;var author=candidate.TryGetValue("author",out authorValue)?authorValue as Dictionary<string,object>:null;
+                                if(author==null || !author.TryGetValue("username",out username) || !String.Equals(TeamIdentityName(Convert.ToString(username)),TeamIdentityName(Environment.UserName),StringComparison.OrdinalIgnoreCase))continue;
+                                var parts=SplitProgressReferences(Convert.ToString(candidate["comment"]),id);
+                                if(SameProgressEditorContent(ProgressBody(Convert.ToString(candidate["comment"]),id),pending.Body) && SerializeProgressReferences(parts.References)==pending.References){commentId=Convert.ToInt64(candidate["id"]);break;}
+                            }
+                        }
+                        bool samePending=pending!=null && pending.Signature==signature;
+                        string body=samePending?pending.Body:await PersistProgressEditorImages(id,progress.Html);
+                        string newTeamId=samePending?pending.TeamId:Guid.NewGuid().ToString("N");
+                        if(collaborativeProgress && pending!=null && !samePending)mergedTeamIds=mergedTeamIds.Concat(new[]{pending.TeamId}).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        pendingWrites[selectedDay]=new PendingProgressWrite{Signature=signature,Body=body,References=SerializeProgressReferences(references),TeamId=newTeamId};
                         if(collaborativeProgress) {
                             var absorbedIds=mergedIds.Concat(commentId>0?new[]{commentId}:new long[0]).Distinct().ToList();
                             var absorbedTeamIds=mergedTeamIds.Concat(String.IsNullOrWhiteSpace(currentTeamId)?new string[0]:new[]{currentTeamId}).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                             string numericAttribute=absorbedIds.Count==0?"":" data-tasktrace-merged=\""+String.Join(",",absorbedIds)+"\"";
                             string teamAttribute=absorbedTeamIds.Count==0?"":" data-tasktrace-team-merged=\""+String.Join(",",absorbedTeamIds)+"\"";
-                            string newTeamId=Guid.NewGuid().ToString("N");
                             string comment="<h3"+numericAttribute+teamAttribute+">每日进展 · "+day.Value.ToString("yyyy-MM-dd")+"</h3>"+body+SerializeProgressReferences(references)+FloatingTeamMarkerHtml(newTeamId,Environment.UserName);
                             var saved=await Api("POST","/tasks/"+id+"/comments",new {comment=comment});
                             commentId=Convert.ToInt64(saved["id"]);mergedIds=absorbedIds;mergedTeamIds=absorbedTeamIds;currentTeamId=newTeamId;
                         } else commentId=await SaveProgress(id,day.Value,Plain(body),"",null,commentId,body,mergedIds,references);
-                        needsProgressMerge=false;originalBody=body;originalText=Plain(body);progress.Html=await PrepareProgressEditorHtml(id,body);originalProgressEditorHtml=progress.Html;originalProgressVersion=progress.ChangeVersion;progressDraftRestored=false;originalReferenceSnapshot=referenceSnapshot();lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
+                        persisted=true;pendingWrites.Remove(selectedDay);needsProgressMerge=false;originalBody=body;originalText=Plain(body);
+                        originalProgressEditorHtml=progress.Html;originalProgressVersion=progress.ChangeVersion;progressDraftRestored=false;originalReferenceSnapshot=referenceSnapshot();lastSaved=snapshot();drafts.Remove(selectedDay);DeleteDraftCache("progress",id,selectedDay);lastCached="";
+                        progress.Html=await PrepareProgressEditorHtml(id,body);originalProgressEditorHtml=progress.Html;originalProgressVersion=progress.ChangeVersion;
                         history=await ReadHistory(id);day.SetMarkedDates(ProgressDates(history));refreshReferences();feedback.Text="当天进展已正式保存，可以继续编辑。";
                         }
                         return true;
-                    } catch(Exception error){feedback.Text="保存失败，内容已保留："+error.Message;return false;}
+                    } catch(Exception error){feedback.Text=persisted?"当天进展已保存，显示刷新未完成；可稍后重新打开查看。"+FloatingRefreshFailure(error):"保存未完成，内容已保留："+FloatingSaveFailure(error);return persisted;}
                     finally{submitting=false;day.Enabled=true;save.Enabled=true;deleteTask.Enabled=true;sharedButton.Enabled=true;historyButton.Enabled=true;referenceGroup.Enabled=true;progress.SetReadOnly(false);}
                 };
                 save.Click+=async delegate {await write(true);};
@@ -823,7 +851,7 @@ internal sealed partial class FloatingWindow : Form {
                     updateDiscarded=true;
                     taskName.Discard();
                     autoTimer.Stop();
-                    drafts.Clear();
+                    drafts.Clear();pendingWrites.Clear();
                     lastCached="";
                     DeleteDraftCaches("progress",id);
                     originalProgressEditorHtml=progress.Html;
@@ -1470,7 +1498,7 @@ internal sealed partial class FloatingWindow : Form {
             var browserPair = ReadObject(browserSession);
             using(var request = new HttpRequestMessage(HttpMethod.Get, url + "/api/v2/projects")) {
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", (string)browserPair["token"]);
-                using(var response = await http.SendAsync(request)) if(!response.IsSuccessStatusCode) throw new Exception("Browser session failed");
+                using(var response = await SendLocalRequest(http,request)) if(!response.IsSuccessStatusCode) throw new Exception("Browser session failed");
             }
             await TestInteractions();
             await TestPriorityFilter();
