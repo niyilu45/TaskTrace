@@ -28,7 +28,7 @@ internal sealed class FloatingQuickMemoEditor : Form {
         savedVersion=Editor.ChangeVersion;
         var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(12)};
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var hint=new Label{AutoSize=true,Dock=DockStyle.Fill,Padding=new Padding(0,0,0,10),Text="快捷备忘内容 · 文字和图片自动保存在本机\r\nCtrl+V 粘贴图文，Ctrl+Z 撤销；双击图片查看大图。"};
+        var hint=new Label{AutoSize=true,Dock=DockStyle.Fill,Padding=new Padding(0,0,0,10),Text="快捷备忘内容 · 文字和图片自动保存在本机\r\nTab 缩进，Shift+Tab 减少缩进；Ctrl+V 粘贴图文，Ctrl+Z 撤销，双击图片查看大图。"};
         var footer=new TableLayoutPanel{Dock=DockStyle.Fill,AutoSize=true,ColumnCount=2,RowCount=1,Padding=new Padding(0,10,0,0)};
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         Feedback.Dock=DockStyle.Fill;Feedback.Anchor=AnchorStyles.Left|AnchorStyles.Right;

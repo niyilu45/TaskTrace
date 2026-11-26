@@ -86,6 +86,20 @@ internal sealed class ProgressEditorBrowser : WebBrowser {
     protected override bool ProcessCmdKey(ref Message message,Keys keyData) {
         return (ClipboardShortcut!=null && ClipboardShortcut(keyData)) || base.ProcessCmdKey(ref message,keyData);
     }
+    static bool IsEditorTab(Keys keyData){return keyData==Keys.Tab || keyData==(Keys.Shift|Keys.Tab);}
+    public override bool PreProcessMessage(ref Message message) {
+        // Consume Tab before the ActiveX accelerator/focus hand-off. It must
+        // never loop back through the enclosing UserControl's tab navigation.
+        if(message.Msg==0x100) {
+            var keys=(Keys)message.WParam.ToInt32()|ModifierKeys;
+            if(IsEditorTab(keys) && ClipboardShortcut!=null && ClipboardShortcut(keys))return true;
+        }
+        return base.PreProcessMessage(ref message);
+    }
+    protected override bool ProcessDialogKey(Keys keyData) {
+        if(IsEditorTab(keyData) && ClipboardShortcut!=null && ClipboardShortcut(keyData))return true;
+        return base.ProcessDialogKey(keyData);
+    }
     internal bool ShortcutForTest(Keys keyData){var message=new Message();return ProcessCmdKey(ref message,keyData);}
 }
 
@@ -151,6 +165,18 @@ internal sealed class ProgressHtmlEditor : UserControl {
     }
 
     bool HandleClipboardShortcut(Keys keyData) {
+        if(keyData==Keys.Tab || keyData==(Keys.Shift|Keys.Tab)) {
+            if(IsDisposed || Disposing || !ready || browser.Document==null)return true;
+            try {
+                if(readOnly) {
+                    var form=FindForm();if(form!=null)form.SelectNextControl(browser,keyData==Keys.Tab,true,true,true);
+                } else {
+                    browser.Document.InvokeScript("indentTaskTrace",new object[]{keyData!=(Keys.Tab)});
+                    NotifyChanged();
+                }
+            } catch(Exception error) {var handler=ClipboardFailed;if(handler!=null)handler(this,new ProgressClipboardErrorEventArgs("缩进未能完成，原有内容已保留。"+error.Message));}
+            return true;
+        }
         if(!ready || browser.Document==null)return false;
         if(keyData==(Keys.Control|Keys.A) || keyData==(Keys.Alt|Keys.A)){browser.Document.InvokeScript("selectAllTaskTrace");return true;}
         if(keyData==(Keys.Control|Keys.C) || keyData==(Keys.Control|Keys.X))return !Convert.ToBoolean(browser.Document.InvokeScript("copyTaskTrace",new object[]{null,keyData==(Keys.Control|Keys.X)}));

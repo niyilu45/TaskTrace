@@ -67,6 +67,69 @@ internal sealed partial class FloatingWindow {
         }
     }
 
+    async Task MemoTabCase() {
+        var store=new FloatingQuickMemoStore(MemoDirectory(data,"tab-input"));
+        using(var memo=NewMemo(store,new ProgressHtmlEditor(()=>""))) {
+            memo.Show();await MemoReady(memo);
+            memo.Editor.SimulateUserHtmlForTest("<p>Tab前Tab后</p>");
+            var browser=(ProgressEditorBrowser)memo.Editor.Controls[0];
+            MemoEval(browser,"(function(){var e=document.getElementById('progress-editor'),r=document.createRange(),s=window.getSelection();e.focus();r.setStart(e.firstChild.firstChild,4);r.collapse(true);s.removeAllRanges();s.addRange(r);rememberTaskTraceRange();})()");
+            var message=Message.Create(browser.Handle,0x100,new IntPtr(9),IntPtr.Zero);
+            browser.PreProcessMessage(ref message);
+            await Task.Delay(60);
+            string text=browser.Document.GetElementById("progress-editor").InnerText??"";
+            MemoAssert(text.Replace('\u00a0',' ')=="Tab前    Tab后","TAB_NOT_HANDLED: native Tab did not insert indentation at the caret: "+text);
+            MemoAssert(Convert.ToString(MemoEval(browser,"document.activeElement.id"))=="progress-editor","Tab moved focus out of the note editor");
+            browser.ShortcutForTest(Keys.Control|Keys.Z);
+            MemoAssert((browser.Document.GetElementById("progress-editor").InnerText??"")=="Tab前Tab后","Ctrl+Z did not undo Tab as one edit");
+            browser.ShortcutForTest(Keys.Control|Keys.Y);
+            MemoAssert((browser.Document.GetElementById("progress-editor").InnerText??"").Replace('\u00a0',' ')=="Tab前    Tab后","Redo did not restore the indent");
+            MemoAssert(browser.ShortcutForTest(Keys.Shift|Keys.Tab),"Shift+Tab fell back into native focus routing");
+            MemoAssert((browser.Document.GetElementById("progress-editor").InnerText??"")=="Tab前Tab后","Shift+Tab did not remove one indent");
+            browser.ShortcutForTest(Keys.Control|Keys.Z);
+            MemoAssert((browser.Document.GetElementById("progress-editor").InnerText??"").Replace('\u00a0',' ')=="Tab前    Tab后","Outdent could not be undone");
+            MemoEval(browser,"insertTaskTraceHtml('继续输入',taskTraceRange()||taskTraceSavedRange)");
+            MemoAssert((browser.Document.GetElementById("progress-editor").InnerText??"").Replace('\u00a0',' ')=="Tab前    继续输入Tab后","Typing after Tab jumped away from the caret");
+
+            memo.Editor.Html="<p>图文一<img src='"+MemoImage(Color.LightBlue)+"'></p><p>图文二<img src='"+MemoImage(Color.LightGreen)+"'></p>";
+            string selectedText=Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent"));
+            MemoEval(browser,"selectAllTaskTrace()");
+            MemoAssert(browser.ShortcutForTest(Keys.Tab),"Selected-block Tab was not handled");
+            MemoAssert(memo.Editor.ImageCount==2 && Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent"))==selectedText,"Indenting a selection replaced its text or images");
+            browser.ShortcutForTest(Keys.Control|Keys.Z);
+            MemoAssert(memo.Editor.ImageCount==2 && !memo.Editor.Html.Contains("BLOCKQUOTE") && !memo.Editor.Html.Contains("blockquote"),"Block indentation could not be undone without losing images");
+
+            memo.Editor.Html="";MemoCaretEnd(memo.Editor);
+            string empty=memo.Editor.Html;
+            browser.ShortcutForTest(Keys.Shift|Keys.Tab);
+            MemoAssert(memo.Editor.Html==empty,"Shift+Tab changed an unindented empty memo");
+            for(int index=0;index<100;index++){message=Message.Create(browser.Handle,0x100,new IntPtr(9),IntPtr.Zero);MemoAssert(browser.PreProcessMessage(ref message),"Repeated native Tab was not consumed");}
+            MemoAssert(Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent")).Replace('\u00a0',' ')==new string(' ',400),"Repeated Tab lost indents or routed out of the editor");
+
+            memo.Editor.Html="<p>DOM键盘</p>";MemoCaretEnd(memo.Editor);
+            MemoEval(browser,"(function(){var e=document.getElementById('progress-editor'),event=document.createEvent('Event');event.initEvent('keydown',true,true);Object.defineProperty(event,'keyCode',{value:9});e.focus();e.dispatchEvent(event);})()");
+            MemoAssert(Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent")).Replace('\u00a0',' ')=="DOM键盘    ","MSHTML's own keydown path did not indent");
+            var dialogKey=typeof(ProgressEditorBrowser).GetMethod("ProcessDialogKey",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic);
+            MemoAssert((bool)dialogKey.Invoke(browser,new object[]{Keys.Tab}),"The dialog-key Tab path was not handled");
+            MemoAssert(Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent")).Replace('\u00a0',' ')=="DOM键盘        ","Dialog-key Tab inserted the wrong number of spaces");
+
+            memo.Editor.Html="<p>保存前<img src='"+MemoImage(Color.PeachPuff)+"'>保存后</p>";MemoCaretEnd(memo.Editor);
+            browser.ShortcutForTest(Keys.Tab);
+            await MemoUntil(()=>File.Exists(store.FilePath)&&!memo.IsDirty,"Indented memo did not autosave");
+            MemoAssert(await memo.SaveAsync(),"Tab editor could not be saved");
+            string savedHtml=memo.Editor.Html;memo.Editor.SetReadOnly(true);browser.ShortcutForTest(Keys.Tab);
+            MemoAssert(memo.Editor.Html==savedHtml,"Tab modified a read-only editor");
+            memo.Editor.SetReadOnly(false);await MemoClose(memo);
+        }
+        using(var reopened=NewMemo(store,new ProgressHtmlEditor(()=>""))) {
+            reopened.Show();await MemoReady(reopened);
+            var browser=(WebBrowser)reopened.Editor.Controls[0];
+            MemoAssert(reopened.Editor.ImageCount==1 && Convert.ToString(MemoEval(browser,"document.getElementById('progress-editor').textContent")).Replace('\u00a0',' ').EndsWith("保存后    "),"Saved indentation or image did not survive reopening");
+            await MemoClose(reopened);
+        }
+        Console.WriteLine("PASS native/dialog/DOM Tab paths, caret and focus, Shift+Tab, undo/redo, selected text/images, 100 repeated Tabs, read-only safety and persistent reopen.");
+    }
+
     async Task MemoPersistenceCase() {
         string directory=MemoDirectory(data,"persistence"),first=MemoImage(Color.LightBlue),second=MemoImage(Color.LightGreen),payload="<p>图片前的文字<br>保留空行和缩进</p><p><img src='"+first+"'>图片之间<img src='"+second+"'>图片之后</p>";
         var store=new FloatingQuickMemoStore(directory);
@@ -184,7 +247,7 @@ internal sealed partial class FloatingWindow {
 
     async Task MemoTraySingletonCase() {
         using(var menu=new ContextMenuStrip()) {
-            InitializeQuickMemo(menu);InitializeUpdates();updateTimer.Start();MemoAssert(menu.Items.Cast<ToolStripItem>().Count(item=>item.Text=="快捷备忘")==1,"Tray quick memo entry is missing or duplicated");
+            InitializeQuickMemo(menu);InitializeUpdates(menu);updateTimer.Start();MemoAssert(menu.Items.Cast<ToolStripItem>().Count(item=>item.Text=="快捷备忘")==1,"Tray quick memo entry is missing or duplicated");
             var opened=OpenQuickMemo();await MemoUntil(()=>quickMemo!=null,"Tray did not open memo");var first=quickMemo;first.Opacity=0;first.Location=new Point(-20000,-20000);
             await MemoReady(first);await OpenQuickMemo();MemoAssert(quickMemo==first && !opened.IsCompleted,"Repeated tray open created another memo or ended the existing window");
             first.WindowState=FormWindowState.Minimized;await OpenQuickMemo();
@@ -207,7 +270,7 @@ internal sealed partial class FloatingWindow {
     }
 
     internal static async Task TestQuickMemo(FloatingWindow window) {
-        await window.MemoPersistenceCase();await window.MemoSaveRaceCase();await window.MemoCloseFlushCase();await window.MemoLockedStoreCase();await window.MemoPendingPasteCase();
+        await window.MemoTabCase();await window.MemoPersistenceCase();await window.MemoSaveRaceCase();await window.MemoCloseFlushCase();await window.MemoLockedStoreCase();await window.MemoPendingPasteCase();
         window.MemoCorruptReadCase();await window.MemoClipboardConversionCase();await window.MemoTraySingletonCase();
         Console.WriteLine("PASS isolation: only dedicated test data, fake clipboard/downloads, native controls and local screenshots; no actual application startup or install.");
     }

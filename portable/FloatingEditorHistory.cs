@@ -82,8 +82,30 @@ var taskTraceHistoryInsert=insertTaskTraceHtml;
 insertTaskTraceHtml=function(html,range){var before=captureTaskTraceHistory(range),changed=taskTraceHistoryInsert(html,range);if(changed)commitTaskTraceHistory(before,'paste');return changed;};
 var taskTraceHistoryCopy=copyTaskTrace;
 copyTaskTrace=function(e,cut){var before=cut?captureTaskTraceHistory():null,result=taskTraceHistoryCopy(e,cut);if(cut)commitTaskTraceHistory(before,'cut');return result;};
+function indentTaskTrace(reverse){
+ var editor=document.getElementById('progress-editor');if(editor.getAttribute('contenteditable')==='false')return false;
+ var range=taskTraceRange()||taskTraceSavedRange;if(!range||!taskTraceInside(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}
+ editor.focus();
+ // A selection is indented as a block; never replace selected text or images.
+ if(!range.collapsed){
+  var blockBefore=captureTaskTraceHistory(range);restoreTaskTraceRange(range);document.execCommand(reverse?'outdent':'indent',false,null);rememberTaskTraceRange();commitTaskTraceHistory(blockBefore,'indent');window.external.NotifyPaste();return true;
+ }
+ if(!reverse)return insertTaskTraceHtml('&nbsp;&nbsp;&nbsp;&nbsp;',range);
+ var before=captureTaskTraceHistory(range),node=range.startContainer,offset=range.startOffset;
+ if(node.nodeType===1&&offset>0){node=node.childNodes[offset-1];offset=node.nodeType===3?node.nodeValue.length:0;}
+ var spaces=node.nodeType===3?node.nodeValue.substring(0,offset).match(/[\u00a0 ]{1,4}$/):null;
+ if(spaces){range.setStart(node,offset-spaces[0].length);range.setEnd(node,offset);range.deleteContents();range.collapse(true);restoreTaskTraceRange(range);taskTraceSavedRange=range.cloneRange();}
+ else {
+  var ancestor=range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentNode,indented=false;
+  while(ancestor&&ancestor!==editor){if(ancestor.tagName==='BLOCKQUOTE'||ancestor.tagName==='LI'||(ancestor.style&&parseFloat(ancestor.style.marginLeft)>0)){indented=true;break;}ancestor=ancestor.parentNode;}
+  if(!indented)return false;
+  restoreTaskTraceRange(range);document.execCommand('outdent',false,null);rememberTaskTraceRange();
+ }
+ commitTaskTraceHistory(before,'indent');window.external.NotifyPaste();return true;
+}
 document.addEventListener('keydown',function(e){
  var code=e.keyCode||e.which;if(!taskTraceInside(e.target||e.srcElement))return;
+ if(code===9&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&document.getElementById('progress-editor').getAttribute('contenteditable')!=='false'){if(e.preventDefault)e.preventDefault();e.returnValue=false;indentTaskTrace(!!e.shiftKey);return;}
  if(e.ctrlKey&&!e.altKey&&(code===90||code===89)){if(code===89||e.shiftKey)redoTaskTrace();else undoTaskTrace();if(e.preventDefault)e.preventDefault();e.returnValue=false;return;}
  if(document.getElementById('progress-editor').getAttribute('contenteditable')==='false'||e.altKey||e.metaKey)return;
  if(e.ctrlKey&&(code===65||code===67||code===86||code===88))return;
