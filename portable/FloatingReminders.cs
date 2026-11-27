@@ -252,7 +252,7 @@ internal sealed partial class FloatingWindow {
             reminderState.SnoozedUntil.Remove(target.Key);
             SaveReminderState();
             dialog.Close();
-            if(!closing && !IsDisposed)BeginInvoke(new Action(CleanupDismissedReminderTargets));
+            if(!closing && !IsDisposed)FloatingUi.Post(this,new Action(CleanupDismissedReminderTargets));
         };
         delay.Click+=delegate {
             var next=nextReminder();
@@ -266,7 +266,7 @@ internal sealed partial class FloatingWindow {
             previewTimer.Dispose();
             reminderPopup=null;
             activeReminderKey=null;
-            if(!closing && !IsDisposed)BeginInvoke(new Action(CheckDueReminders));
+            if(!closing && !IsDisposed)FloatingUi.Post(this,new Action(CheckDueReminders));
         };
         updatePreview();
         dialog.Show();

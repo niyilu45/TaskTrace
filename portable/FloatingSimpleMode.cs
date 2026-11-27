@@ -189,7 +189,7 @@ internal sealed partial class FloatingWindow {
     void QueueSimpleRestoreLayout() {
         if(!simpleMode || !simpleRestoreNeeded || simpleRestoreLayoutQueued || closing || IsDisposed || !IsHandleCreated || !Visible || WindowState==FormWindowState.Minimized)return;
         simpleRestoreLayoutQueued=true;
-        BeginInvoke(new Action(delegate {
+        FloatingUi.Post(this,new Action(delegate {
             simpleRestoreLayoutQueued=false;
             if(!simpleMode || closing || IsDisposed || !Visible || WindowState==FormWindowState.Minimized)return;
             // Windows can maximize a borderless caption-dragged window independently

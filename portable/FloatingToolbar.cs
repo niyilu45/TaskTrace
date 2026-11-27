@@ -42,7 +42,7 @@ internal sealed partial class FloatingWindow {
     void QueueCaptionBackgroundRefresh() {
         if(!captionBackgroundDirty || captionSettingsPaintQueued || !IsHandleCreated || !Visible || simpleMode || closing || Disposing || IsDisposed)return;
         captionSettingsPaintQueued=true;
-        BeginInvoke(new Action(delegate {
+        FloatingUi.Post(this,new Action(delegate {
             captionSettingsPaintQueued=false;
             if(!IsHandleCreated || !Visible || simpleMode || simpleLayout || RecreatingHandle || closing || Disposing || IsDisposed)return;
             var bounds=CaptionSettingsBounds();if(bounds.IsEmpty)return;

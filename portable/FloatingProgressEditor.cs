@@ -63,7 +63,19 @@ public sealed class ProgressHtmlEditorBridge {
     internal Func<Task<string>> ReadClipboardHtmlAsync;
     internal Action<int,string> PasteCompleted;
     public bool UsesAsyncClipboard(){return ReadClipboardHtmlAsync!=null;}
-    public async void RequestPasteHtml(int id){string html="";try{html=await ReadClipboardHtmlAsync();}catch(Exception error){if(ClipboardError!=null)ClipboardError(error.Message);}finally{if(PasteCompleted!=null)PasteCompleted(id,html);}}
+    bool disconnected;
+    internal void Disconnect(){disconnected=true;Pasted=null;ClipboardError=null;PasteCompleted=null;ImageDoubleClicked=null;ReadClipboardHtml=null;ReadClipboardHtmlAsync=null;WriteClipboardHtml=null;}
+    public async void RequestPasteHtml(int id){await CompletePasteAsync(id);}
+    internal async Task CompletePasteAsync(int id) {
+        if(disconnected)return;
+        string html="";
+        try {var read=ReadClipboardHtmlAsync;if(read!=null)html=await read();}
+        catch(Exception error){if(!disconnected)ReportClipboardError(error.Message);}
+        if(disconnected)return;
+        try {var complete=PasteCompleted;if(complete!=null)complete(id,html);}
+        catch(Exception error){ReportClipboardError("粘贴未完成，原有内容已保留："+error.Message);FloatingRuntimeErrors.Report(error,"图片粘贴回调");}
+    }
+    void ReportClipboardError(string message){try{var report=ClipboardError;if(report!=null)report(message);}catch(Exception error){FloatingRuntimeErrors.Report(error,"剪贴板错误提示");}}
     public string PasteHtml(){try{return ReadClipboardHtml();}catch(Exception error){if(ClipboardError!=null)ClipboardError(error.Message);return "";}}
     internal Func<string,string,bool> WriteClipboardHtml;
     public bool CopyHtml(string html,string text){try{if(WriteClipboardHtml!=null && WriteClipboardHtml(html,text))return true;if(ClipboardError!=null)ClipboardError("复制失败，剪贴板可能被其他程序占用，请重试。");}catch(Exception error){if(ClipboardError!=null)ClipboardError("复制失败："+error.Message);}return false;}
@@ -133,9 +145,9 @@ internal sealed class ProgressHtmlEditor : UserControl {
     internal ProgressHtmlEditor(Func<string> readClipboardHtml):this(readClipboardHtml,FloatingClipboard.Copy) {}
     internal ProgressHtmlEditor(Func<string> readClipboardHtml,Func<string,string,bool> writeClipboardHtml) {
         bridge.ReadClipboardHtml=readClipboardHtml;bridge.WriteClipboardHtml=writeClipboardHtml;
-        bridge.PasteCompleted=delegate(int id,string html){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{if(!IsDisposed && ready && browser.Document!=null)browser.Document.InvokeScript("completeTaskTracePaste",new object[]{id,html});}));};
-        bridge.ClipboardError=delegate(string message){if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(delegate{var handler=ClipboardFailed;if(!IsDisposed && handler!=null)handler(this,new ProgressClipboardErrorEventArgs(message));}));};
-        bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && IsHandleCreated)BeginInvoke(new Action(QueueChanged));};browser.ObjectForScripting=bridge;
+        bridge.PasteCompleted=delegate(int id,string html){if(!IsDisposed && !Disposing && IsHandleCreated)FloatingUi.Post(this,new Action(delegate{if(!IsDisposed && ready && browser.Document!=null)browser.Document.InvokeScript("completeTaskTracePaste",new object[]{id,html});}));};
+        bridge.ClipboardError=delegate(string message){if(!IsDisposed && !Disposing && IsHandleCreated)FloatingUi.Post(this,new Action(delegate{var handler=ClipboardFailed;if(!IsDisposed && handler!=null)handler(this,new ProgressClipboardErrorEventArgs(message));}));};
+        bridge.ImageDoubleClicked=QueueImageDoubleClick;bridge.Pasted=delegate{if(!IsDisposed && !Disposing && IsHandleCreated)FloatingUi.Post(this,new Action(QueueChanged));};browser.ObjectForScripting=bridge;
         browser.ClipboardShortcut=HandleClipboardShortcut;
         Controls.Add(browser);
         clipboardMenu.Items.AddRange(new ToolStripItem[]{copyImageMenu,imageCopySeparator,copyTextMenu,cutTextMenu,pasteTextMenu});
@@ -145,7 +157,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
         cutTextMenu.Click+=delegate{browser.Document.InvokeScript("copyTaskTrace",new object[]{null,true});};
         pasteTextMenu.Click+=delegate{browser.Document.InvokeScript("pasteTaskTrace",new object[]{null});};
         changeTimer.Tick+=delegate{NotifyChanged();};
-        Disposed+=delegate{changeTimer.Dispose();clipboardMenu.Dispose();};
+        Disposed+=delegate{bridge.Disconnect();changeTimer.Dispose();clipboardMenu.Dispose();};
         browser.Navigating+=delegate(object sender,WebBrowserNavigatingEventArgs e){if(ready)e.Cancel=true;};
         browser.DocumentCompleted += delegate {
             if(browser.Document == null || browser.Document.GetElementById("progress-editor") == null) return;
@@ -155,7 +167,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
                 SetContextImage(browser.Document.GetElementFromPoint(e.ClientMousePosition));
                 bool selected=Convert.ToBoolean(browser.Document.InvokeScript("taskTraceHasSelection"));
                 copyTextMenu.Enabled=selected;cutTextMenu.Enabled=selected&&!readOnly;pasteTextMenu.Enabled=!readOnly;
-                var point=System.Windows.Forms.Cursor.Position;BeginInvoke(new Action(delegate{if(!IsDisposed)clipboardMenu.Show(point);}));
+                var point=System.Windows.Forms.Cursor.Position;FloatingUi.Post(this,new Action(delegate{if(!IsDisposed)clipboardMenu.Show(point);}));
             };
             AttachChangeEvents();
             ApplyHtml();
@@ -163,6 +175,8 @@ internal sealed class ProgressHtmlEditor : UserControl {
         };
         browser.DocumentText = "<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><style>html,body{height:100%;margin:0;background:#fff;font-family:Segoe UI,Microsoft YaHei,sans-serif;font-size:14px}#progress-editor{box-sizing:border-box;min-height:100%;padding:10px;outline:0;overflow-wrap:anywhere}#progress-editor img{display:inline-block;max-width:96%;max-height:260px;margin:8px 2px;border:2px solid transparent;cursor:pointer;vertical-align:middle}#progress-editor img:hover,#progress-editor img:focus{border-color:#245ed2}p{margin:.35em 0}</style><script>var taskTraceCaret='\u200b';function taskTraceTestOpenFirstImage(){var images=document.getElementById('progress-editor').getElementsByTagName('img');if(!images.length)return false;var image=images[0];if(image.fireEvent)image.fireEvent('ondblclick');else{var e=document.createEvent('MouseEvents');e.initMouseEvent('dblclick',true,true,window,2,0,0,0,0,false,false,false,false,0,null);image.dispatchEvent(e);}return true;}function ensureTaskTraceImageCarets(){var e=document.getElementById('progress-editor'),images=e.getElementsByTagName('img');for(var i=0;i<images.length;i++){var image=images[i];if(!image.previousSibling||image.previousSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image);if(!image.nextSibling||image.nextSibling.nodeName==='IMG')image.parentNode.insertBefore(document.createTextNode(taskTraceCaret),image.nextSibling);}}function insertTaskTraceImage(src){var range=taskTraceRange()||taskTraceSavedRange;insertTaskTraceHtml('<img src=\"'+src+'\">',range);}</script></head><body><div id=\"progress-editor\" contenteditable=\"true\" ondblclick=\"return taskTraceOpenImage(event)\"></div></body></html>".Replace("</head>","<script>"+FloatingClipboard.Script+FloatingEditorHistory.Script+"</script></head>").Replace("contenteditable=\"true\"", "contenteditable=\"true\" onpaste=\"return pasteTaskTrace(event)\" onmousedown=\"return selectTaskTraceImage(event)\" onmouseup=\"return finishTaskTraceImageSelection(event)\" onkeyup=\"rememberTaskTraceRange()\"");
     }
+
+    protected override void Dispose(bool disposing) {if(disposing){bridge.Disconnect();ready=false;}base.Dispose(disposing);}
 
     bool HandleClipboardShortcut(Keys keyData) {
         if(keyData==Keys.Tab || keyData==(Keys.Shift|Keys.Tab)) {
@@ -196,7 +210,7 @@ internal sealed class ProgressHtmlEditor : UserControl {
 
     void QueueImageDoubleClick(string source,string retainedSource,int view) {
         if(IsDisposed || !IsHandleCreated)return;
-        BeginInvoke(new Action(delegate {
+        FloatingUi.Post(this,new Action(delegate {
             if(IsDisposed)return;imageDoubleClickCount++;var handler=ImageDoubleClicked;
             int version=ChangeVersion;
             var image=new ProgressEditorImageEventArgs(source,retainedSource,delegate(bool finished){if(IsDisposed || !ready || browser.Document==null)return;if(version==changeVersion)browser.Document.InvokeScript("restoreTaskTraceImageView",new object[]{view,finished});else if(finished)browser.Document.InvokeScript("discardTaskTraceImageView",new object[]{view});});
@@ -228,19 +242,21 @@ internal sealed class ProgressHtmlEditor : UserControl {
         var editor = browser.Document.GetElementById("progress-editor");
         if(editor == null) return;
         changing = true;changeTimer.Stop();
-        editor.InnerHtml = pendingHtml ?? "";
-        browser.Document.InvokeScript("eval",new object[]{"taskTraceSavedRange=null;resetTaskTraceImageViews();resetTaskTracePastes();window.getSelection().removeAllRanges();"});
-        browser.Document.InvokeScript("ensureTaskTraceImageCarets");
-        browser.Document.InvokeScript("resetTaskTraceHistory");
-        observedHtml = CleanHtml(editor.InnerHtml);
-        changing = false;
+        try {
+            editor.InnerHtml = pendingHtml ?? "";
+            browser.Document.InvokeScript("eval",new object[]{"taskTraceSavedRange=null;resetTaskTraceImageViews();resetTaskTracePastes();window.getSelection().removeAllRanges();"});
+            browser.Document.InvokeScript("ensureTaskTraceImageCarets");
+            browser.Document.InvokeScript("resetTaskTraceHistory");
+            observedHtml = CleanHtml(editor.InnerHtml);
+        } finally {changing = false;}
     }
 
-    void QueueChanged(){if(IsDisposed || changing || !ready || changeTimer.Enabled)return;changeTimer.Start();}
+    void QueueChanged(){if(IsDisposed || Disposing || changing || !ready || changeTimer.Enabled)return;changeTimer.Start();}
 
     void NotifyChanged() {
+        if(IsDisposed || Disposing)return;
         changeTimer.Stop();
-        if(IsDisposed || Disposing || notifying || changing || !ready || browser.Document == null)return;
+        if(notifying || changing || !ready || browser.Document == null)return;
         var editor=browser.Document.GetElementById("progress-editor");
         string current=editor==null?CleanHtml(pendingHtml):CleanHtml(editor.InnerHtml);
         if(String.Equals(current,observedHtml,StringComparison.Ordinal))return;

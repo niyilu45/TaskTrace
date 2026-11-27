@@ -30,14 +30,14 @@ internal sealed partial class FloatingWindow {
         HandleDestroyed += delegate { ResetEdgeHideSizeMove(); };
         VisibleChanged += delegate { if(!Visible)ResetEdgeHideSizeMove(); };
         if(edgeHideEnabled)edgeHideTimer.Start();
-        Shown += delegate { if(edgeHideEnabled)BeginInvoke(new Action(delegate { TryHideAtTouchedEdge(); })); };
+        Shown += delegate { if(edgeHideEnabled)FloatingUi.Post(this,new Action(delegate { TryHideAtTouchedEdge(); })); };
     }
 
     void SetEdgeHideEnabled(bool enabled) {
         edgeHideEnabled = enabled;
         if(enabled) {
             edgeHideTimer.Start();
-            BeginInvoke(new Action(delegate { TryHideAtTouchedEdge(); }));
+            FloatingUi.Post(this,new Action(delegate { TryHideAtTouchedEdge(); }));
         } else {
             RestoreFromEdge(true);
             edgeHideTimer.Stop();
@@ -56,7 +56,7 @@ internal sealed partial class FloatingWindow {
             RestoreFromEdge(true);
         } else if(message == ExitSizeMove) {
             edgeSizing = false;
-            if(edgeHideEnabled)BeginInvoke(new Action(delegate { TryHideAtTouchedEdge(); }));
+            if(edgeHideEnabled)FloatingUi.Post(this,new Action(delegate { TryHideAtTouchedEdge(); }));
         }
     }
 
@@ -154,7 +154,7 @@ internal sealed partial class FloatingWindow {
     void RearmEdgeHideAfterLayoutChange(EdgeDock preferredEdge, Rectangle preferredArea) {
         if(!edgeHideEnabled || closing || IsDisposed)return;
         long revision=++edgeLayoutRevision;var requestedBounds=Bounds;
-        BeginInvoke(new Action(delegate {
+        FloatingUi.Post(this,new Action(delegate {
             // A later mode switch or move supersedes this queued layout.
             if(revision!=edgeLayoutRevision || Bounds!=requestedBounds || edgeHidden)return;
             ArmEdgeHideAfterLayoutChange(preferredEdge, preferredArea);

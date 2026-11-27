@@ -147,6 +147,7 @@ function Build-AndRunTreeNotifications([string]$Name,[bool]$ExpectedFailure) {
     if($LASTEXITCODE -ne 0){throw 'Tree notification test compilation failed.'}
     $stdout=Join-Path $testRoot ($Name+'-results.txt');$stderr=Join-Path $testRoot ($Name+'-errors.txt')
     $process=Start-Process -FilePath $binary -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $processHandle=$process.Handle # Retain the exit code even if the short fixture already ended.
     if(!$process.WaitForExit(30000)){$process.Kill();throw 'Tree notification tests timed out.'}
     $process.WaitForExit();$process.Refresh()
     $output=[IO.File]::ReadAllText($stdout);$errors=[IO.File]::ReadAllText($stderr)

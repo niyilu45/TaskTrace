@@ -693,7 +693,7 @@ internal sealed partial class FloatingWindow {
                     if(choice==DialogResult.Cancel){e.Cancel=true;return;}
                     if(choice==DialogResult.No){discardOutstandingChanges();return;}
                     e.Cancel=true;closeSavePending=true;autoTimer.Stop();
-                    dialog.BeginInvoke(new Action(async delegate{
+                    FloatingUi.Post(dialog,new Action(async delegate{
                         bool saved=false;try{saved=await write(false);}catch(Exception error){feedback.Text=error.Message;}
                         if(saved){DeleteDraftCache("outstanding",id,draftKey());closeAfterSave=true;dialog.Close();return;}
                         closeSavePending=false;feedback.Text="遗留事项未能保存，窗口已保留。"+(String.IsNullOrWhiteSpace(feedback.Text)?"请检查内容后重试。":"原因："+feedback.Text);autoTimer.Start();

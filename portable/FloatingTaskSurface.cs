@@ -61,8 +61,9 @@ internal sealed partial class TaskTreeSurface : Panel {
     internal void QueueRebuild() {
         if(rebuildQueued || IsDisposed)return;rebuildQueued=true;
         if(!IsHandleCreated){rebuildQueued=false;return;}
-        BeginInvoke(new Action(delegate {rebuildQueued=false;if(!IsDisposed)Rebuild(true);}));
+        FloatingUi.Post(this,new Action(delegate {rebuildQueued=false;if(!IsDisposed)Rebuild(true);}));
     }
+    protected override void OnHandleDestroyed(EventArgs e) {rebuildQueued=false;base.OnHandleDestroyed(e);}
     protected override void OnVisibleChanged(EventArgs e) {
         base.OnVisibleChanged(e);
         if(Visible && model!=null) {

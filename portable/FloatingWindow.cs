@@ -117,13 +117,17 @@ internal sealed partial class FloatingWindow : Form {
     }
 
     [STAThread] static int Main(string[] args) {
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         try {
             if (args.Length < 2) throw new Exception("请通过 TaskTrace.exe 启动 TaskTrace。");
             Uri address;
             if (!Uri.TryCreate(args[0], UriKind.Absolute, out address) || address.Scheme != "http" || address.Host != "127.0.0.1") throw new Exception("悬浮窗仅支持本机工作区。");
-            using (var window = new FloatingWindow(args[0], args[1], args.Length > 2 ? args[2] : Path.Combine(args[1], "data"), args.Length > 3 && args[3] == "--self-test", args.Length > 3 && args[3] == "--open-browser")) Application.Run(window);
+            FloatingWindow window=null;
+            string errorDirectory=Path.GetFullPath(args.Length>2?args[2]:Path.Combine(args[1],"data"));
+            using(var errors=new FloatingRuntimeErrors(errorDirectory,delegate(Exception error){if(window!=null && !window.IsDisposed && !window.closing)FloatingUi.Post(window,delegate{window.ReportRuntimeError(error);});}))
+            using(window=new FloatingWindow(args[0],args[1],errorDirectory,args.Length>3 && args[3]=="--self-test",args.Length>3 && args[3]=="--open-browser"))Application.Run(window);
             return Environment.ExitCode;
         } catch (Exception e) { MessageBox.Show(e.Message, "TaskTrace", MessageBoxButtons.OK, MessageBoxIcon.Error); return 1; }
     }
@@ -216,7 +220,7 @@ internal sealed partial class FloatingWindow : Form {
         tasks.CompletionClicked = delegate(TreeNode node) {
             if(rendering || busy || closing || completionPending || node==null || (!(node.Tag is long) && !(node.Tag is OutstandingLeaf)) || node.TreeView!=tasks)return;
             completionPending=true;
-            BeginInvoke(new Action(async delegate {
+            FloatingUi.Post(this,new Action(async delegate {
                 try {
                     var leaf=node.Tag as OutstandingLeaf;
                     if(leaf!=null)await CompleteOutstanding(leaf,!leaf.Done);else await Complete(Convert.ToInt64(node.Tag),!node.Checked);
@@ -283,9 +287,13 @@ internal sealed partial class FloatingWindow : Form {
             else if(bottom) message.Result = new IntPtr(left ? 16 : right ? 17 : 15);
             else if(left || right) message.Result = new IntPtr(left ? 10 : 11);
         }
-        if(message.Msg == 0x02E0 && IsHandleCreated && !closing) BeginInvoke(new Action(ApplyDpiMetrics));
+        if(message.Msg == 0x02E0 && IsHandleCreated && !closing) FloatingUi.Post(this,new Action(ApplyDpiMetrics));
         HandleEdgeHideWindowMessage(message.Msg);
         RefreshCaptionSettings(message.Msg);
+    }
+    protected override void OnHandleDestroyed(EventArgs e) {
+        fullLayoutRefreshQueued=captionSettingsPaintQueued=simpleRestoreLayoutQueued=false;
+        base.OnHandleDestroyed(e);
     }
     void ApplyDpiMetrics() {
         if(IsDisposed || !IsHandleCreated)return;
@@ -447,7 +455,7 @@ internal sealed partial class FloatingWindow : Form {
         if(simpleMode || closing || IsDisposed)return;
         if(collapsed)ToggleFold();
         addRow.Visible=true;content.RowStyles[1].Height=70;RefreshFullLayout();
-        if(IsHandleCreated)BeginInvoke(new Action(delegate {if(!closing && addRow.Visible)entry.Focus();}));
+        if(IsHandleCreated)FloatingUi.Post(this,new Action(delegate {if(!closing && addRow.Visible)entry.Focus();}));
     }
     void HideNewTaskEditor() {
         if(addRow==null)return;
@@ -468,7 +476,7 @@ internal sealed partial class FloatingWindow : Form {
     void QueueFullLayoutRefresh() {
         if(simpleMode || closing || IsDisposed || fullLayoutRefreshQueued || !IsHandleCreated || WindowState!=FormWindowState.Normal)return;
         fullLayoutRefreshQueued=true;
-        BeginInvoke(new Action(delegate {fullLayoutRefreshQueued=false;RefreshFullLayout();}));
+        FloatingUi.Post(this,new Action(delegate {fullLayoutRefreshQueued=false;RefreshFullLayout();}));
     }
     void RefreshFullLayout() {
         if(simpleMode || closing || IsDisposed || toolbar==null || content==null || WindowState!=FormWindowState.Normal)return;
@@ -584,7 +592,7 @@ internal sealed partial class FloatingWindow : Form {
     void WarnIfTeamReadOnly(long taskId, Form dialog, Label feedback) {
         RefreshTeamWritePermission(taskId).ContinueWith(check => {
             if(check.Status != TaskStatus.RanToCompletion || check.Result || dialog.IsDisposed) return;
-            try { dialog.BeginInvoke((Action)delegate {
+            try { FloatingUi.Post(dialog,(Action)delegate {
                 if(dialog.IsDisposed) return;
                 feedback.Text="当前协作权限为只读。你可以编辑并保留草稿；所属人开放写权限后无需关闭窗口，直接重试保存即可。";
                 MessageBox.Show(dialog,feedback.Text,"TaskTrace · 只读协作任务",MessageBoxButtons.OK,MessageBoxIcon.Information);
@@ -1054,7 +1062,7 @@ internal sealed partial class FloatingWindow : Form {
                     bool done = e.NewValue == CheckState.Checked; long id = Convert.ToInt64(list.Items[e.Index].Tag); e.NewValue = e.CurrentValue;
                     if(writing) return;
                     writing = true;
-                    dialog.BeginInvoke(new Action(async delegate {
+                    FloatingUi.Post(dialog,new Action(async delegate {
                         try { await Api("PATCH", "/tasks/" + id, new { done = done }); RememberTaskCompletion(id,done); await reload(); }
                         catch { feedback.Text = "状态未保存，请重试。"; }
                         finally { writing = false; }
@@ -1116,8 +1124,15 @@ internal sealed partial class FloatingWindow : Form {
             dialog.ShowDialog(this);
         }
     }
+    DateTime lastRuntimeErrorNotice;
+    void ReportRuntimeError(Exception error) {
+        Error(error);
+        if(DateTime.UtcNow-lastRuntimeErrorNotice<TimeSpan.FromSeconds(30))return;
+        lastRuntimeErrorNotice=DateTime.UtcNow;
+        tray.ShowBalloonTip(10000,"TaskTrace · 操作未完成","发生异常，编辑窗口和未保存内容仍保留。请重试；详情见数据目录 TaskTrace-crash.log。",ToolTipIcon.Warning);
+    }
     void Error(Exception e) {
-        if(closing) return;
+        if(closing || IsDisposed || Disposing) return;
         lastError = System.Text.RegularExpressions.Regex.Replace(e.ToString(), "#tasktrace-local=\\S+", "#tasktrace-local=[redacted]");
         for(Exception inner = e; inner != null; inner = inner.InnerException) {
             var windowsError = inner as System.ComponentModel.Win32Exception;

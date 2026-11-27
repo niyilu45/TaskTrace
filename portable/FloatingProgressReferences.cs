@@ -221,13 +221,13 @@ internal sealed partial class FloatingWindow {
             var bridge=new ProgressHistoryBrowserBridge();browser.ObjectForScripting=bridge;
             browser.Navigating+=delegate(object sender,WebBrowserNavigatingEventArgs e){if(e.Url.AbsoluteUri!="about:blank")e.Cancel=true;};
             AttachHistoryImageActions(browser,dialog,heading);
-            bridge.ImageRequested=delegate(string source){if(dialog.IsDisposed)return;dialog.BeginInvoke(new Action(async delegate{try{await ShowProgressEditorImage(new ProgressEditorImageEventArgs(source,""),dialog,"进展图片");}catch(Exception error){if(!dialog.IsDisposed)heading.Text="图片预览失败："+error.Message;}}));};
+            bridge.ImageRequested=delegate(string source){if(dialog.IsDisposed)return;FloatingUi.Post(dialog,new Action(async delegate{try{await ShowProgressEditorImage(new ProgressEditorImageEventArgs(source,""),dialog,"进展图片");}catch(Exception error){if(!dialog.IsDisposed)heading.Text="图片预览失败："+error.Message;}}));};
             Action explain=delegate{heading.Text=rows[first].Date+" 至 "+rows[last].Date+" · 滚动到边缘继续滚动，加载相邻日期";};
             bridge.LoadMore=delegate(int direction) {
                 if(loading || dialog.IsDisposed || browser.Document==null)return;
                 int next=direction<0?first-1:last+1;if(next<0 || next>=rows.Count)return;
                 loading=true;heading.Text="正在加载 "+rows[next].Date+"…";
-                dialog.BeginInvoke(new Action(async delegate {
+                FloatingUi.Post(dialog,new Action(async delegate {
                     try {
                         string document=await ProgressHistoryDocument(rows[next].Html,DownloadImage);
                         if(dialog.IsDisposed || browser.Document==null)return;

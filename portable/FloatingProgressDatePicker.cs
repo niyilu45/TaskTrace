@@ -29,7 +29,7 @@ internal sealed class ProgressDatePicker : UserControl {
         popup=new ProgressCalendarPopup(value,marked);var active=popup;
         active.DatePicked+=delegate(DateTime date){Value=date;active.Close();};
         active.FormClosed+=delegate{active.Dispose();if(Object.ReferenceEquals(popup,active))popup=null;};
-        active.Deactivate+=delegate{if(!active.IsDisposed && active.Visible)active.BeginInvoke(new Action(active.Close));};
+        active.Deactivate+=delegate{if(!active.IsDisposed && active.Visible)FloatingUi.Post(active,new Action(active.Close));};
         var screen=PointToScreen(new Point(0,Height));var area=Screen.FromControl(this).WorkingArea;
         active.Location=new Point(Math.Max(area.Left,Math.Min(screen.X,area.Right-active.Width)),Math.Max(area.Top,Math.Min(screen.Y,area.Bottom-active.Height)));
         active.Show(FindForm());active.Activate();
@@ -55,6 +55,8 @@ internal sealed class ProgressCalendarPopup : Form {
     readonly HashSet<DateTime> marked;
     readonly Button today=new Button {Text="回到今天",Dock=DockStyle.Fill,AccessibleName="回到今天"};
     DateTime month;
+    readonly Button previous=new Button {Text="上月",Dock=DockStyle.Fill,AccessibleName="上一个月"};
+    readonly Button next=new Button {Text="下月",Dock=DockStyle.Fill,AccessibleName="下一个月"};
     internal event Action<DateTime> DatePicked;
     internal int VisibleMarkedDates {get;private set;}
     internal void SimulateDeactivateForTest(){OnDeactivate(EventArgs.Empty);}
@@ -62,21 +64,31 @@ internal sealed class ProgressCalendarPopup : Form {
     internal ProgressCalendarPopup(DateTime selected,IEnumerable<DateTime> markedDates) {
         this.selected=selected.Date;marked=new HashSet<DateTime>((markedDates??Enumerable.Empty<DateTime>()).Select(date=>date.Date));month=new DateTime(selected.Year,selected.Month,1);
         AutoScaleDimensions=new SizeF(96F,96F);AutoScaleMode=AutoScaleMode.Dpi;FormBorderStyle=FormBorderStyle.FixedSingle;ControlBox=false;ShowInTaskbar=false;StartPosition=FormStartPosition.Manual;Size=new Size(318,300);MinimumSize=MaximumSize=Size;KeyPreview=true;Font=SystemFonts.MessageBoxFont;
-        var previous=new Button {Text="上月",Dock=DockStyle.Fill,AccessibleName="上一个月"};var next=new Button {Text="下月",Dock=DockStyle.Fill,AccessibleName="下一个月"};
         var header=new TableLayoutPanel {Dock=DockStyle.Top,Height=42,ColumnCount=4,Padding=new Padding(8,6,8,0)};header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,55));header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,74));header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,55));
         header.Controls.Add(previous,0,0);header.Controls.Add(heading,1,0);header.Controls.Add(today,2,0);header.Controls.Add(next,3,0);Controls.Add(grid);Controls.Add(header);
         for(int column=0;column<7;column++)grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100f/7));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute,25));for(int row=1;row<7;row++)grid.RowStyles.Add(new RowStyle(SizeType.Percent,100f/6));
-        previous.Click+=delegate{month=month.AddMonths(-1);RenderMonth();};today.Click+=delegate{if(DatePicked!=null)DatePicked(DateTime.Today);};next.Click+=delegate{month=month.AddMonths(1);RenderMonth();};
+        previous.Click+=delegate{MoveMonth(-1);};today.Click+=delegate{if(DatePicked!=null)DatePicked(DateTime.Today);};next.Click+=delegate{MoveMonth(1);};
         KeyDown+=delegate(object sender,KeyEventArgs e){if(e.KeyCode==Keys.Escape){e.Handled=true;Close();}};RenderMonth();
     }
     internal bool HasTodayButtonForTest(){return !today.IsDisposed && today.Text=="回到今天";}
+    internal void MoveMonth(int direction) {
+        if((direction<0 && month.Year==1 && month.Month==1)||(direction>0 && month.Year==9999 && month.Month==12))return;
+        month=month.AddMonths(direction<0?-1:1);RenderMonth();
+    }
     void RenderMonth() {
-        grid.SuspendLayout();grid.Controls.Clear();VisibleMarkedDates=0;heading.Text=month.ToString("yyyy 年 M 月");
+        grid.SuspendLayout();
+        // Controls.Clear removes native calendar buttons without disposing their handles.
+        foreach(Control old in grid.Controls.Cast<Control>().ToArray())old.Dispose();
+        grid.Controls.Clear();
+        previous.Enabled=month>DateTime.MinValue;next.Enabled=month.Year<9999 || month.Month<12;
+        VisibleMarkedDates=0;heading.Text=month.ToString("yyyy 年 M 月");
         string[] weekdays={"一","二","三","四","五","六","日"};for(int column=0;column<7;column++)grid.Controls.Add(new Label {Text=weekdays[column],Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,ForeColor=SystemColors.GrayText},column,0);
-        int mondayOffset=((int)month.DayOfWeek+6)%7;DateTime first=month.AddDays(-mondayOffset);
+        int mondayOffset=((int)month.DayOfWeek+6)%7;
         for(int index=0;index<42;index++) {
-            DateTime date=first.AddDays(index);bool hasProgress=marked.Contains(date);if(hasProgress)VisibleMarkedDates++;
+            long ticks=month.Ticks+(index-mondayOffset)*TimeSpan.TicksPerDay;
+            if(ticks<DateTime.MinValue.Ticks || ticks>DateTime.MaxValue.Ticks)continue;
+            DateTime date=new DateTime(ticks);bool hasProgress=marked.Contains(date);if(hasProgress)VisibleMarkedDates++;
             var button=new ProgressDayButton {Date=date,HasProgress=hasProgress,Selected=date==selected,CurrentMonth=date.Month==month.Month,Dock=DockStyle.Fill,Margin=new Padding(1),AccessibleName=date.ToString("yyyy-MM-dd")+(hasProgress?"，有进展":"")};
             button.Click+=delegate(object sender,EventArgs e){var picked=((ProgressDayButton)sender).Date;if(DatePicked!=null)DatePicked(picked);};grid.Controls.Add(button,index%7,index/7+1);
         }

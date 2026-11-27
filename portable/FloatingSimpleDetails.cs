@@ -57,6 +57,7 @@ internal sealed partial class TaskTreeView {
         return null;
     }
     protected override void OnDrawNode(DrawTreeNodeEventArgs e) {
+        if(e==null || !CurrentTreeEvent(e.Node))return;
         if(DrawPriorityLink(e))return;
         var link=SimpleImageBounds(e.Node);
         if(link.IsEmpty){e.DrawDefault=true;base.OnDrawNode(e);return;}

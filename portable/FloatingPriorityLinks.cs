@@ -59,6 +59,7 @@ internal sealed partial class TaskTreeView {
     protected override void OnFontChanged(EventArgs e) {DisposeDisplayFonts();base.OnFontChanged(e);RefreshWrappedLayout(true);QueueWrappedLayout();}
     protected override void OnSizeChanged(EventArgs e) {base.OnSizeChanged(e);RefreshWrappedLayout(true);Invalidate();Update();QueueWrappedLayout();}
     protected override void OnHandleCreated(EventArgs e) {base.OnHandleCreated(e);ApplyCompactScrollStyle();}
+    protected override void OnHandleDestroyed(EventArgs e) {wrapLayoutQueued=false;base.OnHandleDestroyed(e);}
     // Native expansion notifications can arrive after a refresh removed the item.
     // WinForms then supplies a null Node; never dispatch it to app callbacks.
     bool CurrentTreeEvent(TreeNode node) {return !IsDisposed && !Disposing && node!=null && node.TreeView==this;}
@@ -114,7 +115,7 @@ internal sealed partial class TaskTreeView {
     void QueueWrappedLayout() {
         if(!WrapNodeText || wrapLayoutQueued || !IsHandleCreated || IsDisposed || Disposing)return;
         wrapLayoutQueued=true;
-        BeginInvoke(new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed){RefreshWrappedLayout(true);Update();}}));
+        FloatingUi.Post(this,new Action(delegate {wrapLayoutQueued=false;if(!IsDisposed){RefreshWrappedLayout(true);Update();}}));
     }
     internal string CurrentTaskText(TreeNode node) {
         var task=node as FloatingWindow.TaskNode;var leaf=node==null?null:node.Tag as FloatingWindow.OutstandingLeaf;string text=node==null?"":node.Text.TrimEnd(' ');

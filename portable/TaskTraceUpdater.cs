@@ -8,10 +8,11 @@ internal static class TaskTraceUpdater {
     [STAThread] static int Main(string[] args) {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        string installRoot = args.Length >= 2 ? Path.GetFullPath(args[1]) : "";
+        string installRoot = "";
         bool selfTest = args.Length == 3 && args[2] == "--self-test";
         try {
             if(args.Length < 2 || args.Length > 3) throw new ArgumentException("更新参数不完整。");
+            installRoot = Path.GetFullPath(args[1]);
             string archive = Path.GetFullPath(args[0]);
             if(!File.Exists(archive)) throw new FileNotFoundException("找不到已下载的更新包。", archive);
             if(!File.Exists(Path.Combine(installRoot, "TaskTrace.exe"))) throw new InvalidOperationException("安装目录中没有 TaskTrace.exe，更新已取消。");
